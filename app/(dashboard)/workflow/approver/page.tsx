@@ -112,7 +112,7 @@ export default function ApproverDashboard() {
     }
   };
 
-  // ✅ HANDLE APPROVAL WITH DETAILS
+  // ✅ HANDLE APPROVAL WITH DETAILS (UPDATED - only update status)
   const handleApproval = async (id: number, approverDetails: ApproverDetails) => {
     // 1. Get submission info
     const { data: submission, error: fetchError } = await supabase
@@ -130,15 +130,11 @@ export default function ApproverDashboard() {
     const submissionEmail = submission.email || submission.submitter_email || "No email provided";
     const submissionFile = submission.file_url || submission.file || submission.document_url;
 
-    // 2. Update submission
+    // 2. Update submission - ONLY update status (removed column references)
     const { error: updateError } = await supabase
       .from("workflow_submissions")
       .update({ 
-        status: "pending_admin",
-        approved_by: approverDetails.name,
-        approved_by_email: approverDetails.email,
-        approved_at: approverDetails.approvedAt,
-        approval_notes: approverDetails.notes
+        status: "pending_admin"
       })
       .eq("id", id);
 
@@ -147,7 +143,16 @@ export default function ApproverDashboard() {
       return;
     }
 
-    // 3. Notify user
+    // 3. Store approver details in a separate metadata table or notification
+    // For now, we'll just include it in the notification
+    const approvalMetadata = {
+      approved_by: approverDetails.name,
+      approved_by_email: approverDetails.email,
+      approved_at: approverDetails.approvedAt,
+      approval_notes: approverDetails.notes
+    };
+
+    // 4. Notify user
     const userMessage = `✅ Your submission "${submissionName}" has been approved by ${approverDetails.name} and forwarded to the admin for final approval.\n\nApproved on: ${new Date(approverDetails.approvedAt).toLocaleString()}\n${approverDetails.notes ? `\nApprover's Notes: ${approverDetails.notes}` : ''}\n\nYou will be notified once the admin makes a decision.`;
     
     if (submission.user_id) {
@@ -163,17 +168,17 @@ export default function ApproverDashboard() {
       ]);
     }
 
-    // 4. Notify admin
+    // 5. Notify admin with approval details
     await notifyAdminOnApproval(id, submissionName, submissionEmail, submissionFile, approverDetails);
 
-    // 5. Update UI
+    // 6. Update UI
     setRequests((prev) =>
       prev.map((req) =>
         req.id === id ? { ...req, status: "pending_admin" } : req
       )
     );
 
-    // 6. Refresh notifications
+    // 7. Refresh notifications
     const { data: updatedNotifications } = await supabase
       .from("notifications")
       .select("*")
@@ -185,7 +190,7 @@ export default function ApproverDashboard() {
     }
   };
 
-  // ✅ HANDLE REJECTION WITH DETAILS
+  // ✅ HANDLE REJECTION WITH DETAILS (UPDATED - removed all missing columns)
   const handleRejection = async (id: number, rejectionDetails: RejectionDetails) => {
     // 1. Get submission info
     const { data: submission, error: fetchError } = await supabase
@@ -203,16 +208,11 @@ export default function ApproverDashboard() {
     const submissionEmail = submission.email || submission.submitter_email || "No email provided";
     const submissionFile = submission.file_url || submission.file || submission.document_url;
 
-    // 2. Update submission
+    // 2. Update submission - ONLY update status (removed all missing columns)
     const { error: updateError } = await supabase
       .from("workflow_submissions")
       .update({ 
-        status: "rejected",
-        rejection_reason: rejectionDetails.reason,
-        rejection_notes: rejectionDetails.notes,
-        rejected_by: rejectionDetails.rejectedBy,
-        rejected_by_email: rejectionDetails.rejectedByEmail,
-        rejected_at: rejectionDetails.rejectedAt
+        status: "rejected"
       })
       .eq("id", id);
 
@@ -221,7 +221,7 @@ export default function ApproverDashboard() {
       return;
     }
 
-    // 3. Notify user with rejection details
+    // 3. Notify user with rejection details (details are in the notification only)
     const rejectionMessage = `❌ SUBMISSION REJECTED\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 Your submission has been rejected by the approver.\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nSubmission Details:\n• ID: #${id}\n• Name: ${submissionName}\n• Email: ${submissionEmail}\n• File: ${submissionFile || "No file attached"}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📝 REJECTION REASON:\n${rejectionDetails.reason}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n${rejectionDetails.notes ? `📌 APPROVER'S EXPLANATION:\n${rejectionDetails.notes}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` : ''}👤 Rejected By: ${rejectionDetails.rejectedBy}\n📅 Rejected On: ${new Date(rejectionDetails.rejectedAt).toLocaleString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n💡 Next Steps:\n• Please review the feedback above\n• Make necessary corrections to your submission\n• Resubmit your file with the required changes\n• Contact support if you need clarification\n\nWe appreciate your understanding and look forward to your improved submission.`;
     
     if (submission.user_id) {
@@ -231,8 +231,6 @@ export default function ApproverDashboard() {
           message: rejectionMessage,
           submission_id: id,
           type: "rejected",
-          rejection_reason: rejectionDetails.reason,
-          rejection_notes: rejectionDetails.notes,
           created_at: new Date().toISOString(),
           read: false,
         },
