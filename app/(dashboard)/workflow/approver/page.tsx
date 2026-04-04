@@ -7,7 +7,7 @@ type Request = {
   id: number;
   name: string;
   email: string;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "pending_admin" | "approved" | "rejected";
   file_url?: string;
 };
 
@@ -15,7 +15,7 @@ export default function ApproverDashboard() {
   const [requests, setRequests] = useState<Request[]>([]);
   const supabase = createClient();
 
-  // ✅ FETCH DATA FROM SUPABASE
+  // ✅ FETCH DATA FROM YOUR EXISTING SUPABASE
   useEffect(() => {
     const fetchRequests = async () => {
       const { data, error } = await supabase
@@ -24,16 +24,16 @@ export default function ApproverDashboard() {
         .order("id", { ascending: false });
 
       if (error) {
-        console.error("Fetch error:", error.message);
+        console.error(error.message);
         return;
       }
 
       const formatted: Request[] = data.map((item: any) => ({
         id: item.id,
-        name: item.name || "No Name",
-        email: item.email || "No Email",
+        name: item.name,
+        email: item.email,
         status: item.status || "pending",
-        file_url: item.file_url || null,
+        file_url: item.file_url,
       }));
 
       setRequests(formatted);
@@ -42,40 +42,75 @@ export default function ApproverDashboard() {
     fetchRequests();
   }, []);
 
-  // ✅ APPROVE / REJECT FUNCTION
+  // ✅ APPROVE / REJECT + NOTIFICATION
   const handleAction = async (
     id: number,
     action: "approved" | "rejected"
   ) => {
-    const { error } = await supabase
-      .from("workflow_submissions")
-      .update({ status: action })
-      .eq("id", id);
+    const newStatus =
+      action === "approved" ? "pending_admin" : "rejected";
 
-    if (error) {
-      console.error("Update error:", error.message);
+    // 1. Get user_id
+    const { data: submission, error: fetchError } = await supabase
+      .from("workflow_submissions")
+      .select("user_id")
+      .eq("id", id)
+      .single();
+
+    if (fetchError) {
+      console.error(fetchError.message);
       return;
     }
 
-    // Update UI instantly
+    // 2. Update status
+    const { error: updateError } = await supabase
+      .from("workflow_submissions")
+      .update({ status: newStatus })
+      .eq("id", id);
+
+    if (updateError) {
+      console.error(updateError.message);
+      return;
+    }
+
+    // 3. Insert notification
+    const message =
+      action === "approved"
+        ? "Your submission is approved and pending for admin approval."
+        : "Your submission has been rejected.";
+
+    const { error: notifError } = await supabase
+      .from("notifications")
+      .insert([
+        {
+          user_id: submission.user_id,
+          message: message,
+        },
+      ]);
+
+    if (notifError) {
+      console.error(notifError.message);
+    }
+
+    // 4. Update UI
     setRequests((prev) =>
       prev.map((req) =>
-        req.id === id ? { ...req, status: action } : req
+        req.id === id ? { ...req, status: newStatus } : req
       )
     );
   };
 
   return (
     <div className="min-h-screen bg-gray-100 p-6">
-      {/* Header */}
+      {/* HEADER */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-800">
           Approver Dashboard
         </h1>
-        <p className="text-gray-500">Manage user submissions</p>
+        <p className="text-gray-500">Manage submissions</p>
       </div>
 
-      {/* Table */}
+      {/* TABLE */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <table className="w-full text-left">
           <thead className="bg-gray-200 text-gray-600 text-sm">
@@ -96,7 +131,7 @@ export default function ApproverDashboard() {
                 <td className="p-3">{req.name}</td>
                 <td className="p-3">{req.email}</td>
 
-                {/* FILE LINK */}
+                {/* FILE */}
                 <td className="p-3">
                   {req.file_url ? (
                     <a
@@ -104,7 +139,7 @@ export default function ApproverDashboard() {
                       target="_blank"
                       className="text-blue-500 underline"
                     >
-                      View File
+                      View
                     </a>
                   ) : (
                     "No File"
@@ -117,12 +152,16 @@ export default function ApproverDashboard() {
                     className={`px-2 py-1 rounded text-sm ${
                       req.status === "pending"
                         ? "bg-yellow-100 text-yellow-700"
+                        : req.status === "pending_admin"
+                        ? "bg-blue-100 text-blue-700"
                         : req.status === "approved"
                         ? "bg-green-100 text-green-700"
                         : "bg-red-100 text-red-700"
                     }`}
                   >
-                    {req.status}
+                    {req.status === "pending_admin"
+                      ? "pending admin"
+                      : req.status}
                   </span>
                 </td>
 
@@ -149,7 +188,6 @@ export default function ApproverDashboard() {
           </tbody>
         </table>
 
-        {/* EMPTY STATE */}
         {requests.length === 0 && (
           <div className="p-6 text-center text-gray-500">
             No submissions found
