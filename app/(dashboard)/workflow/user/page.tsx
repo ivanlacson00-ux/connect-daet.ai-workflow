@@ -22,84 +22,74 @@ interface Submission {
   updated_at: string;
 }
 
-// ─── Status Timeline ──────────────────────────────────────────────────────────
-const PIPELINE_STAGES = ['Upload', 'Review', 'Approved'] as const;
+// ─── Status Stamp ─────────────────────────────────────────────────────────────
+function StatusStamp({ status }: { status: string }) {
+  const getDisplayConfig = () => {
+    if (status === 'approved') {
+      return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
+    }
+    // Updated check for 'rejected' or 'declined' [cite: 58, 59]
+    if (status.includes('rejected') || status.includes('declined')) {
+      return { label: 'REJECTED', color: 'text-red-600', bg: 'bg-red-50' };
+    }
+    // Covers pending_approver and pending_admin [cite: 55, 56]
+    return { label: 'PENDING', color: 'text-blue-600', bg: 'bg-blue-50' };
+  };
 
-function StatusTimeline({ status }: { status: string }) {
-  const stages = getPipelineState(status);
+  const config = getDisplayConfig();
+
   return (
-    <div className="flex items-center gap-0 mt-6 border-t border-blue-600/10 pt-4">
-      {PIPELINE_STAGES.map((label, i) => {
-        const s = stages[i];
-        const isLast = i === PIPELINE_STAGES.length - 1;
-
-        const dotClass =
-          s === 'done' ? 'bg-blue-600 border-blue-600' :
-          s === 'active' ? 'bg-white border-blue-600 ring-4 ring-blue-100' :
-          s === 'declined' ? 'bg-red-600 border-red-600' :
-          'bg-white border-gray-300';
-
-        return (
-          <div key={label} className="flex items-center">
-            <div className="flex flex-col items-start">
-              <div className={`w-3 h-3 border transition-all ${dotClass}`} />
-              <span className={`${fonts.mono} mt-2 ${s === 'idle' ? 'text-gray-400' : 'text-blue-600'}`}>
-                {label}
-              </span>
-            </div>
-            {!isLast && (
-              <div className="w-12 md:w-20 h-[1px] bg-blue-600 mb-6 mx-2 opacity-20" />
-            )}
-          </div>
-        );
-      })}
+    <div className={`inline-flex items-center gap-2 border-2 border-current px-4 py-1.5 rotate-[-2deg] ${config.color} ${config.bg} ${fonts.mono} font-black shadow-[2px_2px_0px_0px_currentColor]`}>
+      <span className="text-lg">●</span>
+      {config.label}
     </div>
-  );
-}
-
-// ─── Status Badge ─────────────────────────────────────────────────────────────
-function StatusBadge({ status }: { status: string }) {
-  const isDeclined = status.includes('declined');
-  const isApproved = status === 'approved';
-  
-  return (
-    <span className={`border border-blue-600 px-3 py-1 ${fonts.mono} font-bold 
-      ${isDeclined ? 'bg-red-600 text-white border-red-600' : isApproved ? 'bg-blue-600 text-white' : 'bg-white text-blue-600'}`}>
-      {status.replace('_', ' ')}
-    </span>
   );
 }
 
 // ─── Submission Card ──────────────────────────────────────────────────────────
 function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Submission) => void }) {
+  const isRejected = sub.status.includes('declined') || sub.status.includes('rejected');
+
   return (
-    <article className="bg-white border border-blue-600 p-6 transition-all duration-500 hover:bg-blue-50/30 group mb-6 shadow-[4px_4px_0px_0px_rgba(37,99,235,1)]">
-      <div className="flex flex-col md:flex-row justify-between items-start gap-4">
-        <div className="flex-1">
-          <div className={`${fonts.mono} text-blue-400 mb-2`}>File ID: #{sub.id.slice(0, 8)}</div>
-          <h3 className={`${fonts.serif} text-3xl text-gray-900 mb-1 group-hover:translate-x-1 transition-transform`}>
-            {sub.file_name}
-          </h3>
-          <div className="flex gap-4 items-center mt-2">
-            <span className={`${fonts.mono} text-gray-400`}>{new Date(sub.created_at).toLocaleDateString()}</span>
-            <StatusBadge status={sub.status} />
+    <article className="bg-white border border-blue-600 p-8 transition-all duration-300 hover:shadow-[8px_8px_0px_0px_rgba(37,99,235,1)] group mb-8 relative overflow-hidden">
+      {/* Background Watermark for status */}
+      <div className="absolute top-[-20px] right-[-20px] opacity-[0.03] pointer-events-none select-none">
+        <h4 className="text-9xl font-black uppercase">{sub.status.split('_')[0]}</h4>
+      </div>
+
+      <div className="flex flex-col md:flex-row justify-between items-start gap-8 relative z-10">
+        <div className="flex-1 space-y-4">
+          <div>
+            <div className={`${fonts.mono} text-blue-400 mb-1`}>Record No. {sub.id.slice(0, 12)}</div>
+            <h3 className={`${fonts.serif} text-4xl text-gray-900 group-hover:text-blue-600 transition-colors`}>
+              {sub.file_name}
+            </h3>
+            <p className={`${fonts.mono} text-gray-400 mt-2`}>
+              {new Date(sub.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+            </p>
           </div>
+
+          <StatusStamp status={sub.status} />
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-3 w-full md:w-auto shrink-0">
           <button 
             onClick={() => onPreview(sub)}
-            className={`${fonts.mono} border border-blue-600 px-4 py-2 text-blue-600 hover:bg-blue-600 hover:text-white transition-colors`}>
-            / View
+            className={`${fonts.mono} bg-white border-2 border-blue-600 px-6 py-3 text-blue-600 hover:bg-blue-600 hover:text-white transition-all font-bold active:translate-y-1`}>
+            [ View File ]
           </button>
+          
+          {/* Resubmit button removed as requested */}
         </div>
       </div>
 
-      <StatusTimeline status={sub.status} />
-
-      {(sub.approver_comments || sub.admin_comments) && (
-        <div className="mt-4 p-4 bg-red-50 border-l-4 border-red-600 italic text-sm font-serif text-red-900">
-          "{sub.approver_comments || sub.admin_comments}"
+      {/* Show feedback only if the file was rejected/declined [cite: 32, 46] */}
+      {(sub.approver_comments || sub.admin_comments) && isRejected && (
+        <div className="mt-8 p-6 bg-red-50 border border-red-200 relative">
+            <div className={`${fonts.mono} text-red-600 mb-2 font-bold`}>Reviewer Feedback:</div>
+            <p className="font-serif italic text-lg text-red-900">
+              "{sub.admin_comments || sub.approver_comments}"
+            </p>
         </div>
       )}
     </article>
@@ -132,52 +122,45 @@ export default function WorkflowDashboard() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  };
-
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-gray-900">
-      <div className="max-w-[1200px] mx-auto px-6 py-20">
+    <div className="min-h-screen bg-[#fcfcfc] text-gray-900">
+      <div className="max-w-[1000px] mx-auto px-6 py-24">
         
-        {/* Header Section */}
-        <div className="border-b border-blue-600 pb-8 mb-12 flex justify-between items-end">
+        <div className="flex flex-col md:flex-row justify-between items-baseline gap-6 mb-20 border-b-2 border-gray-900 pb-10">
           <div>
-            <h1 className={`${fonts.serif} text-6xl font-semibold text-blue-600`}>Dashboard</h1>
-            <p className={`${fonts.mono} mt-4 text-blue-400`}>System Overview // File Tracking</p>
+            <h1 className={`${fonts.serif} text-7xl font-light text-gray-900`}>Archive</h1>
+            <p className={`${fonts.mono} mt-2 text-blue-600`}>Authenticated Workflow Session // {user?.email}</p>
           </div>
           <a 
             href="/workflow/user/upload"
-            className={`${fonts.mono} bg-blue-600 text-white px-8 py-4 hover:bg-blue-700 transition-all shadow-[4px_4px_0px_0px_rgba(30,58,138,1)]`}>
-            + New Upload
+            className={`${fonts.mono} bg-blue-600 text-white px-10 py-5 hover:bg-black transition-all shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:translate-x-1 active:translate-y-1 active:shadow-none`}>
+            + New Submission
           </a>
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 border-l border-t border-blue-600 bg-white mb-16 shadow-sm">
+        <div className="flex flex-wrap gap-12 mb-20">
           {[
-            { label: 'Total Files', value: submissions.length },
-            { label: 'Approved', value: submissions.filter(s => s.status === 'approved').length },
-            { label: 'Rewards', value: `${submissions.filter(s => s.status === 'approved').length * 50} pts` },
+            { label: 'Logged Files', value: submissions.length },
+            { label: 'Cleared', value: submissions.filter(s => s.status === 'approved').length },
+            { label: 'Reward Bal', value: `${submissions.filter(s => s.status === 'approved').length * 50} pts` },
           ].map((stat) => (
-            <div key={stat.label} className="border-r border-b border-blue-600 p-8 hover:bg-blue-50 transition-colors">
-              <h2 className={fonts.mono}>{stat.label}</h2>
-              <p className={`${fonts.serif} text-5xl mt-2 text-blue-600`}>{stat.value}</p>
+            <div key={stat.label}>
+              <h2 className={`${fonts.mono} text-gray-400`}>{stat.label}</h2>
+              <p className={`${fonts.serif} text-5xl mt-1 text-gray-900`}>{stat.value}</p>
             </div>
           ))}
         </div>
 
-        {/* List Section */}
         {loading ? (
-          <div className={`${fonts.mono} animate-pulse text-blue-600`}>Syncing Records...</div>
+          <div className={`${fonts.mono} animate-pulse text-blue-600 flex items-center gap-4`}>
+            <span className="w-10 h-[1px] bg-blue-600 animate-width"></span>
+            Syncing Records
+          </div>
         ) : (
-          <div className="space-y-0">
-             <div className={`${fonts.mono} mb-6 text-blue-400`}>Recent Submissions</div>
+          <div className="space-y-4">
              {submissions.length === 0 ? (
-               <div className="border border-dashed border-blue-300 p-20 text-center">
-                 <p className={fonts.serif}>No files found in the system.</p>
+               <div className="border-2 border-dashed border-gray-200 p-20 text-center">
+                 <p className={`${fonts.serif} text-2xl text-gray-400`}>The archive is currently empty.</p>
                </div>
              ) : (
                submissions.map(sub => (
@@ -188,69 +171,39 @@ export default function WorkflowDashboard() {
         )}
       </div>
 
-      {/* ─── PREVIEW MODAL (FIXED) ─────────────────────────────────────────── */}
       {previewFile && (
-        <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50 p-4">
-          <div className="relative bg-white rounded-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-            {/* Header */}
-            <div className="flex justify-between items-center p-5 border-b bg-gray-50 shrink-0">
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-6 backdrop-blur-sm">
+          <div className="relative bg-white max-w-6xl w-full h-[85vh] flex flex-col shadow-2xl">
+            <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-white">
               <div>
-                <h3 className="font-bold text-xl">{previewFile.file_name}</h3>
-                <p className="text-sm text-gray-500">{formatFileSize(previewFile.file_size)}</p>
+                <p className={fonts.mono}>Previewing Document</p>
+                <h3 className="font-bold text-2xl text-gray-900">{previewFile.file_name}</h3>
               </div>
               <button
                 onClick={() => setPreviewFile(null)}
-                className="w-10 h-10 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-700 text-xl"
+                className="w-12 h-12 flex items-center justify-center border-2 border-gray-900 text-gray-900 hover:bg-gray-900 hover:text-white transition-all text-2xl"
               >
                 ✕
               </button>
             </div>
             
-            {/* Content */}
-            <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-gray-100 min-h-[400px]">
-              {previewFile.file_type?.startsWith('image/') && (
-                <img 
-                  src={previewFile.file_url} 
-                  alt={previewFile.file_name} 
-                  className="max-w-full max-h-[70vh] object-contain"
-                />
-              )}
-              {previewFile.file_name.match(/\.(pdf)$/i) && (
-                <iframe src={previewFile.file_url} className="w-full h-[70vh]" />
-              )}
-              {!previewFile.file_type?.startsWith('image/') && !previewFile.file_name.match(/\.(pdf)$/i) && (
-                <div className="text-center">
-                  <p className="text-gray-500 mb-4">Preview not available</p>
-                  <a
-                    href={previewFile.file_url}
-                    download={previewFile.file_name}
-                    className="bg-blue-600 text-white px-6 py-2 rounded-full hover:bg-blue-700"
-                  >
-                    Download File
+            <div className="flex-1 overflow-auto p-8 bg-gray-50 flex items-center justify-center">
+              {previewFile.file_type?.startsWith('image/') ? (
+                <img src={previewFile.file_url} className="max-w-full max-h-full object-contain shadow-lg" />
+              ) : previewFile.file_name.match(/\.(pdf)$/i) ? (
+                <iframe src={previewFile.file_url} className="w-full h-full border-none shadow-lg" />
+              ) : (
+                <div className="text-center p-12 border-2 border-dashed border-gray-300 bg-white">
+                  <p className={`${fonts.serif} text-2xl mb-6`}>Interactive preview unavailable for this format.</p>
+                  <a href={previewFile.file_url} download className={`${fonts.mono} bg-blue-600 text-white px-8 py-4`}>
+                    Download Source File
                   </a>
                 </div>
               )}
-            </div>
-            
-            {/* Footer */}
-            <div className="p-3 bg-gray-50 border-t text-center text-xs text-gray-400">
-              CONNECT-Daet.ai • Secure File Preview
             </div>
           </div>
         </div>
       )}
     </div>
   );
-}
-
-// ─── Helper Functions ────────────────────────────────────────────────────────
-function getPipelineState(status: string): ('done' | 'active' | 'declined' | 'idle')[] {
-  switch (status) {
-    case 'pending_approver':   return ['active', 'idle', 'idle'];
-    case 'pending_admin':      return ['done', 'active', 'idle'];
-    case 'approved':           return ['done', 'done', 'done'];
-    case 'declined_by_approver': return ['declined', 'idle', 'idle'];
-    case 'declined_by_admin':   return ['done', 'declined', 'idle'];
-    default:                    return ['idle', 'idle', 'idle'];
-  }
 }
