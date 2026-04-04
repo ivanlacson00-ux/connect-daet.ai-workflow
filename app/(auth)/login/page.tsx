@@ -1,160 +1,112 @@
-"use client";
+// app/(auth)/login/page.tsx
+'use client';
 
-import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useState } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
-type Request = {
-  id: number;
-  name: string;
-  email: string;
-  status: "pending" | "approved" | "rejected";
-  file_url?: string;
+const fonts = {
+  serif: "font-serif italic",
+  mono: "font-mono uppercase tracking-[0.2em] text-[10px]",
 };
 
-export default function ApproverDashboard() {
-  const [requests, setRequests] = useState<Request[]>([]);
+export default function LoginPage() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const router = useRouter();
   const supabase = createClient();
 
-  // ✅ FETCH DATA FROM SUPABASE
-  useEffect(() => {
-    const fetchRequests = async () => {
-      const { data, error } = await supabase
-        .from("workflow_submissions")
-        .select("*")
-        .order("id", { ascending: false });
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
 
-      if (error) {
-        console.error("Fetch error:", error.message);
-        return;
-      }
-
-      const formatted: Request[] = data.map((item: any) => ({
-        id: item.id,
-        name: item.name || "No Name",
-        email: item.email || "No Email",
-        status: item.status || "pending",
-        file_url: item.file_url || null,
-      }));
-
-      setRequests(formatted);
-    };
-
-    fetchRequests();
-  }, []);
-
-  // ✅ APPROVE / REJECT FUNCTION
-  const handleAction = async (
-    id: number,
-    action: "approved" | "rejected"
-  ) => {
-    const { error } = await supabase
-      .from("workflow_submissions")
-      .update({ status: action })
-      .eq("id", id);
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
     if (error) {
-      console.error("Update error:", error.message);
-      return;
+      setError(error.message);
+      setLoading(false);
+    } else {
+      router.push('/workflow');
     }
-
-    // Update UI instantly
-    setRequests((prev) =>
-      prev.map((req) =>
-        req.id === id ? { ...req, status: action } : req
-      )
-    );
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">
-          Approver Dashboard
-        </h1>
-        <p className="text-gray-500">Manage user submissions</p>
-      </div>
+    <div className="min-h-screen bg-[#fcfcfc] text-gray-900 flex items-center justify-center p-6">
+      <div className="max-w-[500px] w-full">
+        
+        <div className="mb-12 border-b-2 border-gray-900 pb-8">
+          <h1 className={`${fonts.serif} text-6xl font-light text-gray-900 leading-tight`}>
+            Login
+          </h1>
+          <p className={`${fonts.mono} mt-2 text-blue-600`}>
+            CONNECT-Daet.ai // Security Gateway
+          </p>
+        </div>
 
-      {/* Table */}
-      <div className="bg-white shadow rounded-lg overflow-hidden">
-        <table className="w-full text-left">
-          <thead className="bg-gray-200 text-gray-600 text-sm">
-            <tr>
-              <th className="p-3">ID</th>
-              <th className="p-3">Name</th>
-              <th className="p-3">Email</th>
-              <th className="p-3">File</th>
-              <th className="p-3">Status</th>
-              <th className="p-3 text-center">Actions</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {requests.map((req) => (
-              <tr key={req.id} className="border-t">
-                <td className="p-3">{req.id}</td>
-                <td className="p-3">{req.name}</td>
-                <td className="p-3">{req.email}</td>
-
-                {/* FILE LINK */}
-                <td className="p-3">
-                  {req.file_url ? (
-                    <a
-                      href={req.file_url}
-                      target="_blank"
-                      className="text-blue-500 underline"
-                    >
-                      View File
-                    </a>
-                  ) : (
-                    "No File"
-                  )}
-                </td>
-
-                {/* STATUS */}
-                <td className="p-3">
-                  <span
-                    className={`px-2 py-1 rounded text-sm ${
-                      req.status === "pending"
-                        ? "bg-yellow-100 text-yellow-700"
-                        : req.status === "approved"
-                        ? "bg-green-100 text-green-700"
-                        : "bg-red-100 text-red-700"
-                    }`}
-                  >
-                    {req.status}
-                  </span>
-                </td>
-
-                {/* ACTIONS */}
-                <td className="p-3 flex justify-center gap-2">
-                  <button
-                    onClick={() => handleAction(req.id, "approved")}
-                    disabled={req.status !== "pending"}
-                    className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50"
-                  >
-                    Approve
-                  </button>
-
-                  <button
-                    onClick={() => handleAction(req.id, "rejected")}
-                    disabled={req.status !== "pending"}
-                    className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
-                  >
-                    Reject
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        {/* EMPTY STATE */}
-        {requests.length === 0 && (
-          <div className="p-6 text-center text-gray-500">
-            No submissions found
+        <div className="bg-white border border-blue-600 p-10 shadow-[12px_12px_0px_0px_rgba(37,99,235,1)] relative overflow-hidden">
+          <div className="absolute top-[-20px] right-[-20px] opacity-[0.03] pointer-events-none select-none text-9xl font-black uppercase">
+            AUTH
           </div>
-        )}
+
+          <form onSubmit={handleLogin} className="relative z-10 space-y-8">
+            <div className="space-y-2">
+              <label className={`${fonts.mono} text-gray-400 block`}>System Identifier (Email)</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-transparent border-b-2 border-gray-200 py-3 text-xl focus:outline-none focus:border-blue-600 transition-colors font-serif italic"
+                placeholder="identity@daet.ai"
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className={`${fonts.mono} text-gray-400 block`}>Security Key (Password)</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-transparent border-b-2 border-gray-200 py-3 text-xl focus:outline-none focus:border-blue-600 transition-colors"
+                placeholder="••••••••"
+                required
+              />
+            </div>
+
+            {error && (
+              <div className={`inline-flex items-center gap-2 border-2 px-4 py-2 rotate-[-1deg] w-full shadow-[4px_4px_0px_0px_currentColor] border-red-600 bg-red-50 text-red-600 ${fonts.mono} font-black`}>
+                <span className="text-lg">●</span>
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className={`${fonts.mono} w-full bg-blue-600 text-white px-8 py-5 hover:bg-black transition-all shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:translate-x-1 active:translate-y-1 active:shadow-none font-bold text-sm`}
+            >
+              {loading ? '[ Authenticating... ]' : '[ Log In ]'}
+            </button>
+
+            <div className="text-center pt-4">
+              <p className={`${fonts.mono} text-gray-400`}>
+                No account? <Link href="/register" className="text-blue-600 hover:underline font-bold underline-offset-4 decoration-2">Register here</Link>
+              </p>
+            </div>
+          </form>
+
+          <div className="mt-10 pt-6 border-t border-gray-100 flex justify-between items-center">
+             <div className={`${fonts.mono} text-gray-400`}>v1.0.4 r-status</div>
+             <div className="text-2xl">📁</div>
+          </div>
+        </div>
       </div>
     </div>
   );
