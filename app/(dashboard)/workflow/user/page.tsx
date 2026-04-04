@@ -88,7 +88,7 @@ export default function WorkflowDashboard() {
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">My Submissions</h2>
         <a
-          href="/workflow/upload"
+          href="/workflow/user/upload"
           className="rounded-full bg-blue-600 px-6 py-2 text-white hover:bg-blue-700 transition-colors"
         >
           + New Upload
@@ -99,7 +99,7 @@ export default function WorkflowDashboard() {
         <div className="text-center py-12 bg-gray-50 rounded-2xl">
           <p className="text-gray-500 mb-4">No submissions yet</p>
           <a
-            href="/workflow/upload"
+            href="/workflow/user/upload"
             className="rounded-full bg-blue-600 px-6 py-2 text-white hover:bg-blue-700"
           >
             Upload your first file
@@ -157,7 +157,7 @@ export default function WorkflowDashboard() {
                   
                   {(sub.status === 'declined_by_approver' || sub.status === 'declined_by_admin') && (
                     <a
-                      href="/workflow/upload"
+                      href="/workflow/user/upload"
                       className="rounded-full bg-blue-100 px-4 py-2 text-sm text-blue-700 hover:bg-blue-200 transition-colors"
                     >
                       Resubmit
