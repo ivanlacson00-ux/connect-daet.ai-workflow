@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import ApproveModal from "./notifications/approve";
+import RejectModal from "./notifications/reject";
 
 type Request = {
   id: number;
@@ -16,12 +18,32 @@ type Request = {
   file_url?: string;
 };
 
+type ApproverDetails = {
+  name: string;
+  email: string;
+  approvedAt: string;
+  notes?: string;
+};
+
+type RejectionDetails = {
+  reason: string;
+  notes: string;
+  rejectedBy: string;
+  rejectedByEmail: string;
+  rejectedAt: string;
+};
+
 export default function ApproverDashboard() {
   const supabase = createClient();
 
   const [requests, setRequests] = useState<Request[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [showNotif, setShowNotif] = useState(false);
+  
+  // Modal states
+  const [showApproveModal, setShowApproveModal] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [selectedSubmission, setSelectedSubmission] = useState<Request | null>(null);
 
   // ✅ FETCH SUBMISSIONS
   useEffect(() => {
@@ -34,7 +56,7 @@ export default function ApproverDashboard() {
       if (!error && data) {
         const formatted: Request[] = data.map((item: any) => ({
           id: item.id,
-          name: item.name || item.full_name || item.submitter_name || "Unknown", // Try different column names
+          name: item.name || item.full_name || item.submitter_name || "Unknown",
           email: item.email || item.submitter_email || "Unknown",
           status: item.status || "pending",
           file_url: item.file_url || item.file || item.document_url,
@@ -66,15 +88,33 @@ export default function ApproverDashboard() {
     fetchNotifications();
   }, []);
 
-  // ✅ APPROVE / REJECT FUNCTION WITH ENHANCED NOTIFICATIONS
-  const handleAction = async (
-    id: number,
-    action: "approved" | "rejected"
+  // ✅ FUNCTION TO NOTIFY ADMIN WHEN APPROVED
+  const notifyAdminOnApproval = async (
+    submissionId: number,
+    submissionName: string,
+    submissionEmail: string,
+    submissionFile: string,
+    approverDetails: ApproverDetails
   ) => {
-    const newStatus =
-      action === "approved" ? "pending_admin" : "rejected";
+    try {
+      const adminNotification = {
+        user_id: null,
+        submission_id: submissionId,
+        type: "admin_approval_needed",
+        message: `🔔 NEW SUBMISSION AWAITING ADMIN APPROVAL\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 Submission Details:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Submission ID: #${submissionId}\n• Name: ${submissionName}\n• Email: ${submissionEmail}\n• File: ${submissionFile || "No file attached"}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n✅ This submission has been reviewed and approved by:\n• Approver: ${approverDetails.name}\n• Email: ${approverDetails.email}\n• Approved at: ${new Date(approverDetails.approvedAt).toLocaleString()}\n${approverDetails.notes ? `• Notes: ${approverDetails.notes}\n` : ''}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⏳ Now awaiting your final approval.\n\nPlease review and take action.`,
+        created_at: new Date().toISOString(),
+        read: false,
+      };
 
-    // 1. Get submission info with all details
+      await supabase.from("notifications").insert([adminNotification]);
+    } catch (error) {
+      console.error("Failed to notify admin:", error);
+    }
+  };
+
+  // ✅ HANDLE APPROVAL WITH DETAILS
+  const handleApproval = async (id: number, approverDetails: ApproverDetails) => {
+    // 1. Get submission info
     const { data: submission, error: fetchError } = await supabase
       .from("workflow_submissions")
       .select("*")
@@ -86,15 +126,16 @@ export default function ApproverDashboard() {
       return;
     }
 
-    // Get the name and email from available fields
     const submissionName = submission.name || submission.full_name || submission.submitter_name || `Submission #${id}`;
     const submissionEmail = submission.email || submission.submitter_email || "No email provided";
     const submissionFile = submission.file_url || submission.file || submission.document_url;
 
-    // 2. Update submission
+    // 2. Update submission - ONLY update status
     const { error: updateError } = await supabase
       .from("workflow_submissions")
-      .update({ status: newStatus })
+      .update({ 
+        status: "pending_admin"
+      })
       .eq("id", id);
 
     if (updateError) {
@@ -102,74 +143,33 @@ export default function ApproverDashboard() {
       return;
     }
 
-    // 3. Create appropriate notifications based on action
-    if (action === "approved") {
-      // Notify USER that their submission is approved and sent to admin
-      const userMessage = `Your submission "${submissionName}" has been approved by approver and sent to admin for final approval.`;
-      
-      if (submission.user_id) {
-        await supabase.from("notifications").insert([
-          {
-            user_id: submission.user_id,
-            message: userMessage,
-            submission_id: id,
-            type: "status_update",
-            created_at: new Date().toISOString(),
-          },
-        ]);
-      }
-
-      // Notify ADMIN about pending approval with file details
-      const adminMessage = `📄 New submission requires your approval!\n\nName: ${submissionName}\nEmail: ${submissionEmail}\nFile: ${submissionFile || "No file attached"}\n\nPlease review and take action.`;
-      
+    // 3. Notify user with approval details
+    const userMessage = `✅ Your submission "${submissionName}" has been approved by ${approverDetails.name} and forwarded to the admin for final approval.\n\n📅 Approved on: ${new Date(approverDetails.approvedAt).toLocaleString()}\n👤 Approved by: ${approverDetails.name} (${approverDetails.email})\n${approverDetails.notes ? `\n📝 Approver's Notes: ${approverDetails.notes}` : ''}\n\nYou will be notified once the admin makes a decision.`;
+    
+    if (submission.user_id) {
       await supabase.from("notifications").insert([
         {
-          user_id: null, // This represents admin - you can replace with specific admin_id
-          message: adminMessage,
+          user_id: submission.user_id,
+          message: userMessage,
           submission_id: id,
-          type: "admin_approval_needed",
+          type: "status_update",
           created_at: new Date().toISOString(),
-        },
-      ]);
-    } 
-    else if (action === "rejected") {
-      // Notify USER that their submission was rejected with reason
-      const rejectionMessage = `❌ Your submission "${submissionName}" has been rejected by the approver.\n\nPlease review your submission and resubmit if necessary.\n\nSubmission details:\n• Email: ${submissionEmail}\n• File: ${submissionFile || "No file attached"}`;
-      
-      if (submission.user_id) {
-        await supabase.from("notifications").insert([
-          {
-            user_id: submission.user_id,
-            message: rejectionMessage,
-            submission_id: id,
-            type: "rejected",
-            created_at: new Date().toISOString(),
-          },
-        ]);
-      }
-
-      // Optional: Notify admin about the rejection for tracking
-      const adminRejectionMessage = `⚠️ Submission #${id} (${submissionName}) was rejected by approver.`;
-      
-      await supabase.from("notifications").insert([
-        {
-          user_id: null,
-          message: adminRejectionMessage,
-          submission_id: id,
-          type: "rejection_tracking",
-          created_at: new Date().toISOString(),
+          read: false,
         },
       ]);
     }
 
-    // 4. Update UI
+    // 4. Notify admin
+    await notifyAdminOnApproval(id, submissionName, submissionEmail, submissionFile, approverDetails);
+
+    // 5. Update UI
     setRequests((prev) =>
       prev.map((req) =>
-        req.id === id ? { ...req, status: newStatus } : req
+        req.id === id ? { ...req, status: "pending_admin" } : req
       )
     );
 
-    // 5. Refresh notifications to show the new ones
+    // 6. Refresh notifications
     const { data: updatedNotifications } = await supabase
       .from("notifications")
       .select("*")
@@ -179,6 +179,97 @@ export default function ApproverDashboard() {
     if (updatedNotifications) {
       setNotifications(updatedNotifications);
     }
+  };
+
+  // ✅ HANDLE REJECTION WITH DETAILS - FIXED: removed non-existent columns
+  const handleRejection = async (id: number, rejectionDetails: RejectionDetails) => {
+    // 1. Get submission info
+    const { data: submission, error: fetchError } = await supabase
+      .from("workflow_submissions")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (fetchError) {
+      console.error("Error fetching submission:", fetchError.message);
+      return;
+    }
+
+    const submissionName = submission.name || submission.full_name || submission.submitter_name || `Submission #${id}`;
+    const submissionEmail = submission.email || submission.submitter_email || "No email provided";
+    const submissionFile = submission.file_url || submission.file || submission.document_url;
+
+    // 2. Update submission - ONLY update status (no other columns)
+    const { error: updateError } = await supabase
+      .from("workflow_submissions")
+      .update({ 
+        status: "rejected"
+      })
+      .eq("id", id);
+
+    if (updateError) {
+      console.error("Error updating submission:", updateError.message);
+      return;
+    }
+
+    // 3. Notify user with rejection details (all details stored in notification)
+    const rejectionMessage = `❌ SUBMISSION REJECTED\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 Your submission has been rejected by the approver.\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nSubmission Details:\n• ID: #${id}\n• Name: ${submissionName}\n• Email: ${submissionEmail}\n• File: ${submissionFile || "No file attached"}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📝 REJECTION REASON:\n${rejectionDetails.reason}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n${rejectionDetails.notes ? `📌 APPROVER'S EXPLANATION:\n${rejectionDetails.notes}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` : ''}👤 Rejected By: ${rejectionDetails.rejectedBy}\n📧 Email: ${rejectionDetails.rejectedByEmail}\n📅 Rejected On: ${new Date(rejectionDetails.rejectedAt).toLocaleString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n💡 Next Steps:\n• Please review the feedback above\n• Make necessary corrections to your submission\n• Resubmit your file with the required changes\n• Contact support if you need clarification\n\nWe appreciate your understanding and look forward to your improved submission.`;
+    
+    if (submission.user_id) {
+      await supabase.from("notifications").insert([
+        {
+          user_id: submission.user_id,
+          message: rejectionMessage,
+          submission_id: id,
+          type: "rejected",
+          created_at: new Date().toISOString(),
+          read: false,
+        },
+      ]);
+    }
+
+    // 4. Notify admin about rejection with details
+    const adminRejectionMessage = `⚠️ SUBMISSION REJECTED BY APPROVER\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Submission #${id}\n• Name: ${submissionName}\n• Email: ${submissionEmail}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📝 Rejection Reason: ${rejectionDetails.reason}\n${rejectionDetails.notes ? `📌 Notes: ${rejectionDetails.notes}\n` : ''}👤 Rejected By: ${rejectionDetails.rejectedBy}\n📧 Email: ${rejectionDetails.rejectedByEmail}\n📅 Rejected On: ${new Date(rejectionDetails.rejectedAt).toLocaleString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nThis submission has been rejected at the approver level.`;
+    
+    await supabase.from("notifications").insert([
+      {
+        user_id: null,
+        message: adminRejectionMessage,
+        submission_id: id,
+        type: "rejection_tracking",
+        created_at: new Date().toISOString(),
+        read: false,
+      },
+    ]);
+
+    // 5. Update UI
+    setRequests((prev) =>
+      prev.map((req) =>
+        req.id === id ? { ...req, status: "rejected" } : req
+      )
+    );
+
+    // 6. Refresh notifications
+    const { data: updatedNotifications } = await supabase
+      .from("notifications")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    if (updatedNotifications) {
+      setNotifications(updatedNotifications);
+    }
+  };
+
+  // Open modals
+  const openApproveModal = (submission: Request) => {
+    setSelectedSubmission(submission);
+    setShowApproveModal(true);
+  };
+
+  const openRejectModal = (submission: Request) => {
+    setSelectedSubmission(submission);
+    setShowRejectModal(true);
   };
 
   return (
@@ -296,9 +387,7 @@ export default function ApproverDashboard() {
                 {/* ACTIONS */}
                 <td className="p-3 flex justify-center gap-2">
                   <button
-                    onClick={() =>
-                      handleAction(req.id, "approved")
-                    }
+                    onClick={() => openApproveModal(req)}
                     disabled={req.status !== "pending_approver"}
                     className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50"
                   >
@@ -306,9 +395,7 @@ export default function ApproverDashboard() {
                   </button>
 
                   <button
-                    onClick={() =>
-                      handleAction(req.id, "rejected")
-                    }
+                    onClick={() => openRejectModal(req)}
                     disabled={req.status !== "pending_approver"}
                     className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
                   >
@@ -326,6 +413,31 @@ export default function ApproverDashboard() {
           </div>
         )}
       </div>
+
+      {/* Modals */}
+      {selectedSubmission && (
+        <>
+          <ApproveModal
+            isOpen={showApproveModal}
+            submission={selectedSubmission}
+            onClose={() => {
+              setShowApproveModal(false);
+              setSelectedSubmission(null);
+            }}
+            onConfirm={handleApproval}
+          />
+          
+          <RejectModal
+            isOpen={showRejectModal}
+            submission={selectedSubmission}
+            onClose={() => {
+              setShowRejectModal(false);
+              setSelectedSubmission(null);
+            }}
+            onConfirm={handleRejection}
+          />
+        </>
+      )}
     </div>
   );
 }
