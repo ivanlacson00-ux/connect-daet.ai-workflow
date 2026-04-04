@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import ApproveModal from "./notifications/approve";
-import RejectModal from "./notifications/reject";
 
 type Request = {
   id: number;
