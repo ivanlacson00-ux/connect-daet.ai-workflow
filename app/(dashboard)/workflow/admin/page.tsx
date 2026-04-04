@@ -17,7 +17,7 @@ export default function AdminDashboard() {
   ];
 
   const quickLinks = [
-    { href: '/workflow/admin/pending',         label: '⏳ Pending My Review',  desc: 'Submissions waiting for your final decision' },
+    { href: '/workflow/admin/pending',         label: '⏳ My Pending Reviews',  desc: 'Submissions waiting for your final decision' },
     { href: '/workflow/admin/submissions',     label: '📁 All Submissions',    desc: 'View and filter all submissions' },
     { href: '/workflow/admin/user_management', label: '👥 User Management',    desc: 'Manage user roles and accounts' },
   ];
