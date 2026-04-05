@@ -4,6 +4,11 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
+const fonts = {
+  serif: "font-serif italic",
+  mono: "font-mono uppercase tracking-[0.15em] text-[10px]",
+};
+
 interface UserProfile {
   id: string;
   email: string;
@@ -16,6 +21,7 @@ export default function UserManagementPage() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<string>('all');
   const [updating, setUpdating] = useState<string | null>(null);
 
   const fetchUsers = async () => {
@@ -60,78 +66,113 @@ export default function UserManagementPage() {
     return () => { supabase.removeChannel(channel); };
   }, []);
 
-  const filtered = users.filter((u) =>
-    u.email.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = users.filter((u) => {
+    const matchesSearch = u.email.toLowerCase().includes(search.toLowerCase());
+    const matchesRole = roleFilter === 'all' || u.role === roleFilter;
+    return matchesSearch && matchesRole;
+  });
 
-  const roleColor: Record<string, string> = {
-    admin:    'bg-blue-100 text-blue-700',
-    approver: 'bg-purple-100 text-purple-700',
-    user:     'bg-gray-100 text-gray-600',
+  const roleStyles: Record<string, string> = {
+    admin: 'border-blue-600 text-blue-600 bg-blue-50',
+    approver: 'border-purple-600 text-purple-600 bg-purple-50',
+    user: 'border-gray-400 text-gray-500 bg-gray-50',
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">👥 User Management</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Manage user roles — changes apply on their next login
-        </p>
+    <div className="space-y-10 pb-20">
+      {/* Header Section */}
+      <div className="border-b-4 border-gray-900 pb-8">
+        <h1 className={`${fonts.serif} text-7xl font-light text-gray-900 leading-none tracking-tight`}>
+          User Management
+        </h1>
+        <div className="flex items-center justify-between mt-4">
+          <p className={`${fonts.mono} text-blue-600 font-bold`}>
+            System Access Control
+          </p>
+          <p className={`${fonts.mono} text-gray-400 font-bold`}>
+            Total Users: {users.length}
+          </p>
+        </div>
       </div>
 
-      {/* Search */}
-      <div className="mb-4">
-        <input
-          type="text"
-          placeholder="Search by email..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full max-w-sm rounded-lg border border-gray-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
+      {/* Filters Bar */}
+      <div className="flex flex-col md:flex-row gap-6">
+        <div className="flex-1 max-w-md">
+          <label className={`${fonts.mono} block mb-2 font-bold text-gray-900`}>Search By Email</label>
+          <input
+            type="text"
+            placeholder="Enter email address..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full bg-white border-2 border-gray-900 p-4 font-medium text-sm shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:shadow-none focus:translate-x-1 focus:translate-y-1 transition-all outline-none"
+          />
+        </div>
+
+        <div className="w-full md:w-48">
+          <label className={`${fonts.mono} block mb-2 font-bold text-gray-900`}>Filter Role</label>
+          <select
+            value={roleFilter}
+            onChange={(e) => setRoleFilter(e.target.value)}
+            className="w-full bg-white border-2 border-gray-900 p-4 font-bold text-xs shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:shadow-none focus:translate-x-1 focus:translate-y-1 transition-all outline-none cursor-pointer uppercase"
+          >
+            <option value="all">All Roles</option>
+            <option value="admin">Admin</option>
+            <option value="approver">Approver</option>
+            <option value="user">User</option>
+          </select>
+        </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow p-6">
-        {loading ? (
-          <p className="text-gray-400">Loading users...</p>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-12">
-            <p className="text-4xl mb-3">👤</p>
-            <p className="text-gray-400">No users found.</p>
+      {/* Users Table */}
+      <div className="bg-white border-2 border-gray-900 shadow-[10px_10px_0px_0px_rgba(37,99,235,0.1)] overflow-hidden">
+        <div className="p-4 border-b-2 border-gray-900 bg-gray-50 flex items-center justify-between">
+          <h2 className={`${fonts.mono} font-black text-gray-900`}>User Directory</h2>
+          <div className="flex items-center gap-2">
+            {loading && <span className={`${fonts.mono} text-blue-600 animate-pulse`}>Loading...</span>}
+            <div className="w-2 h-2 bg-blue-900 rounded-full animate-pulse" />
           </div>
-        ) : (
-          <>
-            <p className="text-sm text-gray-400 mb-4">{filtered.length} user(s) found</p>
-            <table className="w-full text-left text-sm">
+        </div>
+
+        <div className="overflow-x-auto">
+          {filtered.length === 0 && !loading ? (
+            <div className="py-20 text-center border-b-2 border-gray-900">
+              <p className="font-medium text-gray-400 italic">No users match your criteria.</p>
+            </div>
+          ) : (
+            <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b text-gray-400 text-xs uppercase">
-                  <th className="pb-3">Email</th>
-                  <th className="pb-3">Current Role</th>
-                  <th className="pb-3">Joined</th>
-                  <th className="pb-3">Change Role</th>
+                <tr className={`${fonts.mono} bg-gray-900 text-white`}>
+                  <th className="p-5 font-bold">User Details</th>
+                  <th className="p-5 font-bold text-center">Current Role</th>
+                  <th className="p-5 font-bold">Date Joined</th>
+                  <th className="p-5 font-bold text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y-2 divide-gray-900">
                 {filtered.map((user) => (
-                  <tr key={user.id} className="border-b last:border-0 hover:bg-gray-50">
-                    <td className="py-3 font-medium">{user.email}</td>
-                    <td className="py-3">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${roleColor[user.role] ?? 'bg-gray-100 text-gray-600'}`}>
+                  <tr key={user.id} className="hover:bg-blue-50/30 transition-colors">
+                    <td className="p-5">
+                      <div className="font-bold text-gray-900">{user.email}</div>
+                      <div className="text-[10px] font-mono text-gray-400 mt-0.5">ID: {user.id.slice(0, 8)}</div>
+                    </td>
+                    <td className="p-5 text-center">
+                      <span className={`inline-block border-2 px-3 py-0.5 ${fonts.mono} font-black text-[9px] shadow-[2px_2px_0px_0px_currentColor] uppercase ${roleStyles[user.role]}`}>
                         {user.role}
                       </span>
                     </td>
-                    <td className="py-3 text-gray-400">
-                      {new Date(user.created_at).toLocaleDateString()}
+                    <td className="p-5">
+                      <div className="text-sm text-gray-600 font-medium">
+                        {new Date(user.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                      </div>
                     </td>
-                    <td className="py-3">
+                    <td className="p-5 text-right">
                       {updating === user.id ? (
-                        <span className="text-xs text-gray-400">Updating...</span>
+                        <div className="text-xs font-bold text-blue-600 animate-pulse">Updating...</div>
                       ) : (
                         <select
                           value={user.role}
-                          onChange={(e) =>
-                            updateRole(user.id, e.target.value as 'user' | 'approver' | 'admin')
-                          }
-                          className="border rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400"
+                          onChange={(e) => updateRole(user.id, e.target.value as 'user' | 'approver' | 'admin')}
+                          className="bg-white border-2 border-gray-900 px-3 py-1 font-bold text-[11px] shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all cursor-pointer outline-none uppercase"
                         >
                           <option value="user">User</option>
                           <option value="approver">Approver</option>
@@ -143,8 +184,8 @@ export default function UserManagementPage() {
                 ))}
               </tbody>
             </table>
-          </>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
