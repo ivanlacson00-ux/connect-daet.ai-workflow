@@ -1,3 +1,4 @@
+// app/(dashboard)/workflow/user/upload/page.tsx
 'use client';
 
 import { useState } from 'react';
@@ -27,21 +28,15 @@ export default function UploadPage() {
     setMessage(null);
 
     try {
-      // Get current user
+      // 1. Get current user
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       
-      if (userError) {
-        console.error('Auth error:', userError);
-        setMessage({ text: `Auth error: ${userError.message}`, type: 'error' });
-        return;
-      }
-      
-      if (!user) {
-        setMessage({ text: 'You must be logged in', type: 'error' });
+      if (userError || !user) {
+        setMessage({ text: 'You must be logged in to upload', type: 'error' });
         return;
       }
 
-      // Check if profile exists
+      // 2. Ensure profile exists (Syncing the email for the File Registry join)
       const { data: profile } = await supabase
         .from('profiles')
         .select('*')
@@ -51,10 +46,14 @@ export default function UploadPage() {
       if (!profile) {
         await supabase
           .from('profiles')
-          .insert({ id: user.id, email: user.email, role: 'user' });
+          .insert({ 
+            id: user.id, 
+            email: user.email, 
+            role: 'user' 
+          });
       }
 
-      // Upload file to storage
+      // 3. Upload file to storage
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
       const filePath = `${user.id}/${fileName}`;
@@ -68,12 +67,12 @@ export default function UploadPage() {
         return;
       }
 
-      // Get public URL
+      // 4. Get public URL
       const { data: { publicUrl } } = supabase.storage
         .from('workflow_uploads')
         .getPublicUrl(filePath);
 
-      // Save to database
+      // 5. Save to database with standardized status
       const { error: dbError } = await supabase
         .from('workflow_submissions')
         .insert({
@@ -82,7 +81,7 @@ export default function UploadPage() {
           file_name: file.name,
           file_size: file.size,
           file_type: file.type,
-          status: 'pending_approver'
+          status: 'pending' // Changed from 'pending_approver' to match registry filters
         });
 
       if (dbError) {
@@ -106,21 +105,17 @@ export default function UploadPage() {
 
   return (
     <div className="max-w-xl mx-auto py-12 px-6">
-      {/* Header Section */}
       <div className="text-center mb-10">
         <h1 className="text-4xl font-black text-gray-900 tracking-tight mb-2">New Submission</h1>
         <p className="text-gray-500 font-medium">Upload your work for official review and points.</p>
       </div>
       
-      {/* Main Upload Card */}
       <div className="bg-white rounded-[2.5rem] p-8 shadow-2xl shadow-blue-100/50 border border-gray-100">
-        
         <div className={`relative group transition-all duration-500 rounded-[2rem] border-2 border-dashed p-12 flex flex-col items-center justify-center overflow-hidden
           ${file 
             ? 'border-blue-500 bg-blue-50/40 ring-4 ring-blue-50' 
             : 'border-gray-200 bg-gray-50 hover:bg-white hover:border-blue-400 hover:shadow-xl hover:shadow-blue-50'}`}
         >
-          {/* Invisible Input covering the whole area */}
           <input
             id="file-input"
             type="file"
@@ -155,7 +150,6 @@ export default function UploadPage() {
           )}
         </div>
 
-        {/* Dynamic Submission Button */}
         <div className="mt-8">
           <button
             onClick={handleUpload}
@@ -184,7 +178,6 @@ export default function UploadPage() {
         </div>
       </div>
 
-      {/* Success/Error Feedback */}
       {message && (
         <div className={`mt-8 p-5 rounded-2xl border-2 flex items-center gap-4 animate-in slide-in-from-bottom-4 duration-500 ${
           message.type === 'success' 
@@ -199,13 +192,6 @@ export default function UploadPage() {
           <p className="font-bold">{message.text}</p>
         </div>
       )}
-
-      {/* Security Footer */}
-      <div className="mt-12 text-center opacity-40 grayscale flex items-center justify-center gap-4">
-        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
-          Encrypted Upload Channel • CONNECT-Daet.ai
-        </span>
-      </div>
     </div>
   );
 }
