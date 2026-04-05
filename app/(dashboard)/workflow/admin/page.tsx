@@ -60,8 +60,6 @@ export default function AdminDashboard() {
     { label: 'Declined',   value: declinedCount },
   ];
 
-<<<<<<< HEAD
-=======
   // ─── Data Fetching ──────────────────────────────────────────────────────────
   const fetchRecentSubmissions = useCallback(async () => {
     setLoading(true);
@@ -106,7 +104,6 @@ export default function AdminDashboard() {
 
   const isImage = (fileName: string) => /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(fileName);
 
->>>>>>> origin
   return (
     <div className="space-y-12 pb-20">
       {/* Header Section */}
