@@ -16,7 +16,7 @@ interface Submission {
   status: string;
   user_id: string;
   created_at: string;
-  submitter_email?: string; // We will populate this manually
+  submitter_email?: string;
 }
 
 export default function FileManagement() {
@@ -29,29 +29,18 @@ export default function FileManagement() {
 
   const fetchSubmissions = useCallback(async () => {
     setLoading(true);
-    
-    // 1. Fetch Submissions
     const { data: subs, error: subError } = await supabase
       .from("workflow_submissions")
       .select("*")
       .order("created_at", { ascending: false });
 
     if (subError) {
-      console.error("Submission fetch error:", subError);
       setLoading(false);
       return;
     }
 
-    // 2. Fetch Profiles to get emails
-    const { data: profs, error: profError } = await supabase
-      .from("profiles")
-      .select("id, email");
+    const { data: profs } = await supabase.from("profiles").select("id, email");
 
-    if (profError) {
-      console.error("Profiles fetch error:", profError);
-    }
-
-    // 3. Merge data manually (Failsafe Join)
     const mergedData = subs.map((sub: any) => {
       const userProfile = profs?.find(p => p.id === sub.user_id);
       return {
@@ -81,91 +70,118 @@ export default function FileManagement() {
   }, [submissions, searchTerm, statusFilter]);
 
   const handleDownload = async (url: string, filename: string) => {
-    const response = await fetch(url);
-    const blob = await response.blob();
-    const link = document.createElement('a');
-    link.href = window.URL.createObjectURL(blob);
-    link.download = filename;
-    link.click();
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = window.URL.createObjectURL(blob);
+      link.download = filename;
+      link.click();
+    } catch (e) {
+      console.error("Download error", e);
+    }
+  };
+
+  // HELPER: Check if file is an image
+  const isImage = (fileName: string) => {
+    return /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(fileName);
   };
 
   return (
     <div className="min-h-screen bg-[#fcfcfc] text-gray-900 pb-20">
-      <div className="max-w-[1200px] mx-auto px-6 py-20">
+      <div className="max-w-[1100px] mx-auto px-6 py-12">
         
-        <div className="mb-12">
-          <h1 className={`${fonts.serif} text-6xl font-light mb-8`}>File Registry</h1>
-          
-          <div className="flex flex-col md:flex-row gap-4 items-center justify-between bg-white p-4 border border-gray-200 shadow-sm">
-            <div className="relative w-full md:w-96">
-              <input 
-                type="text"
-                placeholder="Search by filename or email..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className={`${fonts.mono} w-full border-b-2 border-gray-900 py-2 focus:outline-none focus:border-blue-600 bg-transparent px-2`}
-              />
-            </div>
+        {/* Header Section */}
+        <div className="mb-12 border-b-2 border-gray-900 pb-10">
+          <h1 className={`${fonts.serif} text-6xl font-light text-gray-900 leading-none`}>File Registry</h1>
+          <p className={`${fonts.mono} mt-4 text-blue-600`}>Central Document Archive // Archive Access</p>
+        </div>
 
-            <div className="flex items-center gap-2">
-              <span className={`${fonts.mono} text-gray-400 mr-2`}>Filter:</span>
-              {['all', 'pending', 'approved', 'declined'].map((status) => (
-                <button
-                  key={status}
-                  onClick={() => setStatusFilter(status)}
-                  className={`${fonts.mono} px-4 py-2 text-[9px] font-bold border ${
-                    statusFilter === status 
-                      ? 'bg-blue-600 text-white border-blue-600' 
-                      : 'bg-white text-gray-400 border-gray-200 hover:border-gray-900'
-                  } transition-all uppercase`}
-                >
-                  {status}
-                </button>
-              ))}
-            </div>
+        {/* Controls Bar */}
+        <div className="flex flex-col lg:flex-row gap-6 mb-10 items-end justify-between bg-white border-2 border-gray-900 p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+          <div className="w-full lg:w-96">
+            <label className={`${fonts.mono} text-blue-400 block mb-2`}>Search_Database</label>
+            <input 
+              type="text"
+              placeholder="Filename, email, or ID..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full border-b-2 border-gray-900 py-2 focus:outline-none focus:border-blue-600 bg-transparent text-sm font-bold placeholder:text-gray-300"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2 justify-end">
+            {['all', 'pending', 'approved', 'declined'].map((status) => (
+              <button
+                key={status}
+                onClick={() => setStatusFilter(status)}
+                className={`${fonts.mono} px-4 py-2 border-2 transition-all ${
+                  statusFilter === status 
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' 
+                    : 'bg-white text-gray-400 border-gray-200 hover:border-gray-900 hover:text-gray-900'
+                }`}
+              >
+                {status}
+              </button>
+            ))}
           </div>
         </div>
 
-        <div className="bg-white border border-gray-200 overflow-hidden shadow-sm rounded-lg">
+        {/* Table Container */}
+        <div className="bg-white border-2 border-gray-900 shadow-[10px_10px_0px_0px_rgba(37,99,235,0.1)]">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className={`bg-gray-50 border-b border-gray-200 ${fonts.mono} text-gray-500`}>
-                  <th className="p-4 font-medium">Log ID</th>
-                  <th className="p-4 font-medium">Document Name</th>
-                  <th className="p-4 font-medium">Sender Email</th>
-                  <th className="p-4 font-medium">Timestamp</th>
-                  <th className="p-4 font-medium">Status</th>
-                  <th className="p-4 font-medium text-right">Actions</th>
+                <tr className={`bg-gray-900 text-white ${fonts.mono}`}>
+                  <th className="p-5 font-bold tracking-widest">Entry_ID</th>
+                  <th className="p-5 font-bold tracking-widest">Document</th>
+                  <th className="p-5 font-bold tracking-widest">Origin</th>
+                  <th className="p-5 font-bold tracking-widest">Status</th>
+                  <th className="p-5 font-bold tracking-widest text-right">Utility</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y-2 divide-gray-900">
                 {loading ? (
-                  <tr><td colSpan={6} className={`${fonts.mono} p-20 text-center text-blue-600 animate-pulse`}>Accessing Records...</td></tr>
-                ) : filteredData.map((sub) => (
-                  <tr key={sub.id} className="hover:bg-blue-50/30 transition-colors group">
-                    <td className={`${fonts.mono} p-4 text-blue-400 text-[9px]`}>{String(sub.id).slice(0, 8)}</td>
-                    <td className="p-4 font-medium text-gray-900">{sub.file_name}</td>
-                    <td className="p-4 text-sm text-gray-600 font-semibold">{sub.submitter_email}</td>
-                    <td className="p-4 text-sm text-gray-500">
-                      {new Date(sub.created_at).toLocaleDateString()}<br/>
-                      <span className="text-[10px] opacity-60">{new Date(sub.created_at).toLocaleTimeString()}</span>
+                  <tr>
+                    <td colSpan={5} className="p-24 text-center">
+                      <div className={`${fonts.mono} animate-pulse text-blue-600 text-lg`}>[ Synchronizing_Records... ]</div>
                     </td>
-                    <td className="p-4">
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${
-                        sub.status === 'approved' ? 'bg-green-100 text-green-700' :
-                        sub.status === 'declined' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
+                  </tr>
+                ) : filteredData.map((sub) => (
+                  <tr key={sub.id} className="hover:bg-blue-50/50 transition-colors group">
+                    <td className={`${fonts.mono} p-5 text-blue-500 font-bold`}>#{String(sub.id).slice(0, 6)}</td>
+                    <td className="p-5">
+                      <div className="font-bold text-gray-900 group-hover:text-blue-600 transition-colors">{sub.file_name}</div>
+                      <div className={`${fonts.mono} text-[8px] text-gray-400 mt-1`}>
+                        Logged: {new Date(sub.created_at).toLocaleDateString()}
+                      </div>
+                    </td>
+                    <td className="p-5">
+                      <div className="text-xs font-black text-gray-700">{sub.submitter_email}</div>
+                    </td>
+                    <td className="p-5">
+                      <div className={`inline-block px-3 py-0.5 border-2 ${fonts.mono} font-black text-[9px] shadow-[2px_2px_0px_0px_currentColor] ${
+                        sub.status === 'approved' ? 'border-green-600 text-green-600 bg-green-50' :
+                        sub.status === 'declined' ? 'border-red-600 text-red-600 bg-red-50' : 'border-orange-500 text-orange-500 bg-orange-50'
                       }`}>
                         {sub.status}
-                      </span>
+                      </div>
                     </td>
-                    <td className="p-4 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button onClick={() => setPreviewFile({ url: sub.file_url, name: sub.file_name })} className="p-2 hover:text-blue-600 transition-colors">
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    <td className="p-5 text-right">
+                      <div className="flex justify-end gap-3">
+                        <button 
+                          onClick={() => setPreviewFile({ url: sub.file_url, name: sub.file_name })} 
+                          className="p-2 border border-gray-200 hover:border-blue-600 hover:text-blue-600 transition-all bg-white shadow-[2px_2px_0px_0px_rgba(0,0,0,0.05)] hover:shadow-none"
+                          title="Preview"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                         </button>
-                        <button onClick={() => handleDownload(sub.file_url, sub.file_name)} className="p-2 hover:text-gray-900 text-gray-400">
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                        <button 
+                          onClick={() => handleDownload(sub.file_url, sub.file_name)} 
+                          className="p-2 border border-gray-200 hover:border-gray-900 text-gray-400 hover:text-gray-900 transition-all bg-white"
+                          title="Download"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
                         </button>
                       </div>
                     </td>
@@ -176,20 +192,43 @@ export default function FileManagement() {
           </div>
           
           {filteredData.length === 0 && !loading && (
-            <div className={`${fonts.serif} p-20 text-center text-gray-300 text-2xl`}>
-              No matching files found in the registry.
+            <div className="p-24 text-center border-t-2 border-gray-900 bg-gray-50/50">
+              <p className={`${fonts.serif} text-2xl text-gray-300`}>No matches found in Registry Archive.</p>
             </div>
           )}
         </div>
       </div>
 
+      {/* Preview Modal - UPDATED TO HANDLE IMAGES */}
       {previewFile && (
-        <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col">
-          <div className="px-6 py-4 flex justify-between items-center border-b border-white/10 bg-black">
-            <h2 className="text-white text-lg font-medium">{previewFile.name}</h2>
-            <button onClick={() => setPreviewFile(null)} className="text-white text-3xl hover:text-blue-500">×</button>
+        <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col animate-in fade-in duration-300">
+          <div className="px-6 py-4 flex justify-between items-center border-b-2 border-white/10 bg-black">
+            <div className="flex flex-col">
+              <span className={`${fonts.mono} text-blue-500 mb-0.5`}>Vault_Registry_Preview</span>
+              <h2 className="text-white text-lg font-medium">{previewFile.name}</h2>
+            </div>
+            <button 
+              onClick={() => setPreviewFile(null)} 
+              className="text-white hover:text-red-500 transition-all p-2"
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
           </div>
-          <iframe className="flex-1 w-full bg-white" src={`https://docs.google.com/gview?url=${encodeURIComponent(previewFile.url)}&embedded=true`} />
+          
+          <div className="flex-1 w-full flex items-center justify-center overflow-hidden bg-[#1a1a1a]">
+            {isImage(previewFile.name) ? (
+              <img 
+                src={previewFile.url} 
+                alt={previewFile.name} 
+                className="max-w-full max-h-full object-contain p-8 animate-in zoom-in-95 duration-300"
+              />
+            ) : (
+              <iframe 
+                className="w-full h-full border-none bg-white" 
+                src={`https://docs.google.com/gview?url=${encodeURIComponent(previewFile.url)}&embedded=true`} 
+              />
+            )}
+          </div>
         </div>
       )}
     </div>
