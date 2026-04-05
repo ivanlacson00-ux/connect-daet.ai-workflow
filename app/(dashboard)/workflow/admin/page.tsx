@@ -1,4 +1,3 @@
-// src/app/workflow/admin/page.tsx
 'use client';
 
 import { useAdminStats } from '@/hooks/useAdminStats';
@@ -15,15 +14,6 @@ export default function AdminDashboard() {
     { label: 'Declined by Admin',     value: stats.declinedByAdmin,    color: 'bg-red-600' },
   ];
 
-<<<<<<< HEAD
-=======
-  const quickLinks = [
-    { href: '/workflow/admin/pending',         label: '⏳ My Pending Reviews',  desc: 'Submissions waiting for your final decision' },
-    { href: '/workflow/admin/submissions',     label: '📁 All Submissions',    desc: 'View and filter all submissions' },
-    { href: '/workflow/admin/user_management', label: '👥 User Management',    desc: 'Manage user roles and accounts' },
-  ];
-
->>>>>>> ac264e83fd40cefe5574619ce477446787f20e3f
   return (
     <div className="space-y-8">
       {/* Header */}

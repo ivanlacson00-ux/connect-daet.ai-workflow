@@ -34,7 +34,6 @@ export default function LoginPage() {
       return;
     }
 
-    // ✅ Force refresh to get latest app_metadata role
     const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
 
     if (refreshError || !refreshed.user) {
@@ -45,7 +44,6 @@ export default function LoginPage() {
 
     const role = refreshed.user.app_metadata?.role;
 
-    // ✅ Redirect based on role
     if (role === 'admin') {
       window.location.href = '/workflow/admin';
     } else if (role === 'approver') {
