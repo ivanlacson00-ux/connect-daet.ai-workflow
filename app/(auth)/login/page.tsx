@@ -1,4 +1,3 @@
-// app/(auth)/login/page.tsx
 'use client';
 
 import { useState } from 'react';
@@ -24,17 +23,38 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
-    if (error) {
-      setError(error.message);
+    if (signInError) {
+      setError(signInError.message);
       setLoading(false);
-    } else {
-      router.push('/workflow');
+      return;
     }
+
+    // ✅ Force refresh to get latest app_metadata role
+    const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+
+    if (refreshError || !refreshed.user) {
+      setError('Session error. Please try again.');
+      setLoading(false);
+      return;
+    }
+
+    const role = refreshed.user.app_metadata?.role;
+
+    // ✅ Redirect based on role
+    if (role === 'admin') {
+      window.location.href = '/workflow/admin';
+    } else if (role === 'approver') {
+      window.location.href = '/workflow/approver';
+    } else {
+      window.location.href = '/workflow/user';
+    }
+
+    setLoading(false);
   };
 
   return (

@@ -41,28 +41,30 @@ export default function WorkflowLayout({
   const navLinks = () => {
     if (role === 'user') {
       return [
-        { href: '/workflow/user', label: 'My Submissions', icon: '📋' },
-        { href: '/workflow/user/upload', label: 'Upload', icon: '📤' },
+        { href: '/workflow/user', label: 'Dashboard', icon: '🏠' },
+        { href: '/workflow/user/upload', label: 'Upload Submission', icon: '📤' },
       ];
     }
     if (role === 'approver') {
       return [
         { href: '/workflow/approver', label: 'Pending Reviews', icon: '⏳' },
+        { href: '/workflow/approver/history', label: 'Review History', icon: '📜' },
       ];
     }
     if (role === 'admin') {
       return [
-        { href: '/workflow/admin', label: 'Final Approvals', icon: '✅' },
-        { href: '/workflow/admin/users', label: 'Manage Users', icon: '👥' },
+        { href: '/workflow/admin', label: 'Admin Overview', icon: '📊' },
+        { href: '/workflow/admin/pending', label: 'Pending My Review', icon: '⏳' },
+        { href: '/workflow/admin/submissions', label: 'All Submissions', icon: '📁' },
+        // Fixed: Matching folder name "user_management" to prevent 404
+        { href: '/workflow/admin/user_management', label: 'User Management', icon: '👥' },
       ];
     }
     return [];
   };
 
+  // Improved isActive to handle sub-paths
   const isActive = (path: string) => pathname === path;
-
-  // Don't show role badge for regular users
-  const showRoleBadge = role !== 'user';
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -79,71 +81,69 @@ export default function WorkflowLayout({
       {/* Sidebar */}
       <div className={`
         fixed top-0 left-0 h-full bg-white border-r border-gray-200 z-40
-        transition-transform duration-300 w-64
-        lg:translate-x-0
+        transition-transform duration-300 w-64 lg:translate-x-0
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         {/* Logo */}
         <div className="p-6 border-b border-gray-200">
-          <h1 className="text-xl font-bold text-blue-600">📁 Workflow Portal</h1>
+          <h1 className="text-xl font-bold text-blue-600 tracking-tight">📁 Workflow Portal</h1>
         </div>
 
-        {/* User Info */}
-        <div className="p-4 border-b border-gray-200 bg-blue-50">
-          <p className="text-xs text-gray-500">Logged in as</p>
-          <p className="font-medium text-gray-800 truncate">{userEmail || 'Loading...'}</p>
-          {/* Only show role badge for approver or admin */}
-          {showRoleBadge && (
-            <span className="inline-block mt-1 px-2 py-0.5 bg-blue-100 text-blue-600 text-xs rounded-full">
+        {/* User Info Card */}
+        <div className="p-4 border-b border-gray-200 bg-blue-50/50">
+          <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">Logged in as</p>
+          <p className="font-medium text-gray-900 truncate text-sm">{userEmail || 'Loading...'}</p>
+          {role && (
+            <span className="inline-block mt-1.5 px-2 py-0.5 bg-blue-600 text-white text-[10px] rounded font-black uppercase tracking-tighter">
               {role}
             </span>
           )}
         </div>
 
         {/* Nav Links */}
-        <nav className="p-4 space-y-2">
+        <nav className="p-4 space-y-1">
           {navLinks().map((link) => (
             <Link
               key={link.href}
               href={link.href}
               onClick={() => setSidebarOpen(false)}
               className={`
-                flex items-center gap-3 px-4 py-3 rounded-lg transition-colors
+                flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 text-sm font-semibold
                 ${isActive(link.href) 
-                  ? 'bg-blue-600 text-white' 
-                  : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'
+                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-200' 
+                  : 'text-gray-500 hover:bg-blue-50 hover:text-blue-600'
                 }
               `}
             >
-              <span className="text-xl">{link.icon}</span>
+              <span className="text-lg">{link.icon}</span>
               <span>{link.label}</span>
             </Link>
           ))}
         </nav>
 
-        {/* Logout */}
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200">
+        {/* Logout Button */}
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-100 bg-white">
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-500 hover:bg-red-50 transition-colors text-sm font-bold"
           >
             <span className="text-xl">🚪</span>
-            <span>Logout</span>
+            <span>Sign Out</span>
           </button>
         </div>
       </div>
 
-      {/* Overlay */}
+      {/* Mobile Overlay */}
       {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-30 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
+        <div 
+          className="fixed inset-0 bg-black/20 backdrop-blur-sm z-30 lg:hidden" 
+          onClick={() => setSidebarOpen(false)} 
         />
       )}
 
-      {/* Main content */}
+      {/* Main Content Area */}
       <main className="lg:ml-64 min-h-screen">
-        <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="max-w-7xl mx-auto px-6 py-10">
           {children}
         </div>
       </main>
