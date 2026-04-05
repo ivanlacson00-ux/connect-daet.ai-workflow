@@ -1,4 +1,3 @@
-// app/(dashboard)/workflow/layout.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -44,22 +43,26 @@ export default function WorkflowLayout({
   };
 
   const navLinks = () => {
+    // --- USER NAVIGATION ---
     if (role === 'user') {
       return [
         { href: '/workflow/user', label: 'Dashboard', icon: '◰' },
         { href: '/workflow/user/upload', label: 'Upload', icon: '⊕' },
       ];
     }
+    // --- APPROVER NAVIGATION ---
     if (role === 'approver') {
       return [
-        { href: '/workflow/approver', label: 'Review Queue', icon: '⎚' },
-        { href: '/workflow/approver/file_management', label: 'Registry', icon: '▤' },
+        { href: '/workflow/approver', label: 'Dashboard', icon: '⎚' },
+        { href: '/workflow/approver/file_management', label: 'File Registry', icon: '▤' },
       ];
     }
+    // --- ADMIN NAVIGATION ---
     if (role === 'admin') {
       return [
-        { href: '/workflow/admin', label: 'System Hub', icon: '⌬' },
-        { href: '/workflow/admin/user_management', label: 'Directory', icon: '☍' },
+        { href: '/workflow/admin', label: 'Dashboard', icon: '⌬' },
+        { href: '/workflow/admin/user_management', label: 'User Registry', icon: '☍' },
+        { href: '/workflow/admin/submissions', label: 'File Submissions', icon: '▤' },
       ];
     }
     return [];
@@ -85,13 +88,13 @@ export default function WorkflowLayout({
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         
-        {/* Brand Header - Reduced Padding */}
+        {/* Brand Header */}
         <div className="p-6 border-b-2 border-gray-900 bg-white">
           <h1 className={`${fonts.serif} text-2xl font-light`}>Portal.</h1>
           <p className={`${fonts.mono} text-blue-600 mt-1`}>Verified Access</p>
         </div>
 
-        {/* Navigation - Condensed Spacing */}
+        {/* Navigation */}
         <nav className="flex-1 p-4 space-y-2">
           <div className={`${fonts.mono} text-gray-300 px-2 mb-2 scale-90 origin-left opacity-70`}>Navigation</div>
           {navLinks().map((link) => {
@@ -118,7 +121,7 @@ export default function WorkflowLayout({
           })}
         </nav>
 
-        {/* Combined User Panel & Sign Out */}
+        {/* User Panel */}
         <div className="mt-auto border-t-2 border-gray-900 bg-gray-50">
           <div className="p-5 border-b border-gray-200">
             <div className={`${fonts.mono} text-gray-400 mb-1 scale-90 origin-left`}>Auth_ID</div>
@@ -147,13 +150,12 @@ export default function WorkflowLayout({
         />
       )}
 
-      {/* Main Content Area - Adjusted Margin */}
+      {/* Main Content Area */}
       <main className="lg:ml-60 min-h-screen">
         <div className="max-w-[1000px] mx-auto px-6 py-10">
           {children}
         </div>
         
-        {/* Subtle Page Background ID */}
         <div className="fixed bottom-6 right-6 pointer-events-none opacity-[0.02] select-none">
           <h1 className="text-8xl font-black italic uppercase leading-none">CONNECT</h1>
         </div>
