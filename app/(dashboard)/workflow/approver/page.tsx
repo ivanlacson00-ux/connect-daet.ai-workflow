@@ -1,449 +1,239 @@
-"use client";
+// app/(dashboard)/workflow/approver/page.tsx
+'use client';
 
-import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { createClient } from '@/lib/supabase/client';
 
-type Request = {
-  id: number;
-  name: string;
-  email: string;
-  status:
-    | "pending"
-    | "pending_approver"
-    | "pending_admin"
-    | "approved"
-    | "rejected";
-  file_url?: string;
+// ─── Styles ──────────────────────────────────────────────────────────────────
+const fonts = {
+  serif: "font-serif italic",
+  mono: "font-mono uppercase tracking-[0.2em] text-[10px]",
 };
 
-type ApproverDetails = {
-  name: string;
-  email: string;
-  approvedAt: string;
-  notes?: string;
-};
+interface Submission {
+  id: string | number;
+  file_name: string;
+  file_url: string;
+  status: string;
+  user_id: string;
+  submitter_email?: string;
+  created_at: string;
+}
 
-type RejectionDetails = {
-  reason: string;
-  notes: string;
-  rejectedBy: string;
-  rejectedByEmail: string;
-  rejectedAt: string;
-};
+// ─── Status Stamp ────────────────────────────────────────────────────────────
+function StatusStamp({ status }: { status: string }) {
+  const getDisplayConfig = () => {
+    switch (status.toLowerCase()) {
+      case 'approved':
+        return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
+      case 'declined':
+        return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
+      default:
+        return { label: 'PENDING', color: 'text-orange-600', bg: 'bg-orange-50' };
+    }
+  };
+
+  const config = getDisplayConfig();
+
+  return (
+    <div className={`inline-flex items-center gap-2 border-2 border-current px-4 py-1 rotate-[-1deg] ${config.color} ${config.bg} ${fonts.mono} font-black shadow-[3px_3px_0px_0px_currentColor]`}>
+      <span className="text-lg">●</span>
+      {config.label}
+    </div>
+  );
+}
 
 export default function ApproverDashboard() {
   const supabase = createClient();
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
 
-  const [requests, setRequests] = useState<Request[]>([]);
-  const [notifications, setNotifications] = useState<any[]>([]);
-  const [showNotif, setShowNotif] = useState(false);
-  
-  // Modal states
-  const [showApproveModal, setShowApproveModal] = useState(false);
-  const [showRejectModal, setShowRejectModal] = useState(false);
-  const [selectedSubmission, setSelectedSubmission] = useState<Request | null>(null);
-
-  // ✅ FETCH SUBMISSIONS
-  useEffect(() => {
-    const fetchRequests = async () => {
-      const { data, error } = await supabase
-        .from("workflow_submissions")
-        .select("*")
-        .order("id", { ascending: false });
-
-      if (!error && data) {
-        const formatted: Request[] = data.map((item: any) => ({
-          id: item.id,
-          name: item.name || item.full_name || item.submitter_name || "Unknown",
-          email: item.email || item.submitter_email || "Unknown",
-          status: item.status || "pending",
-          file_url: item.file_url || item.file || item.document_url,
-        }));
-
-        setRequests(formatted);
-      } else if (error) {
-        console.error("Error fetching requests:", error);
-      }
+  // ─── Data Metrics ──────────────────────────────────────────────────────────
+  const stats = useMemo(() => {
+    return {
+      pending: submissions.filter(s => s.status === 'pending').length,
+      approved: submissions.filter(s => s.status === 'approved').length,
+      declined: submissions.filter(s => s.status === 'declined').length,
     };
+  }, [submissions]);
 
-    fetchRequests();
-  }, []);
+  const fetchSubmissions = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("workflow_submissions")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-  // ✅ FETCH NOTIFICATIONS
-  useEffect(() => {
-    const fetchNotifications = async () => {
-      const { data, error } = await supabase
-        .from("notifications")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(5);
+    if (!error && data) setSubmissions(data);
+    setLoading(false);
+  }, [supabase]);
 
-      if (!error && data) {
-        setNotifications(data);
-      }
-    };
+  useEffect(() => { fetchSubmissions(); }, [fetchSubmissions]);
 
-    fetchNotifications();
-  }, []);
-
-  // ✅ FUNCTION TO NOTIFY ADMIN WHEN APPROVED
-  const notifyAdminOnApproval = async (
-    submissionId: number,
-    submissionName: string,
-    submissionEmail: string,
-    submissionFile: string,
-    approverDetails: ApproverDetails
-  ) => {
+  const handleDownload = async (url: string, filename: string) => {
     try {
-      const adminNotification = {
-        user_id: null,
-        submission_id: submissionId,
-        type: "admin_approval_needed",
-        message: `🔔 NEW SUBMISSION AWAITING ADMIN APPROVAL\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 Submission Details:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Submission ID: #${submissionId}\n• Name: ${submissionName}\n• Email: ${submissionEmail}\n• File: ${submissionFile || "No file attached"}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n✅ This submission has been reviewed and approved by:\n• Approver: ${approverDetails.name}\n• Email: ${approverDetails.email}\n• Approved at: ${new Date(approverDetails.approvedAt).toLocaleString()}\n${approverDetails.notes ? `• Notes: ${approverDetails.notes}\n` : ''}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⏳ Now awaiting your final approval.\n\nPlease review and take action.`,
-        created_at: new Date().toISOString(),
-        read: false,
-      };
-
-      await supabase.from("notifications").insert([adminNotification]);
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
     } catch (error) {
-      console.error("Failed to notify admin:", error);
+      console.error("Download failed:", error);
     }
   };
 
-  // ✅ HANDLE APPROVAL WITH DETAILS (UPDATED - only update status)
-  const handleApproval = async (id: number, approverDetails: ApproverDetails) => {
-    // 1. Get submission info
-    const { data: submission, error: fetchError } = await supabase
+  const handleAction = async (id: string | number, newStatus: 'approved' | 'declined') => {
+    const { error } = await supabase
       .from("workflow_submissions")
-      .select("*")
-      .eq("id", id)
-      .single();
-
-    if (fetchError) {
-      console.error("Error fetching submission:", fetchError.message);
-      return;
-    }
-
-    const submissionName = submission.name || submission.full_name || submission.submitter_name || `Submission #${id}`;
-    const submissionEmail = submission.email || submission.submitter_email || "No email provided";
-    const submissionFile = submission.file_url || submission.file || submission.document_url;
-
-    // 2. Update submission - ONLY update status (removed column references)
-    const { error: updateError } = await supabase
-      .from("workflow_submissions")
-      .update({ 
-        status: "pending_admin"
-      })
+      .update({ status: newStatus })
       .eq("id", id);
-
-    if (updateError) {
-      console.error("Error updating submission:", updateError.message);
-      return;
-    }
-
-    // 3. Store approver details in a separate metadata table or notification
-    // For now, we'll just include it in the notification
-    const approvalMetadata = {
-      approved_by: approverDetails.name,
-      approved_by_email: approverDetails.email,
-      approved_at: approverDetails.approvedAt,
-      approval_notes: approverDetails.notes
-    };
-
-    // 4. Notify user
-    const userMessage = `✅ Your submission "${submissionName}" has been approved by ${approverDetails.name} and forwarded to the admin for final approval.\n\nApproved on: ${new Date(approverDetails.approvedAt).toLocaleString()}\n${approverDetails.notes ? `\nApprover's Notes: ${approverDetails.notes}` : ''}\n\nYou will be notified once the admin makes a decision.`;
     
-    if (submission.user_id) {
-      await supabase.from("notifications").insert([
-        {
-          user_id: submission.user_id,
-          message: userMessage,
-          submission_id: id,
-          type: "status_update",
-          created_at: new Date().toISOString(),
-          read: false,
-        },
-      ]);
+    if (!error) {
+      setSubmissions(prev => prev.map(s => s.id === id ? { ...s, status: newStatus } : s));
     }
-
-    // 5. Notify admin with approval details
-    await notifyAdminOnApproval(id, submissionName, submissionEmail, submissionFile, approverDetails);
-
-    // 6. Update UI
-    setRequests((prev) =>
-      prev.map((req) =>
-        req.id === id ? { ...req, status: "pending_admin" } : req
-      )
-    );
-
-    // 7. Refresh notifications
-    const { data: updatedNotifications } = await supabase
-      .from("notifications")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(5);
-
-    if (updatedNotifications) {
-      setNotifications(updatedNotifications);
-    }
-  };
-
-  // ✅ HANDLE REJECTION WITH DETAILS (UPDATED - removed all missing columns)
-  const handleRejection = async (id: number, rejectionDetails: RejectionDetails) => {
-    // 1. Get submission info
-    const { data: submission, error: fetchError } = await supabase
-      .from("workflow_submissions")
-      .select("*")
-      .eq("id", id)
-      .single();
-
-    if (fetchError) {
-      console.error("Error fetching submission:", fetchError.message);
-      return;
-    }
-
-    const submissionName = submission.name || submission.full_name || submission.submitter_name || `Submission #${id}`;
-    const submissionEmail = submission.email || submission.submitter_email || "No email provided";
-    const submissionFile = submission.file_url || submission.file || submission.document_url;
-
-    // 2. Update submission - ONLY update status (removed all missing columns)
-    const { error: updateError } = await supabase
-      .from("workflow_submissions")
-      .update({ 
-        status: "rejected"
-      })
-      .eq("id", id);
-
-    if (updateError) {
-      console.error("Error updating submission:", updateError.message);
-      return;
-    }
-
-    // 3. Notify user with rejection details (details are in the notification only)
-    const rejectionMessage = `❌ SUBMISSION REJECTED\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 Your submission has been rejected by the approver.\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nSubmission Details:\n• ID: #${id}\n• Name: ${submissionName}\n• Email: ${submissionEmail}\n• File: ${submissionFile || "No file attached"}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📝 REJECTION REASON:\n${rejectionDetails.reason}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n${rejectionDetails.notes ? `📌 APPROVER'S EXPLANATION:\n${rejectionDetails.notes}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` : ''}👤 Rejected By: ${rejectionDetails.rejectedBy}\n📅 Rejected On: ${new Date(rejectionDetails.rejectedAt).toLocaleString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n💡 Next Steps:\n• Please review the feedback above\n• Make necessary corrections to your submission\n• Resubmit your file with the required changes\n• Contact support if you need clarification\n\nWe appreciate your understanding and look forward to your improved submission.`;
-    
-    if (submission.user_id) {
-      await supabase.from("notifications").insert([
-        {
-          user_id: submission.user_id,
-          message: rejectionMessage,
-          submission_id: id,
-          type: "rejected",
-          created_at: new Date().toISOString(),
-          read: false,
-        },
-      ]);
-    }
-
-    // 4. Notify admin about rejection
-    const adminRejectionMessage = `⚠️ SUBMISSION REJECTED BY APPROVER\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Submission #${id}\n• Name: ${submissionName}\n• Email: ${submissionEmail}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📝 Rejection Reason: ${rejectionDetails.reason}\n${rejectionDetails.notes ? `📌 Notes: ${rejectionDetails.notes}\n` : ''}👤 Rejected By: ${rejectionDetails.rejectedBy}\n📅 Rejected On: ${new Date(rejectionDetails.rejectedAt).toLocaleString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nThis submission has been rejected at the approver level.`;
-    
-    await supabase.from("notifications").insert([
-      {
-        user_id: null,
-        message: adminRejectionMessage,
-        submission_id: id,
-        type: "rejection_tracking",
-        created_at: new Date().toISOString(),
-        read: false,
-      },
-    ]);
-
-    // 5. Update UI
-    setRequests((prev) =>
-      prev.map((req) =>
-        req.id === id ? { ...req, status: "rejected" } : req
-      )
-    );
-
-    // 6. Refresh notifications
-    const { data: updatedNotifications } = await supabase
-      .from("notifications")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(5);
-
-    if (updatedNotifications) {
-      setNotifications(updatedNotifications);
-    }
-  };
-
-  // Open modals
-  const openApproveModal = (submission: Request) => {
-    setSelectedSubmission(submission);
-    setShowApproveModal(true);
-  };
-
-  const openRejectModal = (submission: Request) => {
-    setSelectedSubmission(submission);
-    setShowRejectModal(true);
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
-      {/* HEADER + NOTIFICATION */}
-      <div className="mb-6 flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">
-            Approver Dashboard
-          </h1>
-          <p className="text-gray-500">Manage submissions</p>
+    <div className="min-h-screen bg-[#fcfcfc] text-gray-900 relative pb-20">
+      <div className="max-w-[1100px] mx-auto px-6 py-20">
+        
+        {/* Header Section */}
+        <div className="mb-12 border-b-2 border-gray-900 pb-10">
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+            <div>
+              <h1 className={`${fonts.serif} text-7xl font-light text-gray-900 leading-none`}>Review Queue</h1>
+              <p className={`${fonts.mono} mt-4 text-blue-600`}>Approver Authority // Gateway Verification</p>
+            </div>
+
+            {/* Quick Stats Grid */}
+            <div className="grid grid-cols-3 gap-4 md:w-72">
+              <div className="bg-orange-50 border border-orange-200 p-3 text-center">
+                <div className={`${fonts.mono} text-[8px] text-orange-500 mb-1`}>Pending</div>
+                <div className="text-xl font-bold text-orange-600 leading-none">{stats.pending}</div>
+              </div>
+              <div className="bg-green-50 border border-green-200 p-3 text-center">
+                <div className={`${fonts.mono} text-[8px] text-green-500 mb-1`}>Approved</div>
+                <div className="text-xl font-bold text-green-600 leading-none">{stats.approved}</div>
+              </div>
+              <div className="bg-red-50 border border-red-200 p-3 text-center">
+                <div className={`${fonts.mono} text-[8px] text-red-500 mb-1`}>Declined</div>
+                <div className="text-xl font-bold text-red-600 leading-none">{stats.declined}</div>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* 🔔 Notification Bell */}
-        <div className="relative">
-          <button
-            onClick={() => setShowNotif(!showNotif)}
-            className="relative text-xl"
-          >
-            🔔
+        {loading ? (
+          <div className={`${fonts.mono} animate-pulse text-blue-600 flex items-center gap-2`}>
+            <span className="w-2 h-2 bg-blue-600 rounded-full animate-ping" />
+            [ Syncing Submissions ]
+          </div>
+        ) : (
+          <div className="space-y-8">
+            {submissions.map((sub) => (
+              <article key={sub.id} className="bg-white border border-blue-600 p-8 transition-all hover:shadow-[10px_10px_0px_0px_rgba(37,99,235,1)] relative overflow-hidden group">
+                <div className="absolute top-[-10px] right-[-10px] opacity-[0.03] pointer-events-none select-none text-8xl font-black uppercase">
+                  {sub.status}
+                </div>
 
-            {notifications.length > 0 && (
-              <span className="absolute -top-1 -right-2 bg-red-500 text-white text-xs px-1 rounded-full">
-                {notifications.length}
-              </span>
-            )}
-          </button>
+                <div className="flex flex-col md:flex-row justify-between items-start gap-8 relative z-10">
+                  <div className="space-y-4">
+                    <div>
+                      <div className={`${fonts.mono} text-blue-400 mb-1`}>Entry ID: {String(sub.id).slice(0,8)}</div>
+                      <h3 className={`${fonts.serif} text-4xl text-gray-900 group-hover:text-blue-600 transition-colors`}>
+                        {sub.file_name || "Untitled_File"}
+                      </h3>
+                      <p className={`${fonts.mono} text-gray-400 mt-2`}>
+                        {sub.submitter_email} // {new Date(sub.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <StatusStamp status={sub.status} />
+                  </div>
 
-          {/* Dropdown */}
-          {showNotif && (
-            <div className="absolute right-0 mt-2 w-80 bg-white shadow-lg rounded-lg p-3 z-50">
-              <h3 className="font-semibold mb-2">Notifications</h3>
+                  <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto self-end md:self-start">
+                    <button 
+                      onClick={() => setPreviewFile({ url: sub.file_url, name: sub.file_name })}
+                      className={`${fonts.mono} bg-white border-2 border-gray-900 px-6 py-3 text-gray-900 hover:bg-gray-100 transition-all font-bold shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]`}>
+                      Preview
+                    </button>
 
-              {notifications.length === 0 ? (
-                <p className="text-gray-500 text-sm">
-                  No notifications
-                </p>
-              ) : (
-                notifications.map((notif) => (
-                  <div
-                    key={notif.id}
-                    className="text-sm border-b py-2 last:border-b-0"
-                  >
-                    <div className="whitespace-pre-wrap">{notif.message}</div>
-                    {notif.created_at && (
-                      <div className="text-xs text-gray-400 mt-1">
-                        {new Date(notif.created_at).toLocaleString()}
+                    <button 
+                      onClick={() => handleDownload(sub.file_url, sub.file_name)}
+                      className={`${fonts.mono} bg-gray-100 border-2 border-gray-300 px-4 py-3 hover:border-gray-900 transition-all font-bold`}>
+                      Get File
+                    </button>
+                    
+                    {sub.status === 'pending' && (
+                      <div className="flex gap-3 border-l-2 border-gray-100 pl-3 ml-2">
+                        <button 
+                          onClick={() => handleAction(sub.id, 'approved')}
+                          className={`${fonts.mono} bg-blue-600 text-white px-6 py-3 hover:bg-black transition-all font-bold shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]`}>
+                          Approve
+                        </button>
+                        <button 
+                          onClick={() => handleAction(sub.id, 'declined')}
+                          className={`${fonts.mono} bg-white border-2 border-red-600 text-red-600 px-6 py-3 hover:bg-red-600 hover:text-white transition-all font-bold`}>
+                          Decline
+                        </button>
                       </div>
                     )}
                   </div>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* TABLE */}
-      <div className="bg-white shadow rounded-lg overflow-hidden">
-        <table className="w-full text-left">
-          <thead className="bg-gray-200 text-gray-600 text-sm">
-            <tr>
-              <th className="p-3">ID</th>
-              <th className="p-3">Name</th>
-              <th className="p-3">Email</th>
-              <th className="p-3">File</th>
-              <th className="p-3">Status</th>
-              <th className="p-3 text-center">Actions</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {requests.map((req) => (
-              <tr key={req.id} className="border-t">
-                <td className="p-3">{req.id}</td>
-                <td className="p-3">{req.name}</td>
-                <td className="p-3">{req.email}</td>
-
-                {/* FILE */}
-                <td className="p-3">
-                  {req.file_url ? (
-                    <a
-                      href={req.file_url}
-                      target="_blank"
-                      className="text-blue-500 underline"
-                    >
-                      View
-                    </a>
-                  ) : (
-                    "No File"
-                  )}
-                </td>
-
-                {/* STATUS */}
-                <td className="p-3">
-                  <span
-                    className={`px-2 py-1 rounded text-sm ${
-                      req.status === "pending"
-                        ? "bg-yellow-100 text-yellow-700"
-                        : req.status === "pending_approver"
-                        ? "bg-orange-100 text-orange-700"
-                        : req.status === "pending_admin"
-                        ? "bg-blue-100 text-blue-700"
-                        : req.status === "approved"
-                        ? "bg-green-100 text-green-700"
-                        : "bg-red-100 text-red-700"
-                    }`}
-                  >
-                    {req.status === "pending_admin"
-                      ? "pending admin"
-                      : req.status}
-                  </span>
-                </td>
-
-                {/* ACTIONS */}
-                <td className="p-3 flex justify-center gap-2">
-                  <button
-                    onClick={() => openApproveModal(req)}
-                    disabled={req.status !== "pending_approver"}
-                    className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50"
-                  >
-                    Approve
-                  </button>
-
-                  <button
-                    onClick={() => openRejectModal(req)}
-                    disabled={req.status !== "pending_approver"}
-                    className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
-                  >
-                    Reject
-                  </button>
-                </td>
-              </tr>
+                </div>
+              </article>
             ))}
-          </tbody>
-        </table>
 
-        {requests.length === 0 && (
-          <div className="p-6 text-center text-gray-500">
-            No submissions found
+            {submissions.length === 0 && (
+              <div className="border-2 border-dashed border-gray-200 p-20 text-center">
+                <p className={`${fonts.serif} text-2xl text-gray-400`}>No submissions found in system logs.</p>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Modals */}
-      {selectedSubmission && (
-        <>
-          <ApproveModal
-            isOpen={showApproveModal}
-            submission={selectedSubmission}
-            onClose={() => {
-              setShowApproveModal(false);
-              setSelectedSubmission(null);
-            }}
-            onConfirm={handleApproval}
-          />
+      {/* ─── Preview Modal ───────────────────────────────────────────────────── */}
+      {previewFile && (
+        <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col animate-in fade-in duration-200">
+          <div className="px-6 py-4 flex justify-between items-center bg-black border-b border-white/10">
+            <div className="flex flex-col">
+              <span className={`${fonts.mono} text-blue-500 mb-0.5`}>Vault Preview</span>
+              <h2 className="text-white text-lg font-medium truncate max-w-md">
+                {previewFile.name}
+              </h2>
+            </div>
+            
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => handleDownload(previewFile.url, previewFile.name)}
+                className={`${fonts.mono} text-white/60 hover:text-white transition-colors px-4 py-2 text-[11px]`}
+              >
+                [ Download ]
+              </button>
+              <button 
+                onClick={() => setPreviewFile(null)}
+                className="text-white hover:text-red-500 transition-all p-2"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
           
-          <RejectModal
-            isOpen={showRejectModal}
-            submission={selectedSubmission}
-            onClose={() => {
-              setShowRejectModal(false);
-              setSelectedSubmission(null);
-            }}
-            onConfirm={handleRejection}
-          />
-        </>
+          <div className="flex-1 bg-[#1a1a1a]">
+            <iframe
+              title="Document Preview"
+              className="w-full h-full border-none"
+              src={`https://docs.google.com/gview?url=${encodeURIComponent(previewFile.url)}&embedded=true`}
+            />
+          </div>
+        </div>
       )}
     </div>
   );
