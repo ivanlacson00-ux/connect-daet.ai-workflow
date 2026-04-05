@@ -1,8 +1,8 @@
+// app/(auth)/register/page.tsx
 'use client';
 
 import { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
 const fonts = {
@@ -10,49 +10,31 @@ const fonts = {
   mono: "font-mono uppercase tracking-[0.2em] text-[10px]",
 };
 
-export default function LoginPage() {
+export default function RegisterPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const router = useRouter();
+  const [status, setStatus] = useState<{ type: 'error' | 'success', message: string } | null>(null);
+  
   const supabase = createClient();
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setError('');
+    setStatus(null);
 
-    const { error: signInError } = await supabase.auth.signInWithPassword({
+    const { error } = await supabase.auth.signUp({
       email,
       password,
     });
 
-    if (signInError) {
-      setError(signInError.message);
+    if (error) {
+      setStatus({ type: 'error', message: error.message });
       setLoading(false);
-      return;
-    }
-
-    const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-
-    if (refreshError || !refreshed.user) {
-      setError('Session error. Please try again.');
-      setLoading(false);
-      return;
-    }
-
-    const role = refreshed.user.app_metadata?.role;
-
-    if (role === 'admin') {
-      window.location.href = '/workflow/admin';
-    } else if (role === 'approver') {
-      window.location.href = '/workflow/approver';
     } else {
-      window.location.href = '/workflow/user';
+      setStatus({ type: 'success', message: 'Account created! You can now log in.' });
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   return (
@@ -61,19 +43,19 @@ export default function LoginPage() {
         
         <div className="mb-12 border-b-2 border-gray-900 pb-8">
           <h1 className={`${fonts.serif} text-6xl font-light text-gray-900 leading-tight`}>
-            Login
+            Register
           </h1>
           <p className={`${fonts.mono} mt-2 text-blue-600`}>
-            CONNECT-Daet.ai // Security Gateway
+            CONNECT-Daet.ai // New Identity
           </p>
         </div>
 
         <div className="bg-white border border-blue-600 p-10 shadow-[12px_12px_0px_0px_rgba(37,99,235,1)] relative overflow-hidden">
           <div className="absolute top-[-20px] right-[-20px] opacity-[0.03] pointer-events-none select-none text-9xl font-black uppercase">
-            AUTH
+            JOIN
           </div>
 
-          <form onSubmit={handleLogin} className="relative z-10 space-y-8">
+          <form onSubmit={handleSignUp} className="relative z-10 space-y-8">
             <div className="space-y-2">
               <label className={`${fonts.mono} text-gray-400 block`}>System Identifier (Email)</label>
               <input
@@ -87,7 +69,7 @@ export default function LoginPage() {
             </div>
 
             <div className="space-y-2">
-              <label className={`${fonts.mono} text-gray-400 block`}>Security Key (Password)</label>
+              <label className={`${fonts.mono} text-gray-400 block`}>Set Security Key (Password)</label>
               <input
                 type="password"
                 value={password}
@@ -98,10 +80,14 @@ export default function LoginPage() {
               />
             </div>
 
-            {error && (
-              <div className={`inline-flex items-center gap-2 border-2 px-4 py-2 rotate-[-1deg] w-full shadow-[4px_4px_0px_0px_currentColor] border-red-600 bg-red-50 text-red-600 ${fonts.mono} font-black`}>
+            {status && (
+              <div className={`inline-flex items-center gap-2 border-2 px-4 py-2 rotate-[-1deg] w-full shadow-[4px_4px_0px_0px_currentColor] ${
+                status.type === 'success' 
+                  ? 'border-green-600 bg-green-50 text-green-600' 
+                  : 'border-red-600 bg-red-50 text-red-600'
+              } ${fonts.mono} font-black`}>
                 <span className="text-lg">●</span>
-                {error}
+                {status.message}
               </div>
             )}
 
@@ -110,12 +96,12 @@ export default function LoginPage() {
               disabled={loading}
               className={`${fonts.mono} w-full bg-blue-600 text-white px-8 py-5 hover:bg-black transition-all shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:translate-x-1 active:translate-y-1 active:shadow-none font-bold text-sm`}
             >
-              {loading ? '[ Authenticating... ]' : '[ Log In ]'}
+              {loading ? '[ Creating Account... ]' : '[ Create Account ]'}
             </button>
 
             <div className="text-center pt-4">
               <p className={`${fonts.mono} text-gray-400`}>
-                No account? <Link href="/register" className="text-blue-600 hover:underline font-bold underline-offset-4 decoration-2">Register here</Link>
+                Already registered? <Link href="/login" className="text-blue-600 hover:underline font-bold underline-offset-4 decoration-2">Log in here</Link>
               </p>
             </div>
           </form>
