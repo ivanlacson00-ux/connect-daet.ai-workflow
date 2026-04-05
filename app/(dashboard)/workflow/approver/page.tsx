@@ -9,12 +9,7 @@ type Request = {
   id: number;
   name: string;
   email: string;
-  status:
-    | "pending"
-    | "pending_approver"
-    | "pending_admin"
-    | "approved"
-    | "rejected";
+  status: "pending" | "approved" | "rejected";
   file_url?: string;
 };
 
@@ -58,7 +53,7 @@ export default function ApproverDashboard() {
           id: item.id,
           name: item.name || item.full_name || item.submitter_name || "Unknown",
           email: item.email || item.submitter_email || "Unknown",
-          status: item.status || "pending",
+          status: item.status === "pending_admin" || item.status === "pending_approver" ? "pending" : (item.status === "approved" ? "approved" : "rejected"),
           file_url: item.file_url || item.file || item.document_url,
         }));
 
@@ -130,11 +125,11 @@ export default function ApproverDashboard() {
     const submissionEmail = submission.email || submission.submitter_email || "No email provided";
     const submissionFile = submission.file_url || submission.file || submission.document_url;
 
-    // 2. Update submission - ONLY update status (removed column references)
+    // 2. Update submission - Set status to "approved"
     const { error: updateError } = await supabase
       .from("workflow_submissions")
       .update({ 
-        status: "pending_admin"
+        status: "approved"
       })
       .eq("id", id);
 
@@ -153,7 +148,7 @@ export default function ApproverDashboard() {
     };
 
     // 4. Notify user
-    const userMessage = `✅ Your submission "${submissionName}" has been approved by ${approverDetails.name} and forwarded to the admin for final approval.\n\nApproved on: ${new Date(approverDetails.approvedAt).toLocaleString()}\n${approverDetails.notes ? `\nApprover's Notes: ${approverDetails.notes}` : ''}\n\nYou will be notified once the admin makes a decision.`;
+    const userMessage = `✅ Your submission "${submissionName}" has been APPROVED by ${approverDetails.name}.\n\nApproved on: ${new Date(approverDetails.approvedAt).toLocaleString()}\n${approverDetails.notes ? `\nApprover's Notes: ${approverDetails.notes}` : ''}\n\nThank you for your submission!`;
     
     if (submission.user_id) {
       await supabase.from("notifications").insert([
@@ -161,20 +156,20 @@ export default function ApproverDashboard() {
           user_id: submission.user_id,
           message: userMessage,
           submission_id: id,
-          type: "status_update",
+          type: "approved",
           created_at: new Date().toISOString(),
           read: false,
         },
       ]);
     }
 
-    // 5. Notify admin with approval details
+    // 5. Notify admin about approval
     await notifyAdminOnApproval(id, submissionName, submissionEmail, submissionFile, approverDetails);
 
     // 6. Update UI
     setRequests((prev) =>
       prev.map((req) =>
-        req.id === id ? { ...req, status: "pending_admin" } : req
+        req.id === id ? { ...req, status: "approved" } : req
       )
     );
 
@@ -208,7 +203,7 @@ export default function ApproverDashboard() {
     const submissionEmail = submission.email || submission.submitter_email || "No email provided";
     const submissionFile = submission.file_url || submission.file || submission.document_url;
 
-    // 2. Update submission - ONLY update status (removed all missing columns)
+    // 2. Update submission - Set status to "rejected"
     const { error: updateError } = await supabase
       .from("workflow_submissions")
       .update({ 
@@ -238,7 +233,7 @@ export default function ApproverDashboard() {
     }
 
     // 4. Notify admin about rejection
-    const adminRejectionMessage = `⚠️ SUBMISSION REJECTED BY APPROVER\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Submission #${id}\n• Name: ${submissionName}\n• Email: ${submissionEmail}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📝 Rejection Reason: ${rejectionDetails.reason}\n${rejectionDetails.notes ? `📌 Notes: ${rejectionDetails.notes}\n` : ''}👤 Rejected By: ${rejectionDetails.rejectedBy}\n📅 Rejected On: ${new Date(rejectionDetails.rejectedAt).toLocaleString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nThis submission has been rejected at the approver level.`;
+    const adminRejectionMessage = `⚠️ SUBMISSION REJECTED BY APPROVER\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n• Submission #${id}\n• Name: ${submissionName}\n• Email: ${submissionEmail}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📝 Rejection Reason: ${rejectionDetails.reason}\n${rejectionDetails.notes ? `📌 Notes: ${rejectionDetails.notes}\n` : ''}👤 Rejected By: ${rejectionDetails.rejectedBy}\n📅 Rejected On: ${new Date(rejectionDetails.rejectedAt).toLocaleString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nThis submission has been rejected by the approver.`;
     
     await supabase.from("notifications").insert([
       {
@@ -372,32 +367,26 @@ export default function ApproverDashboard() {
                   )}
                 </td>
 
-                {/* STATUS */}
+                {/* STATUS - Yellow for pending, Green for approved, Red for rejected */}
                 <td className="p-3">
                   <span
                     className={`px-2 py-1 rounded text-sm ${
                       req.status === "pending"
                         ? "bg-yellow-100 text-yellow-700"
-                        : req.status === "pending_approver"
-                        ? "bg-orange-100 text-orange-700"
-                        : req.status === "pending_admin"
-                        ? "bg-blue-100 text-blue-700"
                         : req.status === "approved"
                         ? "bg-green-100 text-green-700"
                         : "bg-red-100 text-red-700"
                     }`}
                   >
-                    {req.status === "pending_admin"
-                      ? "pending admin"
-                      : req.status}
+                    {req.status}
                   </span>
                 </td>
 
-                {/* ACTIONS */}
+                {/* ACTIONS - Only enabled for pending submissions */}
                 <td className="p-3 flex justify-center gap-2">
                   <button
                     onClick={() => openApproveModal(req)}
-                    disabled={req.status !== "pending_approver"}
+                    disabled={req.status !== "pending"}
                     className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50"
                   >
                     Approve
@@ -405,7 +394,7 @@ export default function ApproverDashboard() {
 
                   <button
                     onClick={() => openRejectModal(req)}
-                    disabled={req.status !== "pending_approver"}
+                    disabled={req.status !== "pending"}
                     className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
                   >
                     Reject
