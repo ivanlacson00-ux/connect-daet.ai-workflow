@@ -111,7 +111,6 @@ export default function ApproverDashboard() {
               <p className={`${fonts.mono} mt-4 text-blue-600`}>Approver Authority // Gateway Verification</p>
             </div>
 
-            {/* Quick Stats Grid */}
             <div className="grid grid-cols-3 gap-4 md:w-72">
               <div className="bg-orange-50 border border-orange-200 p-3 text-center">
                 <div className={`${fonts.mono} text-[8px] text-orange-500 mb-1`}>Pending</div>
@@ -161,12 +160,6 @@ export default function ApproverDashboard() {
                       onClick={() => setPreviewFile({ url: sub.file_url, name: sub.file_name })}
                       className={`${fonts.mono} bg-white border-2 border-gray-900 px-6 py-3 text-gray-900 hover:bg-gray-100 transition-all font-bold shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]`}>
                       Preview
-                    </button>
-
-                    <button 
-                      onClick={() => handleDownload(sub.file_url, sub.file_name)}
-                      className={`${fonts.mono} bg-gray-100 border-2 border-gray-300 px-4 py-3 hover:border-gray-900 transition-all font-bold`}>
-                      Get File
                     </button>
                     
                     {sub.status === 'pending' && (
