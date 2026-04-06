@@ -16,6 +16,7 @@ export default function AdminManagePage() {
   
   const [sub, setSub] = useState<any>(null);
   const [sender, setSender] = useState<any>(null);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [adminComment, setAdminComment] = useState('');
@@ -31,130 +32,243 @@ export default function AdminManagePage() {
     if (submission) {
       setSub(submission);
       setAdminComment(submission.admin_comments || '');
-
+      
       const { data: profile } = await supabase
         .from('profiles')
-        .select('email, full_name')
+        .select('email, full_name, role')
         .eq('id', submission.user_id)
         .single();
-      
       if (profile) setSender(profile);
+
+      const { data: logs } = await supabase
+        .from('workflow_audit_logs')
+        .select(`
+          *,
+          profiles:action_by (full_name, email, role)
+        `)
+        .eq('submission_id', id)
+        .order('created_at', { ascending: false });
+      if (logs) setAuditLogs(logs);
     }
     setLoading(false);
   }, [id, supabase]);
 
   useEffect(() => { fetchDetails(); }, [fetchDetails]);
 
+  const getStatusStyles = (status: string) => {
+    switch (status) {
+      case 'pending':
+      case 'pending_approver':
+        return { label: 'PENDING', classes: 'border-2 border-blue-600 text-blue-600 bg-white shadow-[3px_3px_0px_0px_rgba(37,99,235,1)]' };
+      case 'pending_admin':
+        return { label: 'UNDER REVIEW', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
+      case 'approved':
+        return { label: 'APPROVED', classes: 'border-2 border-blue-600 text-blue-600 bg-white' };
+      case 'declined_by_approver':
+      case 'declined_by_admin':
+        return { label: 'REJECTED', classes: 'border-2 border-red-600 text-red-600 bg-red-50' };
+      default:
+        return { label: status.toUpperCase(), classes: 'border-2 border-gray-400 text-gray-500' };
+    }
+  };
+
+  const getActionLabel = (type: string) => {
+    switch (type) {
+      case 'STAGE_1_AUTHORIZED': return 'APPROVED BY';
+      case 'FINAL_AUTHORIZATION': return 'FINAL APPROVAL';
+      case 'FINAL_REJECTION': return 'REJECTED BY';
+      case 'SUBMITTED': return 'SUBMITTED BY';
+      default: return 'ACTION BY';
+    }
+  };
+
   const handleAdminAction = async (decision: 'approved' | 'declined') => {
-    // ADMIN OVERRIDE: Admin can act on anything UNLESS it's still with the approver
-    if (sub.status === 'pending_approver') {
-      alert("This file is still awaiting initial Approver review.");
+    if (sub.status !== 'pending_admin') return;
+    if (decision === 'declined' && !adminComment.trim()) {
+      alert("Validation notes are required for rejection.");
       return;
     }
 
     setUpdating(true);
-    const finalStatus = decision === 'approved' ? 'approved' : 'declined_by_admin';
+    const nextStatus = decision === 'approved' ? 'approved' : 'declined_by_admin';
+    const { data: { user } } = await supabase.auth.getUser();
 
-    const { error } = await supabase
+    const { error: updateError } = await supabase
       .from('workflow_submissions')
       .update({ 
-        status: finalStatus, 
-        admin_comments: adminComment,
-        updated_at: new Date().toISOString()
+        status: nextStatus, 
+        admin_comments: adminComment, 
+        updated_at: new Date().toISOString() 
       })
       .eq('id', id);
 
-    if (!error) {
-      // Rewards only on final Admin approval [cite: 74]
-      if (finalStatus === 'approved') {
-        console.log("Rewards Engine: +50 Points to", sub.user_id);
-      }
+    if (!updateError) {
+      await supabase.from('workflow_audit_logs').insert({
+        submission_id: id,
+        action_by: user?.id,
+        action_type: decision === 'approved' ? 'FINAL_AUTHORIZATION' : 'FINAL_REJECTION',
+        old_status: sub.status,
+        new_status: nextStatus,
+        comments: adminComment
+      });
       await fetchDetails();
     }
     setUpdating(false);
   };
 
-  if (loading) return <div className="h-screen bg-white flex items-center justify-center font-mono text-yellow-600 animate-pulse">[ ACCESSING_EXECUTIVE_FILES... ]</div>;
-  if (!sub) return <div className="p-20 font-mono text-red-500 text-center">FILE_NOT_FOUND</div>;
+  if (loading) return <div className="p-10 font-mono text-blue-600 animate-pulse uppercase tracking-widest">Initialising Secure Connection...</div>;
+  if (!sub) return <div className="p-10 font-mono text-red-500">404: RESOURCE_NOT_FOUND</div>;
 
-  // LOGIC: Admin can act if the file has left the Approver's hands
-  const canAdminAct = sub.status !== 'pending_approver';
+  const statusConfig = getStatusStyles(sub.status);
+  const isFinalized = sub.status === 'approved' || sub.status.includes('declined');
 
   return (
-    <div className="h-screen bg-white flex flex-col lg:flex-row overflow-hidden border-t-8 border-yellow-500">
-      <aside className="w-full lg:w-[450px] border-r-4 border-black p-8 flex flex-col overflow-y-auto bg-gray-50">
-        <button onClick={() => router.back()} className={`${fonts.mono} text-gray-400 mb-8 hover:text-black transition-colors text-left`}>
-          ← EXIT_LOGS
-        </button>
+    <div className="h-screen bg-[#fafafa] flex flex-col lg:flex-row overflow-hidden border-t-[6px] border-black">
+      <aside className="w-full lg:w-[500px] border-r-2 border-black flex flex-col bg-[#fafafa]">
+        
+        {/* Navigation */}
+        <div className="px-8 pt-8">
+          <button onClick={() => router.back()} className={`${fonts.mono} text-gray-400 hover:text-black transition-all flex items-center gap-2 group mb-6`}>
+            ← ADMIN CONTROL PANEL
+          </button>
+        </div>
 
-        <header className="mb-8">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="bg-yellow-500 text-black text-[9px] font-black px-2 py-0.5 uppercase tracking-tighter">Admin_Override_Active</span>
-            <span className={`${fonts.mono} text-gray-400`}>ID_{String(sub.id).slice(0, 8)}</span>
-          </div>
-          <h1 className="text-4xl font-serif italic leading-tight mb-4">{sub.file_name}</h1>
+        <div className="flex-1 overflow-y-auto px-12 py-4 space-y-10 custom-scrollbar">
           
-          <div className={`inline-block px-3 py-1 border-2 font-black ${fonts.mono} shadow-[3px_3px_0px_0px_currentColor]
-            ${sub.status === 'approved' ? 'text-green-600 bg-green-50 border-green-600' : 
-              sub.status.includes('declined') ? 'text-red-600 bg-red-50 border-red-600' : 
-              'text-yellow-600 bg-yellow-50 border-yellow-600'}`}>
-            {sub.status}
-          </div>
-        </header>
-
-        {/* PREVIOUS STAGE FEEDBACK */}
-        {sub.approver_comments && (
-          <section className="mb-6 p-4 bg-blue-50 border-l-4 border-blue-600 shadow-sm">
-            <h3 className={`${fonts.mono} text-blue-600 mb-1 font-black`}>Stage_1_Approver_Notes:</h3>
-            <p className="text-sm italic text-blue-900 leading-relaxed">"{sub.approver_comments}"</p>
-          </section>
-        )}
-
-        <div className="mt-auto pt-6 border-t-4 border-double border-black">
-          <label className={`${fonts.mono} mb-3 block font-black text-gray-900`}>Executive_Decision_Console</label>
-          
-          {!canAdminAct ? (
-            <div className="p-4 border-2 border-dashed border-gray-400 bg-gray-200 text-[10px] font-mono text-gray-500 uppercase">
-              Awaiting_Initial_Approver_Review...
+          {/* Main Title Section */}
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <span className="bg-black text-white text-[9px] font-black px-2 py-0.5 tracking-tighter">MASTER_REGISTRY // STAGE_02</span>
             </div>
-          ) : (
-            <>
+            <h1 className="text-5xl font-serif italic leading-[0.8] mb-8 break-words tracking-tighter text-zinc-900">{sub.file_name}</h1>
+            <div className={`inline-block px-4 py-1.5 font-black text-[11px] tracking-widest uppercase ${statusConfig.classes}`}>
+              {statusConfig.label}
+            </div>
+          </section>
+
+          {/* Submission Context (Category & Description) */}
+          <section className="relative">
+             <div className="border-2 border-black p-6 space-y-6 bg-white shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                <div>
+                  <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-2 border-b border-blue-100 pb-1 inline-block">Submission Context</p>
+                  <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Category</p>
+                  <p className="text-xl font-black tracking-tight text-blue-600 uppercase">{sub.category || 'GENERAL'}</p>
+                </div>
+                <div>
+                  <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>User_Description</p>
+                  <p className="text-sm italic leading-relaxed text-zinc-600 whitespace-pre-wrap break-words border-l-2 border-zinc-100 pl-4">
+                    "{sub.description || 'No description provided.'}"
+                  </p>
+                </div>
+             </div>
+          </section>
+
+          {/* Origin Details Box */}
+          <section className="relative">
+            <div className="border-2 border-black p-6 space-y-4 bg-white shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+              <p className="text-[10px] font-black text-black uppercase tracking-widest border-b-2 border-black pb-1 inline-block">Origin Details</p>
+              <div>
+                <p className={`${fonts.mono} text-[9px] text-gray-400`}>Legal_Name</p>
+                <p className="font-black text-lg tracking-tight">{sender?.full_name}</p>
+              </div>
+              <div>
+                <p className={`${fonts.mono} text-[9px] text-gray-400`}>Email_ID</p>
+                <p className="text-sm text-zinc-500">{sender?.email}</p>
+              </div>
+            </div>
+          </section>
+
+          {/* History / Timeline Section */}
+          <section className="space-y-6 pt-4">
+            <p className={`${fonts.mono} text-gray-400 border-b border-zinc-200 pb-2`}>Timeline</p>
+            <div className="relative border-l-2 border-zinc-200 ml-1 space-y-10">
+              {auditLogs.map((log) => (
+                <div key={log.id} className="relative pl-6">
+                  <div className="absolute -left-[5.5px] top-1 w-2.5 h-2.5 bg-blue-600 rounded-full ring-4 ring-white" />
+                  
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-[10px] font-black uppercase text-blue-600">{getActionLabel(log.action_type)}</p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <p className="text-[11px] font-black text-black">{log.profiles?.full_name || 'SYSTEM'}</p>
+                    {log.profiles?.role && (
+                      <span className="text-[8px] px-1.5 py-0.5 bg-zinc-200 text-zinc-600 font-bold uppercase rounded-sm tracking-tighter">
+                        {log.profiles.role}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[9px] text-gray-400 font-mono mt-0.5">
+                    {new Date(log.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                  </p>
+
+                  {log.comments && (
+                    <div className="mt-3 p-4 bg-white border-2 border-dashed border-blue-600 relative">
+                       <p className="text-[10px] font-black text-blue-600 uppercase mb-2 tracking-tighter">Reviewer Note</p>
+                       <p className="text-[11px] italic leading-tight text-zinc-600 break-words">
+                        "{log.comments}"
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        {/* Validation Footer */}
+        {!isFinalized && (
+          <div className="p-10 border-t-2 border-black bg-white">
+            <div className="mb-6">
+              <label className={`${fonts.mono} mb-3 block font-black text-black`}>Final Validation Notes</label>
               <textarea 
                 value={adminComment}
                 onChange={(e) => setAdminComment(e.target.value)}
-                className="w-full h-24 p-4 border-2 border-black bg-white text-sm focus:ring-4 ring-yellow-400 outline-none resize-none mb-4 font-sans"
-                placeholder="Modify decision or comments..."
+                className="w-full h-32 p-4 border-2 border-black bg-zinc-50 text-sm italic outline-none resize-none focus:bg-white transition-colors"
+                placeholder="Closing remarks for the user/system..."
               />
-              <div className="grid grid-cols-2 gap-3">
-                <button 
-                  onClick={() => handleAdminAction('approved')}
-                  disabled={updating}
-                  className="bg-green-600 text-white py-4 font-black text-[10px] uppercase shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all"
-                >
-                  {sub.status === 'approved' ? 'Update_Approval' : 'Final_Approve'}
-                </button>
-                <button 
-                  onClick={() => handleAdminAction('declined')}
-                  disabled={updating}
-                  className="bg-black text-white py-4 font-black text-[10px] uppercase shadow-[4px_4px_0px_0px_rgba(234,179,8,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all"
-                >
-                  {sub.status.includes('declined') ? 'Update_Decline' : 'Final_Decline'}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
+            </div>
+            <div className="flex gap-4">
+              <button onClick={() => handleAdminAction('approved')} disabled={updating} className="flex-1 bg-[#12b886] text-white py-4 font-black text-[10px] uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all disabled:opacity-50">
+                {updating ? 'PROCESSING' : 'Final Approve'}
+              </button>
+              <button onClick={() => handleAdminAction('declined')} disabled={updating} className="flex-1 bg-black text-white py-4 font-black text-[10px] uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(239,68,68,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all disabled:opacity-50">
+                Final Decline
+              </button>
+            </div>
+          </div>
+        )}
       </aside>
 
-      <main className="flex-1 bg-zinc-900 flex flex-col p-8 relative">
-        <div className="flex-1 bg-white border-[4px] border-black shadow-2xl flex items-center justify-center">
+      {/* Preview Section */}
+      <main className="flex-1 bg-zinc-900 flex flex-col p-8 relative overflow-hidden">
+        <div className="absolute top-4 left-6 z-20">
+           <div className={`${fonts.mono} text-white/50 text-[9px] bg-white/5 border border-white/10 px-3 py-1 backdrop-blur-md`}>
+             SECURE_ADMIN_VIEWER // UID: {sub.id.split('-')[0].toUpperCase()}
+           </div>
+        </div>
+
+        <div className="flex-1 bg-white border-[4px] border-black shadow-[30px_30px_0px_0px_rgba(0,0,0,0.5)] overflow-hidden flex items-center justify-center relative">
           {sub.file_name.match(/\.(jpg|jpeg|png|webp|gif|svg)$/i) ? (
-            <img src={sub.file_url} alt="Evidence" className="max-w-full max-h-full object-contain p-4" />
+            <div className="p-12 w-full h-full flex items-center justify-center">
+              <img src={sub.file_url} alt="Secure Preview" className="max-w-full max-h-full object-contain shadow-2xl" />
+            </div>
           ) : (
             <iframe src={`https://docs.google.com/gview?url=${encodeURIComponent(sub.file_url)}&embedded=true`} className="w-full h-full border-none" />
           )}
+          
+          {/* Subtle Watermark Overlay */}
+          <div className="absolute bottom-8 right-8 pointer-events-none">
+            <span className="text-[80px] font-black text-zinc-100/50 select-none tracking-tighter">CONNECT</span>
+          </div>
         </div>
       </main>
+
+      <style jsx global>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #fafafa; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #000; }
+      `}</style>
     </div>
   );
 }
