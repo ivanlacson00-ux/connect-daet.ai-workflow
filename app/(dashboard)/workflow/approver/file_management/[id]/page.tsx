@@ -61,9 +61,9 @@ export default function ApproverManagePage() {
       case 'pending_approver':
         return { label: 'PENDING', classes: 'border-2 border-blue-600 text-blue-600 bg-white shadow-[3px_3px_0px_0px_rgba(37,99,235,1)]' };
       case 'pending_admin':
-        return { label: 'STAGE 1 PASSED', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
+        return { label: 'PENDING_ADMIN', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
       case 'approved':
-        return { label: 'FINALIZED', classes: 'border-2 border-blue-600 text-blue-600 bg-white' };
+        return { label: 'APPROVED', classes: 'border-2 border-green-600 text-green-600 bg-green-50' };
       case 'declined_by_approver':
       case 'declined_by_admin':
         return { label: 'REJECTED', classes: 'border-2 border-red-600 text-red-600 bg-red-50' };
@@ -127,7 +127,7 @@ export default function ApproverManagePage() {
 
   return (
     <div className="h-screen bg-[#fafafa] flex flex-col lg:flex-row overflow-hidden border-t-[6px] border-blue-600">
-      <aside className="w-full lg:w-[500px] border-r-2 border-black flex flex-col bg-[#fafafa]">
+      <aside className="w-full lg:w-[500px] border-r-2 border-black flex flex-col bg-[#fafafa] overflow-hidden">
         
         <div className="px-8 pt-8">
           <button onClick={() => router.back()} className={`${fonts.mono} text-gray-400 hover:text-black transition-all flex items-center gap-2 group mb-6`}>
@@ -137,7 +137,6 @@ export default function ApproverManagePage() {
 
         <div className="flex-1 overflow-y-auto px-12 py-4 space-y-10 custom-scrollbar">
           
-          {/* Header */}
           <section>
             <div className="flex items-center gap-2 mb-4">
               <span className="bg-blue-600 text-white text-[9px] font-black px-2 py-0.5 tracking-tighter uppercase">Approver_Terminal // STAGE_01</span>
@@ -148,7 +147,7 @@ export default function ApproverManagePage() {
             </div>
           </section>
 
-          {/* User Details */}
+          {/* User Details Section */}
           <section className="relative">
              <div className="border-2 border-black p-6 space-y-6 bg-white shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
                 <div>
@@ -158,6 +157,7 @@ export default function ApproverManagePage() {
                 </div>
                 <div>
                   <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Sender_Notes</p>
+                  {/* Made description responsive/wrap */}
                   <p className="text-sm italic leading-relaxed text-zinc-600 whitespace-pre-wrap break-words border-l-2 border-zinc-100 pl-4">
                     "{sub.description || 'No description provided.'}"
                   </p>
@@ -170,18 +170,16 @@ export default function ApproverManagePage() {
              </div>
           </section>
 
-          {/* History/Timeline Section */}
+          {/* Audit Logs Section */}
           <section className="space-y-6 pt-4 pb-12">
             <p className={`${fonts.mono} text-gray-400 border-b border-zinc-200 pb-2`}>Audit_Logs</p>
             <div className="relative border-l-2 border-zinc-200 ml-1 space-y-10">
               {auditLogs.map((log) => (
                 <div key={log.id} className="relative pl-6">
                   <div className="absolute -left-[5.5px] top-1 w-2.5 h-2.5 bg-blue-600 rounded-full ring-4 ring-white" />
-                  
                   <div className="flex items-center gap-2 mb-1">
                     <p className="text-[10px] font-black uppercase text-blue-600 tracking-tight">{getActionLabel(log.action_type)}</p>
                   </div>
-
                   <div className="flex items-center gap-2">
                     <p className="text-[11px] font-black text-black">{log.profiles?.full_name || 'SYSTEM'}</p>
                     {log.profiles?.role && (
@@ -193,11 +191,10 @@ export default function ApproverManagePage() {
                   <p className="text-[9px] text-gray-400 font-mono mt-0.5 uppercase">
                     {new Date(log.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
                   </p>
-
                   {log.comments && (
                     <div className="mt-3 p-4 bg-white border-2 border-dashed border-blue-600 relative">
                        <p className="text-[10px] font-black text-blue-600 uppercase mb-2 tracking-tighter">Action Note</p>
-                       <p className="text-[11px] italic leading-tight text-zinc-600 break-words">
+                       <p className="text-[11px] italic leading-tight text-zinc-600 whitespace-pre-wrap break-words">
                         "{log.comments}"
                       </p>
                     </div>
@@ -208,19 +205,26 @@ export default function ApproverManagePage() {
           </section>
         </div>
 
-        {/* Action Footer */}
+        {/* ACTION FOOTER: STAMP LOGIC */}
         <div className="p-10 border-t-2 border-black bg-white">
           <label className={`${fonts.mono} mb-3 block font-black text-black`}>
-            {isLocked ? 'Authorized_Comments' : 'Validation_Notes'}
+            {isLocked ? 'APPROVER NOTES' : 'VALIDATION_NOTES'}
           </label>
           
           {isLocked ? (
             <div className="space-y-4">
-              <div className="p-5 border-2 border-black bg-blue-50 italic text-sm text-blue-900 shadow-[4px_4px_0px_0px_rgba(37,99,235,1)]">
-                "{sub.approver_comments || "No comments recorded for this stage."}"
+              {/* STAMP BOX: Updated for responsiveness */}
+              <div className={`p-5 border-2 border-black italic text-sm shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col min-w-0 ${sub.status.includes('declined') ? 'bg-red-50 text-red-900 border-red-600' : 'bg-blue-50 text-blue-900 border-blue-600'}`}>
+                <p className="whitespace-pre-wrap break-words leading-relaxed">
+                  "{sub.approver_comments || "No validation notes were recorded."}"
+                </p>
+                <div className="mt-4 pt-3 border-t border-current flex justify-between items-center not-italic gap-2">
+                    <span className="text-[9px] font-black uppercase tracking-tighter">Approver</span>
+                    <span className="text-[10px] font-mono whitespace-nowrap">{new Date(sub.updated_at).toLocaleDateString()}</span>
+                </div>
               </div>
               <div className="bg-zinc-100 text-zinc-400 p-4 text-center font-black text-[10px] uppercase tracking-[0.2em] border-2 border-dashed border-zinc-300">
-                LOCKED // AWAITING FINAL ACTION
+                {sub.status === 'pending_admin' ? 'STAMPED // AWAITING_ADMIN_FINAL' : 'ARCHIVED // CLOSED'}
               </div>
             </div>
           ) : (
@@ -229,7 +233,7 @@ export default function ApproverManagePage() {
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 className="w-full h-32 p-4 border-2 border-black bg-zinc-50 text-sm outline-none resize-none focus:bg-white transition-colors mb-6"
-                placeholder="Required for rejection..."
+                placeholder="Enter internal notes for Admin review..."
               />
               <div className="flex gap-4">
                 <button onClick={() => handleApproverAction('approved')} disabled={updating} className="flex-1 bg-blue-600 text-white py-4 font-black text-[10px] uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all disabled:opacity-50">
@@ -259,8 +263,6 @@ export default function ApproverManagePage() {
           ) : (
             <iframe src={`https://docs.google.com/gview?url=${encodeURIComponent(sub.file_url)}&embedded=true`} className="w-full h-full border-none" />
           )}
-          
-          {/* Subtle Stamp Branding */}
           <div className="absolute bottom-8 right-8 pointer-events-none opacity-20">
             <span className="text-[60px] font-black text-blue-600 select-none tracking-tighter uppercase leading-none">Connect<br/>Registry</span>
           </div>
