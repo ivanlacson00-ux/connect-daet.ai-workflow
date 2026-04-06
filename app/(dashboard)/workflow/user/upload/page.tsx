@@ -61,12 +61,11 @@ export default function UploadPage() {
         .from('workflow_uploads')
         .getPublicUrl(filePath);
 
-      // FIX: Ensure the database record has the extension in the name
       const fileNameWithExt = title.toLowerCase().endsWith(`.${fileExt?.toLowerCase()}`) 
         ? title 
         : `${title}.${fileExt}`;
 
-      // 2. Insert Record
+      // 2. Insert Record - UPDATED WITH CATEGORY AND DESCRIPTION
       const { error: dbError } = await supabase
         .from('workflow_submissions')
         .insert({
@@ -75,6 +74,8 @@ export default function UploadPage() {
           file_name: fileNameWithExt, 
           file_size: file.size,
           file_type: file.type,
+          category: category,      // Added
+          description: description, // Added
           status: 'pending'
         });
 
@@ -129,11 +130,12 @@ export default function UploadPage() {
                   <option value="General">General</option>
                   <option value="Tourism">Tourism</option>
                   <option value="Events">Events</option>
+                  <option value="Marketing">Marketing</option>
                 </select>
               </section>
               <div className="flex items-center">
-                 <p className="text-[9px] font-mono leading-relaxed text-black uppercase tracking-tighter font-bold opacity-40">
-                   *Note: Category and Brief are currently not logged to database.
+                 <p className="text-[9px] font-mono leading-relaxed text-blue-600 uppercase tracking-tighter font-bold opacity-80">
+                   *Categorizing ensures your file is routed correctly.
                  </p>
               </div>
             </div>
@@ -144,7 +146,7 @@ export default function UploadPage() {
                 rows={4}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Internal notes (not saved)..."
+                placeholder="Provide a brief context for the approver..."
                 className="w-full bg-gray-50 border-2 border-black/20 p-6 focus:border-blue-600 outline-none transition-all font-medium text-black resize-none"
               />
             </section>
