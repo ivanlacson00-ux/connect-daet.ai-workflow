@@ -1,4 +1,3 @@
-// app/(dashboard)/workflow/approver/page.tsx
 'use client';
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
@@ -48,6 +47,9 @@ export default function ApproverDashboard() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
+
+  // ─── Helper to check file type ─────────────────────────────────────────────
+  const isImage = (fileName: string) => /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(fileName);
 
   // ─── Data Metrics ──────────────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -192,7 +194,7 @@ export default function ApproverDashboard() {
 
       {/* ─── Preview Modal ───────────────────────────────────────────────────── */}
       {previewFile && (
-        <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col animate-in fade-in duration-300">
           <div className="px-6 py-4 flex justify-between items-center bg-black border-b border-white/10">
             <div className="flex flex-col">
               <span className={`${fonts.mono} text-blue-500 mb-0.5`}>Vault Preview</span>
@@ -204,7 +206,7 @@ export default function ApproverDashboard() {
             <div className="flex items-center gap-4">
               <button 
                 onClick={() => handleDownload(previewFile.url, previewFile.name)}
-                className={`${fonts.mono} text-white/60 hover:text-white transition-colors px-4 py-2 text-[11px]`}
+                className={`${fonts.mono} text-white/60 hover:text-white transition-colors px-4 py-2 text-[11px] border border-white/20 hover:border-white`}
               >
                 [ Download ]
               </button>
@@ -219,12 +221,20 @@ export default function ApproverDashboard() {
             </div>
           </div>
           
-          <div className="flex-1 bg-[#1a1a1a]">
-            <iframe
-              title="Document Preview"
-              className="w-full h-full border-none"
-              src={`https://docs.google.com/gview?url=${encodeURIComponent(previewFile.url)}&embedded=true`}
-            />
+          <div className="flex-1 flex items-center justify-center overflow-hidden bg-[#1a1a1a]">
+            {isImage(previewFile.name) ? (
+              <img 
+                src={previewFile.url} 
+                alt="Preview" 
+                className="max-w-full max-h-full object-contain p-8 animate-in zoom-in-95" 
+              />
+            ) : (
+              <iframe
+                title="Document Preview"
+                className="w-full h-full border-none bg-white"
+                src={`https://docs.google.com/gview?url=${encodeURIComponent(previewFile.url)}&embedded=true`}
+              />
+            )}
           </div>
         </div>
       )}
