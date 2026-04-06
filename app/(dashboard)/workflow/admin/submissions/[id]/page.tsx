@@ -61,7 +61,7 @@ export default function AdminManagePage() {
       case 'pending_approver':
         return { label: 'PENDING', classes: 'border-2 border-blue-600 text-blue-600 bg-white shadow-[3px_3px_0px_0px_rgba(37,99,235,1)]' };
       case 'pending_admin':
-        return { label: 'UNDER REVIEW', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
+        return { label: 'PENDING_ADMIN', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
       case 'approved':
         return { label: 'APPROVED', classes: 'border-2 border-blue-600 text-blue-600 bg-white' };
       case 'declined_by_approver':
