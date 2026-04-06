@@ -46,8 +46,9 @@ export default function ApproverManagePage() {
   useEffect(() => { fetchDetails(); }, [fetchDetails]);
 
   const handleApproverAction = async (decision: 'approved' | 'declined') => {
-    // SECURITY: Approver can only act if status is strictly 'pending_approver'
-    if (sub.status !== 'pending_approver') return;
+    // UPDATED: Allow action if status is 'pending' OR 'pending_approver'
+    const isActionable = sub.status === 'pending' || sub.status === 'pending_approver';
+    if (!isActionable) return;
 
     if (decision === 'declined' && !comment.trim()) {
       alert("Please provide a reason for declining this submission.");
@@ -56,8 +57,8 @@ export default function ApproverManagePage() {
 
     setUpdating(true);
     
-    // Logic: If approved by Approver, it moves to Admin review.
-    // If declined, it stops here.
+    // Logic: Stage 1 Approval moves it to Admin stage ('pending_admin')
+    // Rejection marks it as 'declined_by_approver'
     const nextStatus = decision === 'approved' ? 'pending_admin' : 'declined_by_approver';
 
     const { error } = await supabase
@@ -78,8 +79,9 @@ export default function ApproverManagePage() {
   if (loading) return <div className="p-10 font-mono text-blue-600 animate-pulse">Accessing Stage_1_Record...</div>;
   if (!sub) return <div className="p-10 font-mono text-red-500">Record Not Found</div>;
 
-  // LOCK LOGIC: Locked if status is no longer 'pending_approver'
-  const isLocked = sub.status !== 'pending_approver';
+  // UPDATED LOCK LOGIC: 
+  // The UI is ONLY unlocked if the status is 'pending' or 'pending_approver'
+  const isLocked = sub.status !== 'pending' && sub.status !== 'pending_approver';
 
   return (
     <div className="h-screen bg-white flex flex-col lg:flex-row overflow-hidden border-t-4 border-blue-600">
@@ -96,7 +98,7 @@ export default function ApproverManagePage() {
           </div>
           <h1 className="text-4xl font-serif italic leading-none mb-4">{sub.file_name}</h1>
           <div className={`inline-block px-3 py-1 border-2 font-black ${fonts.mono} shadow-[3px_3px_0px_0px_currentColor]
-            ${sub.status === 'pending_admin' || sub.status === 'approved' ? 'text-green-600 bg-green-50' : 
+            ${(sub.status === 'pending_admin' || sub.status === 'approved') ? 'text-green-600 bg-green-50' : 
               sub.status.includes('declined') ? 'text-red-600 bg-red-50' : 'text-blue-600 bg-blue-50'}`}>
             {sub.status}
           </div>
@@ -105,20 +107,26 @@ export default function ApproverManagePage() {
         {/* SENDER INFO */}
         <section className="mb-10 p-5 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
           <h2 className={`${fonts.mono} text-blue-600 mb-4 font-black underline`}>Origin_Sender</h2>
-          <p className="text-[9px] font-bold text-gray-400 uppercase">User Name</p>
-          <p className="font-bold text-sm mb-3">{sender?.full_name || 'System User'}</p>
-          <p className="text-[9px] font-bold text-gray-400 uppercase">Email</p>
-          <p className="font-bold text-sm underline truncate">{sender?.email || 'Unknown'}</p>
+          <div className="space-y-3">
+            <div>
+              <p className="text-[9px] font-bold text-gray-400 uppercase">User Name</p>
+              <p className="font-bold text-sm">{sender?.full_name || 'System User'}</p>
+            </div>
+            <div>
+              <p className="text-[9px] font-bold text-gray-400 uppercase">Email</p>
+              <p className="font-bold text-sm underline truncate">{sender?.email || 'Unknown'}</p>
+            </div>
+          </div>
         </section>
 
         {/* APPROVER INTERFACE */}
         <div className="mt-auto pt-6 border-t-2 border-black">
-          <label className={`${fonts.mono} mb-3 block font-black`}>
+          <label className={`${fonts.mono} mb-3 block font-black text-gray-900`}>
             {isLocked ? 'Submitted Feedback' : 'Initial Reviewer Notes'}
           </label>
           
           {isLocked ? (
-            <div className="p-4 border-2 border-dashed border-gray-300 bg-gray-100 text-sm text-gray-600 italic">
+            <div className="p-4 border-2 border-dashed border-gray-300 bg-gray-100 text-sm text-gray-600 italic leading-relaxed">
               {sub.approver_comments || "No comments were provided at this stage."}
             </div>
           ) : (
@@ -133,7 +141,7 @@ export default function ApproverManagePage() {
           <div className="mt-6">
             {isLocked ? (
               <div className="bg-blue-900 text-white p-4 text-center font-black text-[10px] uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                Review Submitted — Forwarded to Admin
+                {sub.status === 'pending_admin' ? 'Forwarded to Admin' : 'Decision Finalized'}
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
@@ -142,7 +150,7 @@ export default function ApproverManagePage() {
                   disabled={updating}
                   className="bg-blue-600 text-white py-4 font-black text-[10px] uppercase shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all"
                 >
-                  Forward to Admin
+                  Approve
                 </button>
                 <button 
                   onClick={() => handleApproverAction('declined')}
@@ -158,12 +166,15 @@ export default function ApproverManagePage() {
       </aside>
 
       {/* PREVIEW PANEL */}
-      <main className="flex-1 bg-[#111] flex flex-col p-8 relative">
+      <main className="flex-1 bg-zinc-900 flex flex-col p-8 relative">
         <div className="flex-1 bg-white border-4 border-black shadow-2xl overflow-hidden flex items-center justify-center">
           {sub.file_name.match(/\.(jpg|jpeg|png|webp|gif|svg)$/i) ? (
             <img src={sub.file_url} alt="Preview" className="max-w-full max-h-full object-contain p-2" />
           ) : (
-            <iframe src={`https://docs.google.com/gview?url=${encodeURIComponent(sub.file_url)}&embedded=true`} className="w-full h-full border-none" />
+            <iframe 
+              src={`https://docs.google.com/gview?url=${encodeURIComponent(sub.file_url)}&embedded=true`} 
+              className="w-full h-full border-none" 
+            />
           )}
         </div>
       </main>
