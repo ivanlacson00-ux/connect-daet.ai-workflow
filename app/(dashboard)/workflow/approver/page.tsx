@@ -20,24 +20,44 @@ interface Submission {
   created_at: string;
 }
 
-// ─── Status Stamp ────────────────────────────────────────────────────────────
+// ─── Status Stamp (Synced with User Portal Logic) ──────────────────────────────
 function StatusStamp({ status }: { status: string }) {
   const getDisplayConfig = () => {
-    const s = status.toLowerCase();
-    if (s === 'approved') 
-      return { label: 'FINALIZED', color: 'text-green-600', bg: 'bg-green-50' };
-    if (s.includes('declined')) 
-      return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
-    if (s === 'pending_admin') 
-      return { label: 'SENT TO ADMIN', color: 'text-blue-600', bg: 'bg-blue-50' };
-    return { label: 'PENDING', color: 'text-orange-600', bg: 'bg-orange-50' };
+    switch (status) {
+      case 'pending':
+      case 'pending_approver':
+        return { 
+          label: 'PENDING', 
+          styles: "text-blue-600 bg-white border-blue-600 shadow-[3px_3px_0px_0px_rgba(37,99,235,0.3)]" 
+        };
+      case 'pending_admin':
+        return { 
+          label: 'UNDER REVIEW', 
+          styles: "text-white bg-blue-600 border-blue-600 shadow-[3px_3px_0px_0px_rgba(0,0,0,0.2)]" 
+        };
+      case 'approved':
+        return { 
+          label: 'APPROVED', 
+          styles: "text-blue-700 bg-blue-50 border-blue-400" 
+        };
+      case 'declined_by_approver':
+      case 'declined_by_admin':
+        return { 
+          label: 'REJECTED', 
+          styles: "text-red-600 bg-red-50 border-red-600" 
+        };
+      default:
+        return { 
+          label: status.toUpperCase().replace('_', ' '), 
+          styles: "text-gray-600 bg-gray-50 border-gray-400" 
+        };
+    }
   };
 
   const config = getDisplayConfig();
 
   return (
-    <div className={`inline-flex items-center gap-2 border-2 border-current px-4 py-1 rotate-[-1deg] ${config.color} ${config.bg} ${fonts.mono} font-black shadow-[3px_3px_0px_0px_currentColor]`}>
-      <span className="text-lg">●</span>
+    <div className={`inline-block px-4 py-1.5 border-2 font-black rotate-[-1deg] ${fonts.mono} ${config.styles}`}>
       {config.label}
     </div>
   );
@@ -54,7 +74,7 @@ export default function ApproverDashboard() {
     return {
       pending: submissions.filter(s => s.status === 'pending_approver' || s.status === 'pending').length,
       forwarded: submissions.filter(s => s.status === 'pending_admin').length,
-      declined: submissions.filter(s => s.status.includes('declined')).length,
+      declined: submissions.filter(s => s.status.includes('declined') || s.status.includes('rejected')).length,
     };
   }, [submissions]);
 
@@ -84,17 +104,17 @@ export default function ApproverDashboard() {
             </div>
 
             <div className="grid grid-cols-3 gap-4 md:w-80">
-              <div className="bg-orange-50 border border-orange-200 p-3 text-center">
-                <div className={`${fonts.mono} text-[8px] text-orange-500 mb-1`}>Your Queue</div>
-                <div className="text-xl font-bold text-orange-600 leading-none">{stats.pending}</div>
+              <div className="bg-white border-2 border-blue-600 p-3 text-center shadow-[3px_3px_0px_0px_rgba(37,99,235,0.2)]">
+                <div className={`${fonts.mono} text-[8px] text-blue-600 mb-1 font-bold`}>Your Queue</div>
+                <div className="text-xl font-black text-blue-600 leading-none">{stats.pending}</div>
               </div>
-              <div className="bg-blue-50 border border-blue-200 p-3 text-center">
-                <div className={`${fonts.mono} text-[8px] text-blue-500 mb-1`}>To Admin</div>
-                <div className="text-xl font-bold text-blue-600 leading-none">{stats.forwarded}</div>
+              <div className="bg-blue-600 border-2 border-blue-600 p-3 text-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.1)]">
+                <div className={`${fonts.mono} text-[8px] text-white mb-1 font-bold`}>To Admin</div>
+                <div className="text-xl font-black text-white leading-none">{stats.forwarded}</div>
               </div>
-              <div className="bg-red-50 border border-red-200 p-3 text-center">
-                <div className={`${fonts.mono} text-[8px] text-red-500 mb-1`}>Declined</div>
-                <div className="text-xl font-bold text-red-600 leading-none">{stats.declined}</div>
+              <div className="bg-red-50 border-2 border-red-600 p-3 text-center shadow-[3px_3px_0px_0px_rgba(220,38,38,0.1)]">
+                <div className={`${fonts.mono} text-[8px] text-red-600 mb-1 font-bold`}>Declined</div>
+                <div className="text-xl font-black text-red-600 leading-none">{stats.declined}</div>
               </div>
             </div>
           </div>
@@ -109,6 +129,7 @@ export default function ApproverDashboard() {
           <div className="space-y-8">
             {submissions.map((sub) => (
               <article key={sub.id} className="bg-white border-2 border-black p-8 transition-all hover:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] relative overflow-hidden group">
+                {/* Background Watermark */}
                 <div className="absolute top-[-10px] right-[-10px] opacity-[0.03] pointer-events-none select-none text-8xl font-black uppercase">
                   {sub.status.split('_')[0]}
                 </div>
@@ -129,9 +150,8 @@ export default function ApproverDashboard() {
 
                   <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
                     <button 
-                      // FIX: Routing path updated to match your folder structure
                       onClick={() => router.push(`/workflow/approver/file_management/${sub.id}`)}
-                      className={`${fonts.mono} bg-blue-600 text-white px-10 py-4 hover:bg-black transition-all font-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-1 active:translate-y-1 active:shadow-none`}
+                      className={`${fonts.mono} bg-blue-600 text-white px-10 py-4 hover:bg-black transition-all font-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-1 active:translate-y-1 active:shadow-none whitespace-nowrap`}
                     >
                       Manage Entry →
                     </button>
@@ -141,8 +161,8 @@ export default function ApproverDashboard() {
             ))}
 
             {submissions.length === 0 && (
-              <div className="border-4 border-dashed border-gray-100 p-20 text-center">
-                <p className={`${fonts.serif} text-2xl text-gray-300`}>No records found in the current audit log.</p>
+              <div className="border-4 border-dashed border-gray-100 py-32 text-center">
+                <p className={`${fonts.mono} text-gray-300 font-black`}>NO_RECORDS_IN_QUEUE</p>
               </div>
             )}
           </div>
