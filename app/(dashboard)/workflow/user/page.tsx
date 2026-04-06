@@ -61,7 +61,8 @@ function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Su
           <button onClick={() => onPreview(sub)} className={`${fonts.mono} bg-white border-2 border-blue-600 px-6 py-3 text-blue-600 hover:bg-blue-50 transition-all font-bold shadow-[4px_4px_0px_0px_rgba(37,99,235,0.2)]`}>
             Preview
           </button>
-          <button onClick={() => router.push(`/workflow/user/file_management/${sub.id}`)} className={`${fonts.mono} bg-blue-600 text-white px-8 py-3 hover:bg-black transition-all font-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]`}>
+          {/* FIX: Redirecting to file_registry instead of file_management */}
+          <button onClick={() => router.push(`/workflow/user/file_registry/${sub.id}`)} className={`${fonts.mono} bg-blue-600 text-white px-8 py-3 hover:bg-black transition-all font-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]`}>
             View File →
           </button>
         </div>
@@ -83,7 +84,6 @@ export default function WorkflowDashboard() {
   const [previewFile, setPreviewFile] = useState<Submission | null>(null);
   const supabase = createClient();
 
-  // FIX: Check MIME type instead of name
   const isImage = (fileType: string) => fileType?.startsWith('image/');
 
   const handleDownload = async (url: string, filename: string) => {
@@ -175,7 +175,6 @@ export default function WorkflowDashboard() {
           </div>
           
           <div className="flex-1 flex items-center justify-center overflow-hidden bg-[#1a1a1a]">
-            {/* FIX: Check file_type here */}
             {isImage(previewFile.file_type) ? (
               <img src={previewFile.file_url} alt="Preview" className="max-w-full max-h-full object-contain p-8 animate-in zoom-in-95" />
             ) : (
