@@ -16,10 +16,11 @@ interface Submission {
   file_type: string;
   file_size: number;
   status: string;
-  category: string;      // From upload data
-  description: string;   // From upload data
+  category: string;
+  description: string;
   approver_comments: string;
   admin_comments: string;
+  rejection_comment: string; // Added from schema
   created_at: string;
 }
 
@@ -44,10 +45,30 @@ export default function UserFileDetail() {
     fetchSubmission();
   }, [id, supabase]);
 
+  // Status mapping helper to keep logic consistent with Registry
+  const getStatusDisplay = (s: string) => {
+    switch (s) {
+      case 'pending':
+      case 'pending_approver':
+        return { label: 'PENDING', styles: "text-blue-600 bg-white border-blue-600 shadow-[3px_3px_0px_0px_rgba(37,99,235,0.3)]" };
+      case 'pending_admin':
+        return { label: 'UNDER REVIEW', styles: "text-white bg-blue-600 border-blue-600 shadow-[3px_3px_0px_0px_rgba(0,0,0,0.2)]" };
+      case 'approved':
+        return { label: 'APPROVED', styles: "text-blue-700 bg-blue-50 border-blue-400" };
+      case 'declined_by_approver':
+      case 'declined_by_admin':
+        return { label: 'REJECTED', styles: "text-red-600 bg-red-50 border-red-600" };
+      default:
+        return { label: s?.toUpperCase().replace('_', ' '), styles: "text-gray-600 bg-gray-50 border-gray-400" };
+    }
+  };
+
   const isImage = (type: string) => type?.startsWith('image/');
 
   if (loading) return <div className={`${fonts.mono} p-20 animate-pulse text-blue-600`}>Accessing_Dossier_Entry...</div>;
   if (!sub) return <div className="p-20 font-mono text-red-500 underline uppercase">Record_Not_Found</div>;
+
+  const statusInfo = getStatusDisplay(sub.status);
 
   return (
     <div className="h-screen bg-white flex flex-col lg:flex-row overflow-hidden border-t-4 border-black">
@@ -65,23 +86,20 @@ export default function UserFileDetail() {
           <div className="flex items-center gap-2 mb-2">
              <span className="bg-blue-600 text-white text-[8px] font-black px-1.5 py-0.5 uppercase tracking-widest">Document_Header</span>
           </div>
-          {/* TITLE DISPLAY */}
           <h1 className="text-4xl font-serif italic leading-tight mb-4 text-black">{sub.file_name}</h1>
           
-          <div className={`inline-block px-3 py-1 border-2 font-black ${fonts.mono} shadow-[3px_3px_0px_0px_currentColor]
-            ${sub.status === 'approved' ? 'text-green-600 bg-green-50' : 
-              sub.status.includes('reject') || sub.status.includes('declined') ? 'text-red-600 bg-red-50' : 'text-blue-600 bg-blue-50'}`}>
-            {sub.status}
+          <div className={`inline-block px-4 py-1.5 border-2 font-black ${fonts.mono} ${statusInfo.styles}`}>
+            {statusInfo.label}
           </div>
         </section>
 
-        {/* 01. DEPARTMENT (Category) */}
+        {/* 01. DEPARTMENT */}
         <section className="mb-6 p-4 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
           <h2 className={`${fonts.mono} text-blue-600 mb-1 font-black`}>01_Department</h2>
           <p className="font-bold text-lg uppercase tracking-tight">{sub.category || 'GENERAL_UNASSIGNED'}</p>
         </section>
 
-        {/* 02. CONTEXT BRIEF (Description) */}
+        {/* 02. CONTEXT BRIEF */}
         <section className="mb-8">
           <h2 className={`${fonts.mono} text-gray-400 mb-2 font-black`}>02_Context_Brief</h2>
           <div className="p-5 border-2 border-dashed border-black/20 bg-white min-h-[100px]">
@@ -106,12 +124,12 @@ export default function UserFileDetail() {
           </div>
         </section>
 
-        {/* 04. FEEDBACK (If exists) */}
-        {(sub.approver_comments || sub.admin_comments) && (
+        {/* 04. FEEDBACK (Consolidated from all possible comment fields) */}
+        {(sub.approver_comments || sub.admin_comments || sub.rejection_comment) && (
           <section className="mb-10">
             <h2 className={`${fonts.mono} text-red-600 mb-2 font-black`}>04_Official_Feedback</h2>
             <div className="p-4 border-2 border-red-600 bg-red-50 text-sm text-red-900 italic font-serif shadow-[4px_4px_0px_0px_rgba(220,38,38,0.1)]">
-              "{sub.admin_comments || sub.approver_comments}"
+              "{sub.admin_comments || sub.approver_comments || sub.rejection_comment}"
             </div>
           </section>
         )}
