@@ -1,8 +1,8 @@
-// app/(dashboard)/workflow/approver/file_management/page.tsx
 'use client';
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import Link from 'next/link'; // Import Link for navigation
 
 const fonts = {
   serif: "font-serif italic",
@@ -76,16 +76,15 @@ export default function FileManagement() {
       const link = document.createElement('a');
       link.href = window.URL.createObjectURL(blob);
       link.download = filename;
+      document.body.appendChild(link);
       link.click();
+      document.body.removeChild(link);
     } catch (e) {
       console.error("Download error", e);
     }
   };
 
-  // HELPER: Check if file is an image
-  const isImage = (fileName: string) => {
-    return /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(fileName);
-  };
+  const isImage = (fileName: string) => /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(fileName);
 
   return (
     <div className="min-h-screen bg-[#fcfcfc] text-gray-900 pb-20">
@@ -127,8 +126,8 @@ export default function FileManagement() {
           </div>
         </div>
 
-        {/* Table Container */}
-        <div className="bg-white border-2 border-gray-900 shadow-[10px_10px_0px_0px_rgba(37,99,235,0.1)]">
+        {/* Table */}
+        <div className="bg-white border-2 border-gray-900 shadow-[10px_10px_0px_0px_rgba(37,99,235,0.1)] overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
@@ -168,20 +167,27 @@ export default function FileManagement() {
                       </div>
                     </td>
                     <td className="p-5 text-right">
-                      <div className="flex justify-end gap-3">
+                      <div className="flex justify-end items-center gap-3">
+                        {/* MANAGE BUTTON */}
+                        <Link 
+                          href={`/workflow/approver/file_management/${sub.id}`}
+                          className={`${fonts.mono} bg-blue-600 text-white px-3 py-1.5 text-[9px] font-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all`}
+                        >
+                          Manage
+                        </Link>
+
                         <button 
                           onClick={() => setPreviewFile({ url: sub.file_url, name: sub.file_name })} 
                           className="p-2 border border-gray-200 hover:border-blue-600 hover:text-blue-600 transition-all bg-white shadow-[2px_2px_0px_0px_rgba(0,0,0,0.05)] hover:shadow-none"
-                          title="Preview"
                         >
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                         </button>
+
                         <button 
                           onClick={() => handleDownload(sub.file_url, sub.file_name)} 
                           className="p-2 border border-gray-200 hover:border-gray-900 text-gray-400 hover:text-gray-900 transition-all bg-white"
-                          title="Download"
                         >
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
                         </button>
                       </div>
                     </td>
@@ -199,7 +205,7 @@ export default function FileManagement() {
         </div>
       </div>
 
-      {/* Preview Modal - UPDATED TO HANDLE IMAGES */}
+      {/* Preview Modal */}
       {previewFile && (
         <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col animate-in fade-in duration-300">
           <div className="px-6 py-4 flex justify-between items-center border-b-2 border-white/10 bg-black">
