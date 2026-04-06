@@ -48,6 +48,7 @@ export default function WorkflowLayout({
       return [
         { href: '/workflow/user', label: 'Dashboard', icon: '◰' },
         { href: '/workflow/user/upload', label: 'Upload', icon: '⊕' },
+        { href: '/workflow/user/file_registry', label: 'File Registry', icon: '▤' }, // ADDED THIS
       ];
     }
     // --- APPROVER NAVIGATION ---
@@ -68,11 +69,12 @@ export default function WorkflowLayout({
     return [];
   };
 
+  // Helper to check if the current link is active
   const isActive = (path: string) => pathname === path;
 
   return (
     <div className="min-h-screen bg-[#fcfcfc] text-gray-900">
-      {/* Mobile Trigger - Minimalist */}
+      {/* Mobile Trigger */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
         className="lg:hidden fixed top-4 right-4 z-50 bg-black text-white w-10 h-10 flex items-center justify-center border-2 border-black active:bg-blue-600 transition-colors"
@@ -80,7 +82,7 @@ export default function WorkflowLayout({
         {sidebarOpen ? '✕' : '☰'}
       </button>
 
-      {/* Sidebar - Compact Brutalist */}
+      {/* Sidebar */}
       <aside className={`
         fixed top-0 left-0 h-full bg-white border-r-2 border-gray-900 z-40
         transition-transform duration-300 w-60 lg:translate-x-0
