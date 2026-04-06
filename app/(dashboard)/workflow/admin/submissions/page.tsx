@@ -15,9 +15,20 @@ type FilterStatus = 'all' | 'pending' | 'approved' | 'declined';
 function StatusStamp({ status }: { status: string }) {
   const getDisplayConfig = () => {
     const s = status?.toLowerCase();
-    if (s.includes('approved')) return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
-    if (s.includes('declined')) return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
-    return { label: 'PENDING', color: 'text-orange-600', bg: 'bg-orange-50' };
+    
+    // Admin Stage Logic
+    if (s === 'pending_admin') {
+      return { label: 'PENDING ADMIN', color: 'text-blue-600', bg: 'bg-blue-50' };
+    }
+    if (s.includes('approved')) {
+      return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
+    }
+    if (s.includes('declined')) {
+      return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
+    }
+    
+    // Default / Stage 01
+    return { label: 'PENDING_APPROVER', color: 'text-orange-600', bg: 'bg-orange-50' };
   };
 
   const config = getDisplayConfig();
@@ -36,7 +47,10 @@ export default function SubmissionsPage() {
   const filteredSubmissions = submissions.filter(sub => {
     const s = sub.status.toLowerCase();
     if (filter === 'all') return true;
-    if (filter === 'pending') return s.startsWith('pending');
+    
+    // The "Pending" filter now specifically looks for Admin Action
+    if (filter === 'pending') return s === 'pending_admin'; 
+    
     if (filter === 'approved') return s === 'approved';
     if (filter === 'declined') return s.includes('declined');
     return true;
@@ -44,7 +58,7 @@ export default function SubmissionsPage() {
 
   const filters: { value: FilterStatus; label: string }[] = [
     { value: 'all', label: 'All Submissions' },
-    { value: 'pending', label: 'Pending' },
+    { value: 'pending', label: 'Awaiting Admin' }, // Changed label for clarity
     { value: 'approved', label: 'Approved' },
     { value: 'declined', label: 'Declined' },
   ];
@@ -58,7 +72,7 @@ export default function SubmissionsPage() {
         </h1>
         <div className="flex items-center justify-between mt-4">
           <p className={`${fonts.mono} text-blue-600 font-bold`}>
-            Global Archive // System-Wide Submissions
+            Global Archive // Level_02 Finalization
           </p>
           <p className={`${fonts.mono} text-gray-400 font-bold`}>
             Displaying: {filteredSubmissions.length} Records
