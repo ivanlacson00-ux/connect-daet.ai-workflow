@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAdminStats } from '@/hooks/useAdminStats';
+import Link from 'next/link';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -14,6 +15,7 @@ interface Submission {
   id: string | number;
   file_name: string;
   file_url: string;
+  file_type: string;
   status: string;
   user_id: string;
   submitter_email?: string;
@@ -23,14 +25,19 @@ interface Submission {
 // ─── Status Stamp ────────────────────────────────────────────────────────────
 function StatusStamp({ status }: { status: string }) {
   const getDisplayConfig = () => {
-    switch (status?.toLowerCase()) {
-      case 'approved':
-        return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
-      case 'declined':
-        return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
-      default:
-        return { label: 'PENDING', color: 'text-orange-600', bg: 'bg-orange-50' };
+    const s = status?.toLowerCase();
+    
+    if (s === 'pending_admin') {
+      return { label: 'PENDING ADMIN', color: 'text-blue-600', bg: 'bg-blue-50' };
     }
+    if (s.includes('approved')) {
+      return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
+    }
+    if (s.includes('declined')) {
+      return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
+    }
+    
+    return { label: 'PENDING_APPROVER', color: 'text-orange-600', bg: 'bg-orange-50' };
   };
 
   const config = getDisplayConfig();
@@ -126,7 +133,7 @@ export default function AdminDashboard() {
         ))}
       </div>
 
-      {/* Recent Submissions Table */}
+      {/* Recent Submissions Table (Merged Design) */}
       <div className="bg-white border-2 border-gray-900 shadow-[10px_10px_0px_0px_rgba(37,99,235,0.1)] overflow-hidden">
         <div className="p-4 border-b-2 border-gray-900 bg-gray-50 flex items-center justify-between">
           <h2 className={`${fonts.mono} font-black text-gray-900`}>Recent_Entry_Log</h2>
@@ -143,41 +150,64 @@ export default function AdminDashboard() {
                 <th className="p-5 font-bold">Document</th>
                 <th className="p-5 font-bold">Origin</th>
                 <th className="p-5 font-bold text-center">Status</th>
+                <th className="p-5 font-bold">Timestamp</th>
                 <th className="p-5 font-bold text-right">Utility</th>
               </tr>
             </thead>
             <tbody className="divide-y-2 divide-gray-900">
-              {submissions.map((sub) => (
-                <tr key={sub.id} className="hover:bg-blue-50/50 transition-colors group">
-                  <td className="p-5">
-                    <div className={`${fonts.mono} text-blue-400 text-[8px] mb-0.5`}>ID: #{String(sub.id).slice(0,6)}</div>
-                    <div className="font-bold text-gray-900 truncate max-w-[220px]">{sub.file_name}</div>
-                    <div className={`${fonts.mono} text-[8px] text-gray-400 mt-1`}>Logged: {new Date(sub.created_at).toLocaleDateString()}</div>
-                  </td>
-                  <td className="p-5">
-                    <div className="text-xs font-black text-gray-700">{sub.submitter_email}</div>
-                  </td>
-                  <td className="p-5 text-center">
-                    <StatusStamp status={sub.status} />
-                  </td>
-                  <td className="p-5 text-right">
-                    <div className="flex justify-end gap-3">
-                      <button 
-                        onClick={() => setPreviewFile({ url: sub.file_url, name: sub.file_name })} 
-                        className="p-2 border border-gray-200 hover:border-blue-600 hover:text-blue-600 transition-all bg-white shadow-[2px_2px_0px_0px_rgba(0,0,0,0.05)] hover:shadow-none"
-                      >
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                      </button>
-                      <button 
-                        onClick={() => handleDownload(sub.file_url, sub.file_name)} 
-                        className="p-2 border border-gray-200 hover:border-gray-900 text-gray-400 hover:text-gray-900 transition-all bg-white"
-                      >
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-                      </button>
-                    </div>
+              {loading ? (
+                <tr>
+                  <td colSpan={5} className="py-20 text-center">
+                    <span className={`${fonts.mono} text-gray-400 animate-pulse text-lg`}>SYNCING_DATABASE...</span>
                   </td>
                 </tr>
-              ))}
+              ) : submissions.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-20 text-center">
+                    <p className={`${fonts.mono} text-gray-400`}>Zero_Entries_Found</p>
+                  </td>
+                </tr>
+              ) : (
+                submissions.map((sub) => (
+                  <tr key={sub.id} className="hover:bg-blue-50/30 transition-colors group">
+                    <td className="p-5">
+                      <div className="font-bold text-gray-900 underline decoration-blue-500/30 decoration-2 underline-offset-4 truncate max-w-[200px]">
+                        {sub.file_name}
+                      </div>
+                      <div className="text-[10px] font-mono text-gray-400 mt-1 uppercase">TYPE: {sub.file_type || 'DOC'}</div>
+                    </td>
+                    <td className="p-5">
+                      <div className="font-bold text-gray-700 text-xs truncate max-w-[180px]">
+                        {sub.submitter_email}
+                      </div>
+                    </td>
+                    <td className="p-5 text-center">
+                      <StatusStamp status={sub.status} />
+                    </td>
+                    <td className="p-5">
+                      <div className={`${fonts.mono} text-gray-600`}>
+                        {new Date(sub.created_at).toLocaleDateString()}
+                      </div>
+                    </td>
+                    <td className="p-5 text-right">
+                      <div className="flex justify-end gap-2">
+                        <button 
+                          onClick={() => setPreviewFile({ url: sub.file_url, name: sub.file_name })}
+                          className="p-2 border-2 border-gray-900 hover:bg-blue-600 hover:text-white transition-all bg-white"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                        <Link 
+                          href={`/workflow/admin/submissions/${sub.id}`}
+                          className={`${fonts.mono} inline-block bg-white border-2 border-gray-900 px-4 py-1.5 font-bold text-[10px] shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all text-gray-900`}
+                        >
+                          Manage
+                        </Link>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
