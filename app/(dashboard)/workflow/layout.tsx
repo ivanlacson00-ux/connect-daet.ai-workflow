@@ -48,7 +48,8 @@ export default function WorkflowLayout({
       return [
         { href: '/workflow/user', label: 'Dashboard', icon: '◰' },
         { href: '/workflow/user/upload', label: 'Upload', icon: '⊕' },
-        { href: '/workflow/user/file_registry', label: 'File Registry', icon: '▤' }, // ADDED THIS
+        { href: '/workflow/user/file_registry', label: 'File Registry', icon: '▤' },
+        { href: '/workflow/user/notifications', label: 'Notifications', icon: '⌁' },
       ];
     }
     // --- APPROVER NAVIGATION ---
@@ -56,6 +57,7 @@ export default function WorkflowLayout({
       return [
         { href: '/workflow/approver', label: 'Dashboard', icon: '⎚' },
         { href: '/workflow/approver/file_management', label: 'File Registry', icon: '▤' },
+        { href: '/workflow/approver/notifications', label: 'Notifications', icon: '⌁' },
       ];
     }
     // --- ADMIN NAVIGATION ---
@@ -64,6 +66,7 @@ export default function WorkflowLayout({
         { href: '/workflow/admin', label: 'Dashboard', icon: '⌬' },
         { href: '/workflow/admin/user_management', label: 'User Registry', icon: '☍' },
         { href: '/workflow/admin/submissions', label: 'File Submissions', icon: '▤' },
+        { href: '/workflow/admin/notifications', label: 'Notifications', icon: '⌁' },
       ];
     }
     return [];
