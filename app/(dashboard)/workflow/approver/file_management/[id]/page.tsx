@@ -87,11 +87,6 @@ export default function ApproverManagePage() {
     const isActionable = sub.status === 'pending' || sub.status === 'pending_approver';
     if (!isActionable) return;
 
-    if (decision === 'declined' && !comment.trim()) {
-      alert("Please provide validation notes for rejection.");
-      return;
-    }
-
     setUpdating(true);
     const nextStatus = decision === 'approved' ? 'pending_admin' : 'declined_by_approver';
     const { data: { user } } = await supabase.auth.getUser();
@@ -150,23 +145,22 @@ export default function ApproverManagePage() {
           {/* User Details Section */}
           <section className="relative">
              <div className="border-2 border-black p-6 space-y-6 bg-white shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                <div>
-                  <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-2 border-b border-blue-100 pb-1 inline-block">Entry Summary</p>
-                  <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Category</p>
-                  <p className="text-xl font-black tracking-tight text-blue-600 uppercase">{sub.category || 'GENERAL'}</p>
-                </div>
-                <div>
-                  <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Sender_Notes</p>
-                  {/* Made description responsive/wrap */}
-                  <p className="text-sm italic leading-relaxed text-zinc-600 whitespace-pre-wrap break-words border-l-2 border-zinc-100 pl-4">
-                    "{sub.description || 'No description provided.'}"
-                  </p>
-                </div>
-                <div className="pt-4 border-t border-zinc-100">
-                  <p className={`${fonts.mono} text-[9px] text-gray-400`}>Originator</p>
-                  <p className="font-black text-sm">{sender?.full_name}</p>
-                  <p className="text-[10px] text-zinc-400 font-mono">{sender?.email}</p>
-                </div>
+               <div>
+                 <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-2 border-b border-blue-100 pb-1 inline-block">Entry Summary</p>
+                 <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Category</p>
+                 <p className="text-xl font-black tracking-tight text-blue-600 uppercase">{sub.category || 'GENERAL'}</p>
+               </div>
+               <div>
+                 <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Sender_Notes</p>
+                 <p className="text-sm italic leading-relaxed text-zinc-600 whitespace-pre-wrap break-words border-l-2 border-zinc-100 pl-4">
+                   "{sub.description || 'No description provided.'}"
+                 </p>
+               </div>
+               <div className="pt-4 border-t border-zinc-100">
+                 <p className={`${fonts.mono} text-[9px] text-gray-400`}>Originator</p>
+                 <p className="font-black text-sm">{sender?.full_name}</p>
+                 <p className="text-[10px] text-zinc-400 font-mono">{sender?.email}</p>
+               </div>
              </div>
           </section>
 
@@ -205,24 +199,26 @@ export default function ApproverManagePage() {
           </section>
         </div>
 
-        {/* ACTION FOOTER: STAMP LOGIC */}
+        {/* ACTION FOOTER */}
         <div className="p-10 border-t-2 border-black bg-white">
           <label className={`${fonts.mono} mb-3 block font-black text-black`}>
-            {isLocked ? 'APPROVER NOTES' : 'VALIDATION_NOTES'}
+            {isLocked ? (sub.approver_comments ? 'APPROVER NOTES' : 'SYSTEM STATUS') : 'VALIDATION_NOTES'}
           </label>
           
           {isLocked ? (
             <div className="space-y-4">
-              {/* STAMP BOX: Updated for responsiveness */}
-              <div className={`p-5 border-2 border-black italic text-sm shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col min-w-0 ${sub.status.includes('declined') ? 'bg-red-50 text-red-900 border-red-600' : 'bg-blue-50 text-blue-900 border-blue-600'}`}>
-                <p className="whitespace-pre-wrap break-words leading-relaxed">
-                  "{sub.approver_comments || "No validation notes were recorded."}"
-                </p>
-                <div className="mt-4 pt-3 border-t border-current flex justify-between items-center not-italic gap-2">
-                    <span className="text-[9px] font-black uppercase tracking-tighter">Approver</span>
-                    <span className="text-[10px] font-mono whitespace-nowrap">{new Date(sub.updated_at).toLocaleDateString()}</span>
+              {/* Only show the stamp box if comments exist */}
+              {sub.approver_comments && (
+                <div className={`p-5 border-2 border-black italic text-sm shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col min-w-0 ${sub.status.includes('declined') ? 'bg-red-50 text-red-900 border-red-600' : 'bg-blue-50 text-blue-900 border-blue-600'}`}>
+                  <p className="whitespace-pre-wrap break-words leading-relaxed">
+                    "{sub.approver_comments}"
+                  </p>
+                  <div className="mt-4 pt-3 border-t border-current flex justify-between items-center not-italic gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-tighter">Approver</span>
+                      <span className="text-[10px] font-mono whitespace-nowrap">{new Date(sub.updated_at).toLocaleDateString()}</span>
+                  </div>
                 </div>
-              </div>
+              )}
               <div className="bg-zinc-100 text-zinc-400 p-4 text-center font-black text-[10px] uppercase tracking-[0.2em] border-2 border-dashed border-zinc-300">
                 {sub.status === 'pending_admin' ? 'STAMPED // AWAITING_ADMIN_FINAL' : 'ARCHIVED // CLOSED'}
               </div>
@@ -233,7 +229,7 @@ export default function ApproverManagePage() {
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 className="w-full h-32 p-4 border-2 border-black bg-zinc-50 text-sm outline-none resize-none focus:bg-white transition-colors mb-6"
-                placeholder="Enter internal notes for Admin review..."
+                placeholder="Enter internal notes for Admin review (optional)..."
               />
               <div className="flex gap-4">
                 <button onClick={() => handleApproverAction('approved')} disabled={updating} className="flex-1 bg-blue-600 text-white py-4 font-black text-[10px] uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all disabled:opacity-50">
