@@ -84,11 +84,8 @@ export default function AdminManagePage() {
 
   const handleAdminAction = async (decision: 'approved' | 'declined') => {
     if (sub.status !== 'pending_admin') return;
-    if (decision === 'declined' && !adminComment.trim()) {
-      alert("Validation notes are required for rejection.");
-      return;
-    }
 
+    // Requirement check removed here to allow rejections without notes
     setUpdating(true);
     const nextStatus = decision === 'approved' ? 'approved' : 'declined_by_admin';
     const { data: { user } } = await supabase.auth.getUser();
@@ -149,17 +146,17 @@ export default function AdminManagePage() {
           {/* Submission Context (Category & Description) */}
           <section className="relative">
              <div className="border-2 border-black p-6 space-y-6 bg-white shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                <div>
-                  <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-2 border-b border-blue-100 pb-1 inline-block">Submission Context</p>
-                  <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Category</p>
-                  <p className="text-xl font-black tracking-tight text-blue-600 uppercase">{sub.category || 'GENERAL'}</p>
-                </div>
-                <div>
-                  <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>User_Description</p>
-                  <p className="text-sm italic leading-relaxed text-zinc-600 whitespace-pre-wrap break-words border-l-2 border-zinc-100 pl-4">
-                    "{sub.description || 'No description provided.'}"
-                  </p>
-                </div>
+               <div>
+                 <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-2 border-b border-blue-100 pb-1 inline-block">Submission Context</p>
+                 <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Category</p>
+                 <p className="text-xl font-black tracking-tight text-blue-600 uppercase">{sub.category || 'GENERAL'}</p>
+               </div>
+               <div>
+                 <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>User_Description</p>
+                 <p className="text-sm italic leading-relaxed text-zinc-600 whitespace-pre-wrap break-words border-l-2 border-zinc-100 pl-4">
+                   "{sub.description || 'No description provided.'}"
+                 </p>
+               </div>
              </div>
           </section>
 
@@ -225,7 +222,7 @@ export default function AdminManagePage() {
                 value={adminComment}
                 onChange={(e) => setAdminComment(e.target.value)}
                 className="w-full h-32 p-4 border-2 border-black bg-zinc-50 text-sm italic outline-none resize-none focus:bg-white transition-colors"
-                placeholder="Closing remarks for the user/system..."
+                placeholder="Closing remarks for the user/system (optional)..."
               />
             </div>
             <div className="flex gap-4">
