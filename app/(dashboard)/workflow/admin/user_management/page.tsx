@@ -24,6 +24,8 @@ export default function UserManagementPage() {
   const [roleFilter, setRoleFilter] = useState<string>('all');
   const [updating, setUpdating] = useState<string | null>(null);
 
+  // --- DATA ACTIONS ---
+
   const fetchUsers = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -51,6 +53,30 @@ export default function UserManagementPage() {
     fetchUsers();
   };
 
+  const deleteUser = async (userId: string, email: string) => {
+    const confirmed = window.confirm(
+      `WARNING: Are you sure you want to delete ${email}? This will remove their profile record.`
+    );
+    
+    if (!confirmed) return;
+
+    setUpdating(userId);
+    const { error } = await supabase
+      .from('profiles')
+      .delete()
+      .eq('id', userId);
+
+    if (error) {
+      console.error('Delete error:', error.message);
+      alert('Failed to delete user profile.');
+    }
+
+    setUpdating(null);
+    fetchUsers();
+  };
+
+  // --- LIFECYCLE ---
+
   useEffect(() => {
     fetchUsers();
 
@@ -65,6 +91,8 @@ export default function UserManagementPage() {
 
     return () => { supabase.removeChannel(channel); };
   }, []);
+
+  // --- FILTERING ---
 
   const filtered = users.filter((u) => {
     const matchesSearch = u.email.toLowerCase().includes(search.toLowerCase());
@@ -113,7 +141,7 @@ export default function UserManagementPage() {
           <select
             value={roleFilter}
             onChange={(e) => setRoleFilter(e.target.value)}
-            className="w-full bg-white border-2 border-gray-900 p-4 font-bold text-xs shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:shadow-none focus:translate-x-1 focus:translate-y-1 transition-all outline-none cursor-pointer uppercase"
+            className="w-full bg-white border-2 border-gray-900 p-4 font-bold text-xs shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:shadow-none focus:translate-x-1 focus:translate-y-1 transition-all cursor-pointer uppercase"
           >
             <option value="all">All Roles</option>
             <option value="admin">Admin</option>
@@ -166,19 +194,30 @@ export default function UserManagementPage() {
                       </div>
                     </td>
                     <td className="p-5 text-right">
-                      {updating === user.id ? (
-                        <div className="text-xs font-bold text-blue-600 animate-pulse">Updating...</div>
-                      ) : (
-                        <select
-                          value={user.role}
-                          onChange={(e) => updateRole(user.id, e.target.value as 'user' | 'approver' | 'admin')}
-                          className="bg-white border-2 border-gray-900 px-3 py-1 font-bold text-[11px] shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all cursor-pointer outline-none uppercase"
-                        >
-                          <option value="user">User</option>
-                          <option value="approver">Approver</option>
-                          <option value="admin">Admin</option>
-                        </select>
-                      )}
+                      <div className="flex items-center justify-end gap-3">
+                        {updating === user.id ? (
+                          <div className="text-xs font-bold text-blue-600 animate-pulse uppercase">Processing...</div>
+                        ) : (
+                          <>
+                            <select
+                              value={user.role}
+                              onChange={(e) => updateRole(user.id, e.target.value as 'user' | 'approver' | 'admin')}
+                              className="bg-white border-2 border-gray-900 px-3 py-1 font-bold text-[11px] shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all cursor-pointer outline-none uppercase"
+                            >
+                              <option value="user">User</option>
+                              <option value="approver">Approver</option>
+                              <option value="admin">Admin</option>
+                            </select>
+
+                            <button
+                              onClick={() => deleteUser(user.id, user.email)}
+                              className="bg-red-50 text-red-600 border-2 border-red-600 px-3 py-1 font-bold text-[11px] shadow-[3px_3px_0px_0px_rgba(220,38,38,1)] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all cursor-pointer uppercase"
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
