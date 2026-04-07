@@ -40,10 +40,22 @@ export default function UploadPage() {
     setMessage(null);
 
     try {
+      // 1. Identify User
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Auth Session Expired");
 
-      // 1. Upload to Storage
+      // 2. Verify Profile exists (Prevents Foreign Key Constraint Error)
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', user.id)
+        .single();
+
+      if (profileError || !profile) {
+        throw new Error("User profile registry not found. Please contact an admin or re-login.");
+      }
+
+      // 3. Upload to Storage
       const fileExt = file.name.split('.').pop();
       const filePath = `${user.id}/${Date.now()}.${fileExt}`;
       
@@ -65,7 +77,7 @@ export default function UploadPage() {
         ? title 
         : `${title}.${fileExt}`;
 
-      // 2. Insert Record - UPDATED WITH CATEGORY AND DESCRIPTION
+      // 4. Insert Record into Database
       const { error: dbError } = await supabase
         .from('workflow_submissions')
         .insert({
@@ -74,8 +86,8 @@ export default function UploadPage() {
           file_name: fileNameWithExt, 
           file_size: file.size,
           file_type: file.type,
-          category: category,      // Added
-          description: description, // Added
+          category: category,
+          description: description,
           status: 'pending'
         });
 
