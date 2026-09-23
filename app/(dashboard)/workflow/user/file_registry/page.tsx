@@ -50,8 +50,12 @@ export default function UserFileRegistry() {
   }, [supabase]);
 
   const filteredSubmissions = submissions.filter(file => {
+    const query = searchQuery.trim().toLowerCase();
     const title = file.file_name || '';
-    const matchesSearch = title.toLowerCase().includes(searchQuery.toLowerCase());
+    const trackingNumber = file.tracking_number || '';
+    const matchesSearch = !query
+      || title.toLowerCase().includes(query)
+      || trackingNumber.toLowerCase().includes(query);
     
     let matchesFilter = true;
     if (activeFilter === 'PENDING') {
@@ -89,7 +93,7 @@ export default function UserFileRegistry() {
             <span className="absolute left-6 top-1/2 -translate-y-1/2 text-black font-black font-mono text-[10px] z-10 opacity-30">SEARCH //</span>
             <input 
               type="text"
-              placeholder="Find a file by name..."
+              placeholder="Find by file name or tracking number..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-blue-50/30 border-2 border-blue-600 focus:bg-white p-5 pl-32 outline-none transition-all font-serif italic text-2xl placeholder:text-blue-200 text-black"
@@ -143,7 +147,7 @@ export default function UserFileRegistry() {
                           {file.category || "General"}
                         </span>
                         <span className={`${fonts.mono} text-[8px] text-black font-bold`}>
-                          ID: {file.id.slice(0, 8)}
+                          Tracking: {file.tracking_number || 'Pending assignment'}
                         </span>
                       </div>
                       
@@ -209,6 +213,8 @@ function StatusBadge({ status }: { status: string }) {
         return { label: 'UNDER REVIEW', styles: "bg-blue-600 text-white border-blue-600 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.1)]" };
       case 'approved':
         return { label: 'APPROVED', styles: "bg-blue-50 text-blue-700 border-blue-400" };
+      case 'completed':
+        return { label: 'COMPLETED', styles: "bg-green-50 text-green-700 border-green-400" };
       case 'declined_by_approver':
       case 'declined_by_admin':
         return { label: 'REJECTED', styles: "bg-red-50 text-red-600 border-red-600" };

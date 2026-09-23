@@ -17,7 +17,7 @@ export default function ApproverNotificationsPage() {
     const { data, error } = await supabase
       .from('workflow_submissions')
       .select('*')
-      .eq('status', 'pending') // Only show what needs approval
+      .in('status', ['pending', 'pending_approver']) // Items under verification
       .order('updated_at', { ascending: false });
 
     if (error) {
@@ -92,11 +92,14 @@ export default function ApproverNotificationsPage() {
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex-1">
                     <p className={`${fonts.mono} text-zinc-400 mb-1 flex items-center gap-2`}>
-                      <span className="text-blue-500 font-bold">Priority: Normal</span>
+                      <span className="text-blue-500 font-bold">Stage: Verification</span>
                       <span>//</span>
                       <span>Ref: {note.id?.split('-')[0]}</span>
                       <span>//</span>
                       <span>{new Date(note.updated_at).toLocaleDateString()}</span>
+                    </p>
+                    <p className="font-mono text-[10px] font-bold tracking-wider text-blue-600">
+                      Tracking: {note.tracking_number || 'Pending assignment'}
                     </p>
                     <h3 className="text-xl font-black uppercase tracking-tight text-black">
                       {note.file_name}

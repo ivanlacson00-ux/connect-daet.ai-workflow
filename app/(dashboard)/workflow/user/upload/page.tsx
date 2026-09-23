@@ -78,7 +78,7 @@ export default function UploadPage() {
         : `${title}.${fileExt}`;
 
       // 4. Insert Record into Database
-      const { error: dbError } = await supabase
+      const { data: submission, error: dbError } = await supabase
         .from('workflow_submissions')
         .insert({
           user_id: user.id,
@@ -89,11 +89,19 @@ export default function UploadPage() {
           category: category,
           description: description,
           status: 'pending'
-        });
+        })
+        .select('tracking_number')
+        .single();
 
       if (dbError) throw dbError;
+      if (!submission?.tracking_number) {
+        throw new Error('Submission was created without a tracking number.');
+      }
 
-      setMessage({ text: 'Data Logged Successfully. Redirecting...', type: 'success' });
+      setMessage({
+        text: `Data Logged Successfully. Tracking Number: ${submission.tracking_number}. Redirecting...`,
+        type: 'success'
+      });
       setTimeout(() => router.push('/workflow/user'), 1500);
 
     } catch (error: any) {

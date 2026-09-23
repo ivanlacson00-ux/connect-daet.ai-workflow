@@ -11,6 +11,7 @@ const fonts = {
 
 interface Submission {
   id: string;
+  tracking_number: string;
   file_name: string;
   file_url: string;
   file_type: string;
@@ -49,11 +50,13 @@ export default function UserFileDetail() {
     switch (status) {
       case 'pending':
       case 'pending_approver':
-        return { label: 'PENDING', classes: 'border-2 border-blue-600 text-blue-600 bg-white shadow-[3px_3px_0px_0px_rgba(37,99,235,1)]' };
+        return { label: 'UNDER VERIFICATION', classes: 'border-2 border-blue-600 text-blue-600 bg-white shadow-[3px_3px_0px_0px_rgba(37,99,235,1)]' };
       case 'pending_admin':
-        return { label: 'UNDER REVIEW', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
+        return { label: 'PENDING APPROVAL', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
       case 'approved':
         return { label: 'APPROVED', classes: 'border-2 border-blue-600 text-blue-600 bg-white' };
+      case 'completed':
+        return { label: 'COMPLETED', classes: 'border-2 border-green-600 text-green-600 bg-green-50' };
       case 'declined_by_approver':
       case 'declined_by_admin':
         return { label: 'REJECTED', classes: 'border-2 border-red-600 text-red-600 bg-red-50' };
@@ -96,8 +99,22 @@ export default function UserFileDetail() {
               <span className="bg-black text-white text-[9px] font-black px-2 py-0.5 tracking-tighter uppercase">Document_Entry // ID: {sub.id.split('-')[0]}</span>
             </div>
             <h1 className="text-4xl font-serif italic leading-[0.9] mb-8 break-words tracking-tighter text-zinc-900">{sub.file_name}</h1>
+            <div className="mb-4">
+              <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Tracking_Number</p>
+              <p className="font-mono text-sm font-black tracking-wider text-blue-600">{sub.tracking_number}</p>
+            </div>
             <div className={`inline-block px-4 py-1.5 font-black text-[11px] tracking-widest uppercase ${statusConfig.classes}`}>
               {statusConfig.label}
+            </div>
+          </section>
+
+          <section className="receipt-print border-2 border-black bg-white p-6">
+            <p className={`${fonts.mono} text-blue-600 mb-3`}>Submission_Receipt</p>
+            <div className="space-y-2 font-mono text-[11px]">
+              <p><span className="text-gray-400">Tracking_Number:</span> {sub.tracking_number || 'Pending assignment'}</p>
+              <p><span className="text-gray-400">Document:</span> {sub.file_name}</p>
+              <p><span className="text-gray-400">Status:</span> {statusConfig.label}</p>
+              <p><span className="text-gray-400">Submitted:</span> {new Date(sub.created_at).toLocaleString()}</p>
             </div>
           </section>
 
@@ -152,6 +169,12 @@ export default function UserFileDetail() {
 
         {/* Footer Actions */}
         <div className="p-10 border-t-2 border-black bg-white">
+          <button
+            onClick={() => window.print()}
+            className={`${fonts.mono} no-print w-full py-3 mb-3 border-2 border-blue-600 text-blue-600 font-black text-[10px] tracking-[0.2em] hover:bg-blue-50 transition-all`}
+          >
+            Print_Submission_Receipt
+          </button>
           <button 
             onClick={() => window.open(sub.file_url, '_blank')}
             className={`${fonts.mono} w-full py-4 bg-black text-white font-black text-[10px] tracking-[0.2em] shadow-[4px_4px_0px_0px_rgba(37,99,235,1)] hover:bg-blue-600 active:shadow-none active:translate-x-1 active:translate-y-1 transition-all`}
@@ -192,6 +215,12 @@ export default function UserFileDetail() {
       </main>
 
       <style jsx global>{`
+        @media print {
+          body * { visibility: hidden; }
+          .receipt-print, .receipt-print * { visibility: visible; }
+          .receipt-print { position: absolute; inset: 0; margin: 0; box-shadow: none; }
+          .no-print { display: none !important; }
+        }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #fafafa; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #000; }

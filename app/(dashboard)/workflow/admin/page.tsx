@@ -13,6 +13,7 @@ const fonts = {
 
 interface Submission {
   id: string | number;
+  tracking_number: string;
   file_name: string;
   file_url: string;
   file_type: string;
@@ -28,16 +29,19 @@ function StatusStamp({ status }: { status: string }) {
     const s = status?.toLowerCase();
     
     if (s === 'pending_admin') {
-      return { label: 'PENDING ADMIN', color: 'text-blue-600', bg: 'bg-blue-50' };
+      return { label: 'PENDING APPROVAL', color: 'text-blue-600', bg: 'bg-blue-50' };
     }
     if (s.includes('approved')) {
       return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
+    }
+    if (s === 'completed') {
+      return { label: 'COMPLETED', color: 'text-green-700', bg: 'bg-green-100' };
     }
     if (s.includes('declined')) {
       return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
     }
     
-    return { label: 'PENDING_APPROVER', color: 'text-orange-600', bg: 'bg-orange-50' };
+    return { label: 'UNDER VERIFICATION', color: 'text-orange-600', bg: 'bg-orange-50' };
   };
 
   const config = getDisplayConfig();
@@ -174,7 +178,9 @@ export default function AdminDashboard() {
                       <div className="font-bold text-gray-900 underline decoration-blue-500/30 decoration-2 underline-offset-4 truncate max-w-[200px]">
                         {sub.file_name}
                       </div>
-                      <div className="text-[10px] font-mono text-gray-400 mt-1 uppercase">TYPE: {sub.file_type || 'DOC'}</div>
+                      <div className="text-[10px] font-mono text-blue-600 mt-1 uppercase">
+                        {sub.tracking_number || 'TRACKING PENDING'} // TYPE: {sub.file_type || 'DOC'}
+                      </div>
                     </td>
                     <td className="p-5">
                       <div className="font-bold text-gray-700 text-xs truncate max-w-[180px]">

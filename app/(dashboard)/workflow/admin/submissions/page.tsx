@@ -18,7 +18,10 @@ function StatusStamp({ status }: { status: string }) {
     
     // Admin Stage Logic
     if (s === 'pending_admin') {
-      return { label: 'PENDING ADMIN', color: 'text-blue-600', bg: 'bg-blue-50' };
+      return { label: 'PENDING APPROVAL', color: 'text-blue-600', bg: 'bg-blue-50' };
+    }
+    if (s === 'completed') {
+      return { label: 'COMPLETED', color: 'text-green-700', bg: 'bg-green-100' };
     }
     if (s.includes('approved')) {
       return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
@@ -28,7 +31,7 @@ function StatusStamp({ status }: { status: string }) {
     }
     
     // Default / Stage 01
-    return { label: 'PENDING_APPROVER', color: 'text-orange-600', bg: 'bg-orange-50' };
+    return { label: 'UNDER VERIFICATION', color: 'text-orange-600', bg: 'bg-orange-50' };
   };
 
   const config = getDisplayConfig();
@@ -42,9 +45,17 @@ function StatusStamp({ status }: { status: string }) {
 
 export default function SubmissionsPage() {
   const [filter, setFilter] = useState<FilterStatus>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const { submissions, loading } = useSubmissions();
 
   const filteredSubmissions = submissions.filter(sub => {
+    const query = searchQuery.trim().toLowerCase();
+    const matchesSearch = !query
+      || sub.file_name.toLowerCase().includes(query)
+      || sub.tracking_number?.toLowerCase().includes(query)
+      || sub.profiles?.email?.toLowerCase().includes(query);
+    if (!matchesSearch) return false;
+
     const s = sub.status.toLowerCase();
     if (filter === 'all') return true;
     
@@ -58,7 +69,7 @@ export default function SubmissionsPage() {
 
   const filters: { value: FilterStatus; label: string }[] = [
     { value: 'all', label: 'All Submissions' },
-    { value: 'pending', label: 'Awaiting Admin' }, // Changed label for clarity
+    { value: 'pending', label: 'Pending Approval' },
     { value: 'approved', label: 'Approved' },
     { value: 'declined', label: 'Declined' },
   ];
@@ -82,6 +93,14 @@ export default function SubmissionsPage() {
 
       {/* Filter Bar */}
       <div className="space-y-3">
+        <label className={`${fonts.mono} font-bold text-gray-900`}>Search_By_File_Tracking_Number_Or_Requester</label>
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="DAET-2026-000001, document name, or requester email"
+          className="w-full border-2 border-gray-900 bg-white px-5 py-4 font-mono text-sm outline-none focus:border-blue-600"
+        />
         <label className={`${fonts.mono} font-bold text-gray-900`}>Filter_Database_By_Status</label>
         <div className="flex flex-wrap gap-3">
           {filters.map((f) => (
@@ -137,6 +156,7 @@ export default function SubmissionsPage() {
                       <div className="font-bold text-gray-900 underline decoration-blue-500/30 decoration-2 underline-offset-4 truncate max-w-[200px]">
                         {sub.file_name}
                       </div>
+                      <div className="text-[10px] font-mono text-blue-600 mt-1 uppercase">{sub.tracking_number || 'TRACKING PENDING'}</div>
                       <div className="text-[10px] font-mono text-gray-400 mt-1 uppercase">TYPE: {sub.file_type}</div>
                     </td>
                     <td className="p-5">

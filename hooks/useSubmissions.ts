@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 export interface Submission {
   id: string;
   user_id: string;
+  tracking_number: string;
   file_name: string;
   file_url: string;
   file_type: string;

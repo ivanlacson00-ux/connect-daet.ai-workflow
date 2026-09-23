@@ -12,6 +12,7 @@ const fonts = {
 
 interface Submission {
   id: string;
+  tracking_number: string;
   file_name: string;
   file_url: string;
   file_size: number;
@@ -43,6 +44,11 @@ function StatusStamp({ status }: { status: string }) {
         return { 
           label: 'APPROVED', 
           styles: "text-blue-700 bg-blue-50 border-blue-400" 
+        };
+      case 'completed':
+        return {
+          label: 'COMPLETED',
+          styles: "text-green-700 bg-green-50 border-green-400"
         };
       case 'declined_by_approver':
       case 'declined_by_admin':
@@ -86,7 +92,7 @@ function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Su
           <div>
             <div className={`${fonts.mono} text-blue-400 mb-1 flex items-center gap-2`}>
                <span className="w-4 h-[1px] bg-blue-200"></span>
-               Ref_ID: {sub.id.slice(0, 12)}
+               Tracking: {sub.tracking_number || 'Pending assignment'}
             </div>
             <h3 className={`${fonts.serif} text-4xl text-gray-900 group-hover:text-blue-600 transition-colors`}>
               {sub.file_name}

@@ -66,6 +66,14 @@ export default function AdminNotificationsPage() {
     return 'text-zinc-400 border-zinc-400 bg-zinc-50';
   };
 
+  const getStatusLabel = (status: string) => {
+    if (status === 'pending' || status === 'pending_approver') return 'UNDER VERIFICATION';
+    if (status === 'pending_admin') return 'PENDING APPROVAL';
+    if (status === 'declined_by_approver') return 'RETURNED FOR CORRECTION';
+    if (status === 'declined_by_admin') return 'REJECTED';
+    return status.replace(/_/g, ' ').toUpperCase();
+  };
+
   if (loading) return <div className="p-10 font-mono text-red-600 animate-pulse uppercase tracking-[0.3em]">Loading_Global_Stream...</div>;
 
   return (
@@ -100,6 +108,9 @@ export default function AdminNotificationsPage() {
                       <span>//</span>
                       <span>{new Date(note.updated_at).toLocaleDateString()}</span>
                     </p>
+                    <p className="font-mono text-[10px] font-bold tracking-wider text-blue-600">
+                      Tracking: {note.tracking_number || 'Pending assignment'}
+                    </p>
                     <h3 className="text-xl font-black uppercase tracking-tight text-black">
                       {note.file_name}
                     </h3>
@@ -110,7 +121,7 @@ export default function AdminNotificationsPage() {
 
                   <div className="flex items-center gap-4">
                     <div className={`px-4 py-1.5 border-2 font-black text-[10px] uppercase tracking-widest ${getStatusColor(note.status)}`}>
-                      {note.status.replace(/_/g, ' ')}
+                      {getStatusLabel(note.status)}
                     </div>
                   </div>
                 </div>

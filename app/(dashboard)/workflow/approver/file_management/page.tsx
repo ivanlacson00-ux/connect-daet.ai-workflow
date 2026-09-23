@@ -17,12 +17,13 @@ function StatusStamp({ status }: { status: string }) {
     const s = status?.toLowerCase();
     
     // For Approvers, pending_admin means they have already done their part
-    if (s === 'pending_admin') return { label: 'PENDING_ADMIN', color: 'text-blue-600', bg: 'bg-blue-50' };
+    if (s === 'pending_admin') return { label: 'PENDING APPROVAL', color: 'text-blue-600', bg: 'bg-blue-50' };
+    if (s === 'completed') return { label: 'COMPLETED', color: 'text-green-700', bg: 'bg-green-100' };
     if (s.includes('approved')) return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
     if (s.includes('declined')) return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
     
     // Standard pending status means it's sitting in the Approver's inbox
-    return { label: 'PENDING', color: 'text-orange-600', bg: 'bg-orange-50' };
+    return { label: 'UNDER VERIFICATION', color: 'text-orange-600', bg: 'bg-orange-50' };
   };
 
   const config = getDisplayConfig();
@@ -36,9 +37,16 @@ function StatusStamp({ status }: { status: string }) {
 
 export default function ApproverSubmissionsPage() {
   const [filter, setFilter] = useState<FilterStatus>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const { submissions, loading } = useSubmissions();
 
   const filteredSubmissions = submissions.filter(sub => {
+    const query = searchQuery.trim().toLowerCase();
+    const matchesSearch = !query
+      || sub.file_name.toLowerCase().includes(query)
+      || sub.tracking_number?.toLowerCase().includes(query);
+    if (!matchesSearch) return false;
+
     const s = sub.status.toLowerCase();
     if (filter === 'all') return true;
     
@@ -72,6 +80,16 @@ export default function ApproverSubmissionsPage() {
       </div>
 
       {/* Filters */}
+      <div className="relative">
+        <label className={`${fonts.mono} block mb-2 font-bold text-gray-900`}>Search_By_File_Or_Tracking_Number</label>
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="DAET-2026-000001 or document name"
+          className="w-full border-2 border-gray-900 bg-white px-5 py-4 font-mono text-sm outline-none focus:border-orange-500"
+        />
+      </div>
       <div className="flex flex-wrap gap-3">
         {filters.map((f) => (
           <button
@@ -110,6 +128,7 @@ export default function ApproverSubmissionsPage() {
                   <div className="font-bold text-gray-900 underline decoration-orange-500/30 decoration-2 underline-offset-4">
                     {sub.file_name}
                   </div>
+                  <div className="text-[10px] font-mono text-orange-600 mt-1 uppercase">{sub.tracking_number || 'TRACKING PENDING'}</div>
                   <div className="text-[10px] font-mono text-gray-400 mt-1 uppercase">LOGGED: {new Date(sub.created_at).toLocaleDateString()}</div>
                 </td>
                 <td className="p-5 text-xs font-black text-gray-700">{sub.profiles?.email ?? 'Unknown'}</td>
