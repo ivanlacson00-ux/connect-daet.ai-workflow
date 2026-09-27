@@ -37,6 +37,12 @@ export default function WorkflowLayout({
           .single();
         
         setRole(profile?.role || 'user');
+        const { count } = await supabase
+          .from('workflow_notifications')
+          .select('id', { count: 'exact', head: true })
+          .eq('recipient_id', user.id)
+          .is('read_at', null);
+        setHasUnread((count ?? 0) > 0);
       }
     };
     getUserInfo();
@@ -51,22 +57,16 @@ export default function WorkflowLayout({
     }
 
     const channel = supabase
-      .channel('sidebar-notifs')
+      .channel(`sidebar-notifs-${userId}`)
       .on(
         'postgres_changes',
         {
-          event: '*', 
+          event: 'INSERT',
           schema: 'public',
-          table: 'workflow_submissions',
+          table: 'workflow_notifications',
+          filter: `recipient_id=eq.${userId}`,
         },
-        (payload: any) => {
-          // Logic: Admin/Approver see all, User only sees their own
-          if (role === 'admin' || role === 'approver') {
-            setHasUnread(true);
-          } else if (payload.new && payload.new.user_id === userId) {
-            setHasUnread(true);
-          }
-        }
+        () => setHasUnread(true)
       )
       .subscribe();
 
@@ -101,6 +101,7 @@ export default function WorkflowLayout({
         { href: '/workflow/admin', label: 'Dashboard', icon: '⌬' },
         { href: '/workflow/admin/user_management', label: 'User Registry', icon: '☍' },
         { href: '/workflow/admin/submissions', label: 'File Submissions', icon: '▤' },
+        { href: '/workflow/admin/archive', label: 'Archive Registry', icon: '▥' },
         { href: '/workflow/admin/reports', label: 'Reports', icon: '▥' },
         { href: '/workflow/admin/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread },
       ];

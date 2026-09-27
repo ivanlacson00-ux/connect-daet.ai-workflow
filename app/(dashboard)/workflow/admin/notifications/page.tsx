@@ -12,24 +12,68 @@ export default function AdminNotificationsPage() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. Initial Fetch - Gets ALL submissions across the entire system
-  const fetchAllSubmissions = async () => {
+  const getNotificationStatus = (eventType: string, currentStatus: string) => {
+    switch (eventType) {
+      case 'SUBMITTED':
+        return 'pending';
+      case 'VERIFICATION_PASSED':
+        return 'pending_admin';
+      case 'RETURNED_FOR_CORRECTION':
+        return 'declined_by_approver';
+      case 'FINAL_APPROVAL':
+        return 'approved';
+      case 'FINAL_REJECTION':
+        return 'declined_by_admin';
+      case 'WORKFLOW_COMPLETED':
+        return 'completed';
+      default:
+        return currentStatus;
+    }
+  };
+
+  const fetchNotifications = async () => {
     const { data, error } = await supabase
-      .from('workflow_submissions')
-      .select('*')
-      .order('updated_at', { ascending: false })
-      .limit(30); // Higher limit for admin oversight
+      .from('workflow_notifications')
+      .select('*, workflow_submissions(*, profiles:user_id(email))')
+      .order('created_at', { ascending: false })
+      .limit(30);
 
     if (error) {
       console.error("Admin Fetch Error:", error.message);
     } else {
-      setNotifications(data || []);
+      const latestBySubmission = new Map<string, any>();
+      (data || []).forEach((notification) => {
+        if (!latestBySubmission.has(notification.submission_id)) {
+          latestBySubmission.set(notification.submission_id, {
+            ...notification.workflow_submissions,
+            id: notification.submission_id,
+            notification_id: notification.id,
+            updated_at: notification.created_at,
+            notification_title: notification.title,
+            notification_message: notification.message,
+            requester_email: notification.workflow_submissions?.profiles?.email,
+            notification_status: getNotificationStatus(
+              notification.event_type,
+              notification.workflow_submissions?.status
+            ),
+          });
+        }
+      });
+      setNotifications(Array.from(latestBySubmission.values()));
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase
+          .from('workflow_notifications')
+          .update({ read_at: new Date().toISOString() })
+          .eq('recipient_id', user.id)
+          .is('read_at', null);
+      }
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchAllSubmissions();
+    fetchNotifications();
 
     // 2. Realtime Subscription - Listens for ANY change in the table
     const channel = supabase
@@ -37,19 +81,11 @@ export default function AdminNotificationsPage() {
       .on(
         'postgres_changes',
         {
-          event: '*', // Listen for INSERTs and UPDATEs
+          event: 'INSERT',
           schema: 'public',
-          table: 'workflow_submissions',
+          table: 'workflow_notifications',
         },
-        (payload) => {
-          if (payload.eventType === 'INSERT') {
-            setNotifications((current) => [payload.new, ...current].slice(0, 30));
-          } else if (payload.eventType === 'UPDATE') {
-            setNotifications((current) =>
-              current.map((n) => (n.id === payload.new.id ? payload.new : n))
-            );
-          }
-        }
+        () => fetchNotifications()
       )
       .subscribe();
 
@@ -108,6 +144,9 @@ export default function AdminNotificationsPage() {
                       <span>//</span>
                       <span>{new Date(note.updated_at).toLocaleDateString()}</span>
                     </p>
+                    <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-red-600">
+                      {note.notification_title || note.event_type?.replace(/_/g, ' ')}
+                    </p>
                     <p className="font-mono text-[10px] font-bold tracking-wider text-blue-600">
                       Tracking: {note.tracking_number || 'Pending assignment'}
                     </p>
@@ -115,13 +154,13 @@ export default function AdminNotificationsPage() {
                       {note.file_name}
                     </h3>
                     <p className="text-xs text-zinc-500 italic mt-1 truncate max-w-md">
-                      Owner: {note.user_email || "System_User"} — {note.description || "No description provided."}
+                      Owner: {note.requester_email || note.user_email || "Requester unavailable"} — {note.notification_message || note.description || "No description provided."}
                     </p>
                   </div>
 
                   <div className="flex items-center gap-4">
-                    <div className={`px-4 py-1.5 border-2 font-black text-[10px] uppercase tracking-widest ${getStatusColor(note.status)}`}>
-                      {getStatusLabel(note.status)}
+                    <div className={`px-4 py-1.5 border-2 font-black text-[10px] uppercase tracking-widest ${getStatusColor(note.notification_status || note.status)}`}>
+                      {getStatusLabel(note.notification_status || note.status)}
                     </div>
                   </div>
                 </div>

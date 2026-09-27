@@ -50,7 +50,7 @@ export default function PendingPage() {
                 <tr key={sub.id} className="border-b last:border-0 hover:bg-gray-50">
                   <td className="py-3">
                     <span
-                      onClick={() => window.open(sub.file_url, '_blank')}
+                      onClick={() => window.open(`/api/workflow/files/${sub.id}?redirect=1`, '_blank')}
                       className="text-blue-600 underline font-medium cursor-pointer"
                     >
                       {sub.file_name}

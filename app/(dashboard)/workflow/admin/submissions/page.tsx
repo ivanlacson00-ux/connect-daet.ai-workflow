@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useSubmissions } from '@/hooks/useSubmissions';
 import Link from 'next/link';
+import { getWorkflowTiming, workflowTimingClasses } from '@/lib/workflow/timing';
 
 const fonts = {
   serif: "font-serif italic",
@@ -46,6 +47,10 @@ function StatusStamp({ status }: { status: string }) {
 export default function SubmissionsPage() {
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [fileTypeFilter, setFileTypeFilter] = useState('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const { submissions, loading } = useSubmissions();
 
   const filteredSubmissions = submissions.filter(sub => {
@@ -55,6 +60,12 @@ export default function SubmissionsPage() {
       || sub.tracking_number?.toLowerCase().includes(query)
       || sub.profiles?.email?.toLowerCase().includes(query);
     if (!matchesSearch) return false;
+    const createdDate = new Date(sub.created_at);
+    const matchesCategory = categoryFilter === 'all' || (sub.category || 'General') === categoryFilter;
+    const matchesFileType = fileTypeFilter === 'all' || sub.file_type === fileTypeFilter;
+    const matchesFromDate = !fromDate || createdDate >= new Date(`${fromDate}T00:00:00`);
+    const matchesToDate = !toDate || createdDate <= new Date(`${toDate}T23:59:59.999`);
+    if (!matchesCategory || !matchesFileType || !matchesFromDate || !matchesToDate) return false;
 
     const s = sub.status.toLowerCase();
     if (filter === 'all') return true;
@@ -101,6 +112,23 @@ export default function SubmissionsPage() {
           placeholder="DAET-2026-000001, document name, or requester email"
           className="w-full border-2 border-gray-900 bg-white px-5 py-4 font-mono text-sm outline-none focus:border-blue-600"
         />
+        <div className="grid grid-cols-1 gap-3 pt-3 md:grid-cols-4">
+          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="border-2 border-gray-900 bg-white p-3 font-mono text-xs">
+            <option value="all">All Categories</option>
+            <option value="General">General</option>
+            <option value="Tourism">Tourism</option>
+            <option value="Events">Events</option>
+            <option value="Marketing">Marketing</option>
+          </select>
+          <select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)} className="border-2 border-gray-900 bg-white p-3 font-mono text-xs">
+            <option value="all">All File Types</option>
+            {[...new Set(submissions.map((submission) => submission.file_type).filter(Boolean))].map((fileType) => (
+              <option key={fileType} value={fileType}>{fileType}</option>
+            ))}
+          </select>
+          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="From upload date" className="border-2 border-gray-900 bg-white p-3 font-mono text-xs" />
+          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="To upload date" className="border-2 border-gray-900 bg-white p-3 font-mono text-xs" />
+        </div>
         <label className={`${fonts.mono} font-bold text-gray-900`}>Filter_Database_By_Status</label>
         <div className="flex flex-wrap gap-3">
           {filters.map((f) => (
@@ -166,11 +194,27 @@ export default function SubmissionsPage() {
                     </td>
                     <td className="p-5 text-center">
                       <StatusStamp status={sub.status} />
+                      {(() => {
+                        const timing = getWorkflowTiming(sub);
+                        return (
+                          <div className={`mt-2 inline-flex border px-2 py-1 font-mono text-[9px] uppercase ${workflowTimingClasses(timing.state)}`}>
+                            {timing.label}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="p-5">
                       <div className={`${fonts.mono} text-gray-600`}>
                         {new Date(sub.created_at).toLocaleDateString()}
                       </div>
+                      {(() => {
+                        const timing = getWorkflowTiming(sub);
+                        return timing.responsible ? (
+                          <div className="mt-1 font-mono text-[9px] uppercase text-gray-500">
+                            Responsible: {timing.responsible}
+                          </div>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="p-5 text-right">
                       <Link 

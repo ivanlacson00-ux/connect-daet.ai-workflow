@@ -12,18 +12,62 @@ export default function NotificationsPage() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const getNotificationStatus = (eventType: string, currentStatus: string) => {
+    switch (eventType) {
+      case 'SUBMITTED':
+        return 'pending';
+      case 'VERIFICATION_PASSED':
+        return 'pending_admin';
+      case 'RETURNED_FOR_CORRECTION':
+        return 'declined_by_approver';
+      case 'FINAL_APPROVAL':
+        return 'approved';
+      case 'FINAL_REJECTION':
+        return 'declined_by_admin';
+      case 'WORKFLOW_COMPLETED':
+        return 'completed';
+      default:
+        return currentStatus;
+    }
+  };
+
   const fetchNotifications = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     const { data } = await supabase
-      .from('workflow_submissions')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('updated_at', { ascending: false })
+      .from('workflow_notifications')
+      .select('*, workflow_submissions(*, profiles:user_id(email))')
+      .eq('recipient_id', user.id)
+      .order('created_at', { ascending: false })
       .limit(20);
 
-    if (data) setNotifications(data);
+    if (data) {
+      const latestBySubmission = new Map<string, any>();
+      data.forEach((notification) => {
+        if (!latestBySubmission.has(notification.submission_id)) {
+          latestBySubmission.set(notification.submission_id, {
+            ...notification.workflow_submissions,
+            id: notification.submission_id,
+            notification_id: notification.id,
+            notification_title: notification.title,
+            notification_message: notification.message,
+            requester_email: notification.workflow_submissions?.profiles?.email,
+            notification_status: getNotificationStatus(
+              notification.event_type,
+              notification.workflow_submissions?.status
+            ),
+            updated_at: notification.created_at,
+          });
+        }
+      });
+      setNotifications(Array.from(latestBySubmission.values()));
+      await supabase
+        .from('workflow_notifications')
+        .update({ read_at: new Date().toISOString() })
+        .eq('recipient_id', user.id)
+        .is('read_at', null);
+    }
     setLoading(false);
   };
 
@@ -35,15 +79,11 @@ export default function NotificationsPage() {
       .on(
         'postgres_changes',
         {
-          event: 'UPDATE',
+          event: 'INSERT',
           schema: 'public',
-          table: 'workflow_submissions',
+          table: 'workflow_notifications',
         },
-        (payload) => {
-          setNotifications((current) =>
-            current.map((n) => (n.id === payload.new.id ? payload.new : n))
-          );
-        }
+        () => fetchNotifications()
       )
       .subscribe();
 
@@ -97,6 +137,9 @@ export default function NotificationsPage() {
                     <p className={`${fonts.mono} text-zinc-400 mb-1`}>
                       Ref: {note.id.split('-')[0]} // {new Date(note.updated_at).toLocaleDateString()}
                     </p>
+                    <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-blue-600">
+                      {note.notification_title || note.event_type?.replace(/_/g, ' ')}
+                    </p>
                     <p className="font-mono text-[10px] font-bold tracking-wider text-blue-600">
                       Tracking: {note.tracking_number || 'Pending assignment'}
                     </p>
@@ -109,8 +152,8 @@ export default function NotificationsPage() {
                   </div>
 
                   <div className="flex items-center gap-4">
-                    <div className={`px-4 py-1.5 border-2 font-black text-[10px] uppercase tracking-widest ${getStatusColor(note.status)}`}>
-                      {getStatusLabel(note.status)}
+                    <div className={`px-4 py-1.5 border-2 font-black text-[10px] uppercase tracking-widest ${getStatusColor(note.notification_status || note.status)}`}>
+                      {getStatusLabel(note.notification_status || note.status)}
                     </div>
                   </div>
                 </div>

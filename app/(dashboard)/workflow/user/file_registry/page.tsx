@@ -30,6 +30,10 @@ export default function UserFileRegistry() {
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('ALL');
+  const [fileTypeFilter, setFileTypeFilter] = useState('ALL');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const supabase = createClient();
 
   useEffect(() => {
@@ -56,6 +60,11 @@ export default function UserFileRegistry() {
     const matchesSearch = !query
       || title.toLowerCase().includes(query)
       || trackingNumber.toLowerCase().includes(query);
+    const createdDate = new Date(file.created_at);
+    const matchesCategory = categoryFilter === 'ALL' || (file.category || 'General') === categoryFilter;
+    const matchesFileType = fileTypeFilter === 'ALL' || file.file_type === fileTypeFilter;
+    const matchesFromDate = !fromDate || createdDate >= new Date(`${fromDate}T00:00:00`);
+    const matchesToDate = !toDate || createdDate <= new Date(`${toDate}T23:59:59.999`);
     
     let matchesFilter = true;
     if (activeFilter === 'PENDING') {
@@ -66,7 +75,7 @@ export default function UserFileRegistry() {
       matchesFilter = file.status.includes('declined') || file.status.includes('rejected');
     }
 
-    return matchesSearch && matchesFilter;
+    return matchesSearch && matchesFilter && matchesCategory && matchesFileType && matchesFromDate && matchesToDate;
   });
 
   return (
@@ -113,6 +122,23 @@ export default function UserFileRegistry() {
                 {f}
               </button>
             ))}
+          </div>
+          <div className="lg:col-span-12 grid grid-cols-1 gap-3 md:grid-cols-4">
+            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="border-2 border-blue-600 bg-white p-3 font-mono text-xs">
+              <option value="ALL">All Categories</option>
+              <option value="General">General</option>
+              <option value="Tourism">Tourism</option>
+              <option value="Events">Events</option>
+              <option value="Marketing">Marketing</option>
+            </select>
+            <select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)} className="border-2 border-blue-600 bg-white p-3 font-mono text-xs">
+              <option value="ALL">All File Types</option>
+              {[...new Set(submissions.map((submission) => submission.file_type).filter(Boolean))].map((fileType) => (
+                <option key={fileType} value={fileType}>{fileType}</option>
+              ))}
+            </select>
+            <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="From upload date" className="border-2 border-blue-600 bg-white p-3 font-mono text-xs" />
+            <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="To upload date" className="border-2 border-blue-600 bg-white p-3 font-mono text-xs" />
           </div>
         </div>
 
@@ -176,7 +202,7 @@ export default function UserFileRegistry() {
                     
                     <div className="flex items-center gap-2">
                       <button 
-                        onClick={() => window.open(file.file_url, '_blank')}
+                        onClick={() => window.open(`/api/workflow/files/${file.id}?redirect=1`, '_blank')}
                         className="p-3 border-2 border-blue-600 text-blue-600 hover:bg-blue-600 hover:text-white transition-all shadow-[2px_2px_0px_0px_rgba(37,99,235,0.2)] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
                         title="Quick Preview"
                       >

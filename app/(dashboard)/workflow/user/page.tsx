@@ -245,7 +245,7 @@ export default function WorkflowDashboard() {
             </div>
             <div className="flex items-center gap-6">
               <button 
-                onClick={() => handleDownload(previewFile.file_url, previewFile.file_name)} 
+                onClick={() => handleDownload(`/api/workflow/files/${previewFile.id}?redirect=1`, previewFile.file_name)}
                 className={`${fonts.mono} text-white/60 hover:text-blue-400 hover:border-blue-400 text-[11px] border border-white/20 px-6 py-2 transition-all font-bold`}
               >
                 [ Download_Source ]
@@ -263,7 +263,7 @@ export default function WorkflowDashboard() {
             <div className="w-full h-full max-w-6xl bg-white border-4 border-black shadow-2xl relative overflow-hidden flex items-center justify-center">
                {isImage(previewFile.file_type) ? (
                  <img 
-                   src={previewFile.file_url} 
+                   src={`/api/workflow/files/${previewFile.id}?redirect=1`}
                    alt="Preview" 
                    className="max-w-full max-h-full object-contain p-8 animate-in zoom-in-95 duration-500" 
                  />
@@ -271,7 +271,7 @@ export default function WorkflowDashboard() {
                  <iframe 
                    title="Document Preview"
                    className="w-full h-full border-none" 
-                   src={`https://docs.google.com/gview?url=${encodeURIComponent(previewFile.file_url)}&embedded=true`} 
+                   src={`/api/workflow/files/${previewFile.id}?redirect=1`}
                  />
                )}
             </div>

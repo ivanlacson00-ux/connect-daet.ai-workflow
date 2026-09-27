@@ -20,6 +20,8 @@ export default function AdminManagePage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [adminComment, setAdminComment] = useState('');
+  const [archiveUpdating, setArchiveUpdating] = useState(false);
+  const [retentionDate, setRetentionDate] = useState('');
 
   const fetchDetails = useCallback(async () => {
     setLoading(true);
@@ -32,6 +34,7 @@ export default function AdminManagePage() {
     if (submission) {
       setSub(submission);
       setAdminComment(submission.admin_comments || '');
+      setRetentionDate(submission.retention_until?.slice(0, 10) || '');
       
       const { data: profile } = await supabase
         .from('profiles')
@@ -113,6 +116,24 @@ export default function AdminManagePage() {
     setUpdating(false);
   };
 
+  const handleArchive = async () => {
+    setArchiveUpdating(true);
+    const shouldArchive = !sub.archived_at;
+    const { data, error } = await supabase.rpc('set_workflow_submission_archive', {
+      target_submission_id: id,
+      should_archive: shouldArchive,
+      retention_date: shouldArchive && retentionDate ? new Date(`${retentionDate}T23:59:59.999Z`).toISOString() : null,
+    });
+
+    if (error) {
+      console.error('Archive update failed:', error.message);
+    } else if (data) {
+      setSub(data);
+      await fetchDetails();
+    }
+    setArchiveUpdating(false);
+  };
+
   if (loading) return <div className="p-10 font-mono text-blue-600 animate-pulse uppercase tracking-widest">Initialising Secure Connection...</div>;
   if (!sub) return <div className="p-10 font-mono text-red-500">404: RESOURCE_NOT_FOUND</div>;
 
@@ -156,6 +177,33 @@ export default function AdminManagePage() {
               <p><span className="text-gray-400">Status:</span> {statusConfig.label}</p>
               <p><span className="text-gray-400">Submitted:</span> {new Date(sub.created_at).toLocaleString()}</p>
             </div>
+          </section>
+
+          <section className="border-2 border-black bg-white p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+            <p className={`${fonts.mono} text-blue-600 mb-3`}>Secure_Archive</p>
+            <p className="text-xs text-zinc-600 mb-4">
+              {sub.archived_at
+                ? `Archived ${new Date(sub.archived_at).toLocaleString()}`
+                : 'This record is active and visible to authorized workflow users.'}
+            </p>
+            {!sub.archived_at && (
+              <label className={`${fonts.mono} block text-gray-400 mb-2`}>
+                Retention_Until
+                <input
+                  type="date"
+                  value={retentionDate}
+                  onChange={(event) => setRetentionDate(event.target.value)}
+                  className="mt-2 w-full border-2 border-black bg-white p-3 font-mono text-xs normal-case tracking-normal"
+                />
+              </label>
+            )}
+            <button
+              onClick={handleArchive}
+              disabled={archiveUpdating}
+              className="w-full border-2 border-black bg-white py-3 font-mono text-[10px] font-black uppercase shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] disabled:opacity-50"
+            >
+              {archiveUpdating ? 'UPDATING_ARCHIVE...' : sub.archived_at ? 'Restore_From_Archive' : 'Archive_Record'}
+            </button>
           </section>
 
           {/* Submission Context (Category & Description) */}
@@ -280,10 +328,10 @@ export default function AdminManagePage() {
         <div className="flex-1 bg-white border-[4px] border-black shadow-[30px_30px_0px_0px_rgba(0,0,0,0.5)] overflow-hidden flex items-center justify-center relative">
           {sub.file_name.match(/\.(jpg|jpeg|png|webp|gif|svg)$/i) ? (
             <div className="p-12 w-full h-full flex items-center justify-center">
-              <img src={sub.file_url} alt="Secure Preview" className="max-w-full max-h-full object-contain shadow-2xl" />
+              <img src={`/api/workflow/files/${sub.id}?redirect=1`} alt="Secure Preview" className="max-w-full max-h-full object-contain shadow-2xl" />
             </div>
           ) : (
-            <iframe src={`https://docs.google.com/gview?url=${encodeURIComponent(sub.file_url)}&embedded=true`} className="w-full h-full border-none" />
+            <iframe src={`/api/workflow/files/${sub.id}?redirect=1`} className="w-full h-full border-none" />
           )}
           
           {/* Subtle Watermark Overlay */}

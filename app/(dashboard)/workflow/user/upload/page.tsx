@@ -69,10 +69,6 @@ export default function UploadPage() {
 
       if (uploadError) throw uploadError;
 
-      const { data: { publicUrl } } = supabase.storage
-        .from('workflow_uploads')
-        .getPublicUrl(filePath);
-
       const fileNameWithExt = title.toLowerCase().endsWith(`.${fileExt?.toLowerCase()}`) 
         ? title 
         : `${title}.${fileExt}`;
@@ -82,7 +78,8 @@ export default function UploadPage() {
         .from('workflow_submissions')
         .insert({
           user_id: user.id,
-          file_url: publicUrl,
+          file_url: '',
+          file_path: filePath,
           file_name: fileNameWithExt, 
           file_size: file.size,
           file_type: file.type,
