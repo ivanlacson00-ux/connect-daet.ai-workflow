@@ -64,6 +64,8 @@ export default function AdminManagePage() {
         return { label: 'PENDING_ADMIN', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
       case 'approved':
         return { label: 'APPROVED', classes: 'border-2 border-blue-600 text-blue-600 bg-white' };
+      case 'completed':
+        return { label: 'COMPLETED', classes: 'border-2 border-green-600 text-green-600 bg-green-50' };
       case 'declined_by_approver':
       case 'declined_by_admin':
         return { label: 'REJECTED', classes: 'border-2 border-red-600 text-red-600 bg-red-50' };
@@ -77,19 +79,25 @@ export default function AdminManagePage() {
       case 'STAGE_1_AUTHORIZED': return 'APPROVED BY';
       case 'FINAL_AUTHORIZATION': return 'FINAL APPROVAL';
       case 'FINAL_REJECTION': return 'REJECTED BY';
+      case 'VERIFICATION_PASSED': return 'VERIFICATION PASSED';
+      case 'RETURNED_FOR_CORRECTION': return 'RETURNED FOR CORRECTION';
+      case 'WORKFLOW_COMPLETED': return 'WORKFLOW COMPLETED';
       case 'SUBMITTED': return 'SUBMITTED BY';
       default: return 'ACTION BY';
     }
   };
 
-  const handleAdminAction = async (decision: 'approved' | 'declined') => {
-    if (sub.status !== 'pending_admin') return;
+  const handleAdminAction = async (decision: 'approved' | 'declined' | 'completed') => {
+    if (decision === 'completed' && sub.status !== 'approved') return;
+    if (decision !== 'completed' && sub.status !== 'pending_admin') return;
 
     // Requirement check removed here to allow rejections without notes
     setUpdating(true);
-    const nextStatus = decision === 'approved' ? 'approved' : 'declined_by_admin';
-    const { data: { user } } = await supabase.auth.getUser();
-
+    const nextStatus = decision === 'approved'
+      ? 'approved'
+      : decision === 'declined'
+        ? 'declined_by_admin'
+        : 'completed';
     const { error: updateError } = await supabase
       .from('workflow_submissions')
       .update({ 
@@ -100,14 +108,6 @@ export default function AdminManagePage() {
       .eq('id', id);
 
     if (!updateError) {
-      await supabase.from('workflow_audit_logs').insert({
-        submission_id: id,
-        action_by: user?.id,
-        action_type: decision === 'approved' ? 'FINAL_AUTHORIZATION' : 'FINAL_REJECTION',
-        old_status: sub.status,
-        new_status: nextStatus,
-        comments: adminComment
-      });
       await fetchDetails();
     }
     setUpdating(false);
@@ -117,7 +117,8 @@ export default function AdminManagePage() {
   if (!sub) return <div className="p-10 font-mono text-red-500">404: RESOURCE_NOT_FOUND</div>;
 
   const statusConfig = getStatusStyles(sub.status);
-  const isFinalized = sub.status === 'approved' || sub.status.includes('declined');
+  const isFinalized = sub.status === 'completed' || sub.status.includes('declined');
+  const isApproved = sub.status === 'approved';
 
   return (
     <div className="h-screen bg-[#fafafa] flex flex-col lg:flex-row overflow-hidden border-t-[6px] border-black">
@@ -138,8 +139,22 @@ export default function AdminManagePage() {
               <span className="bg-black text-white text-[9px] font-black px-2 py-0.5 tracking-tighter">MASTER_REGISTRY // STAGE_02</span>
             </div>
             <h1 className="text-5xl font-serif italic leading-[0.8] mb-8 break-words tracking-tighter text-zinc-900">{sub.file_name}</h1>
+            <div className="mb-4">
+              <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Tracking_Number</p>
+              <p className="font-mono text-sm font-black tracking-wider text-blue-600">{sub.tracking_number || 'Pending assignment'}</p>
+            </div>
             <div className={`inline-block px-4 py-1.5 font-black text-[11px] tracking-widest uppercase ${statusConfig.classes}`}>
               {statusConfig.label}
+            </div>
+          </section>
+
+          <section className="receipt-print border-2 border-black bg-white p-6">
+            <p className={`${fonts.mono} text-blue-600 mb-3`}>Submission_Receipt</p>
+            <div className="space-y-2 font-mono text-[11px]">
+              <p><span className="text-gray-400">Tracking_Number:</span> {sub.tracking_number || 'Pending assignment'}</p>
+              <p><span className="text-gray-400">Document:</span> {sub.file_name}</p>
+              <p><span className="text-gray-400">Status:</span> {statusConfig.label}</p>
+              <p><span className="text-gray-400">Submitted:</span> {new Date(sub.created_at).toLocaleString()}</p>
             </div>
           </section>
 
@@ -214,7 +229,7 @@ export default function AdminManagePage() {
         </div>
 
         {/* Validation Footer */}
-        {!isFinalized && (
+        {!isFinalized && !isApproved && (
           <div className="p-10 border-t-2 border-black bg-white">
             <div className="mb-6">
               <label className={`${fonts.mono} mb-3 block font-black text-black`}>Final Validation Notes</label>
@@ -233,6 +248,23 @@ export default function AdminManagePage() {
                 Final Decline
               </button>
             </div>
+          </div>
+        )}
+        {isApproved && (
+          <div className="no-print p-10 border-t-2 border-black bg-white">
+            <button onClick={() => handleAdminAction('completed')} disabled={updating} className="w-full bg-green-600 text-white py-4 font-black text-[10px] uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all disabled:opacity-50">
+              {updating ? 'PROCESSING' : 'Mark as Completed'}
+            </button>
+          </div>
+        )}
+        {isFinalized && (
+          <div className="no-print p-10 border-t-2 border-black bg-white">
+            <button
+              onClick={() => window.print()}
+              className={`${fonts.mono} w-full py-3 border-2 border-blue-600 text-blue-600 font-black text-[10px] tracking-[0.2em] hover:bg-blue-50 transition-all`}
+            >
+              Print_Submission_Receipt
+            </button>
           </div>
         )}
       </aside>
@@ -262,6 +294,12 @@ export default function AdminManagePage() {
       </main>
 
       <style jsx global>{`
+        @media print {
+          body * { visibility: hidden; }
+          .receipt-print, .receipt-print * { visibility: visible; }
+          .receipt-print { position: absolute; inset: 0; margin: 0; box-shadow: none; }
+          .no-print { display: none !important; }
+        }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #fafafa; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #000; }

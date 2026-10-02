@@ -101,6 +101,7 @@ export default function WorkflowLayout({
         { href: '/workflow/admin', label: 'Dashboard', icon: '⌬' },
         { href: '/workflow/admin/user_management', label: 'User Registry', icon: '☍' },
         { href: '/workflow/admin/submissions', label: 'File Submissions', icon: '▤' },
+        { href: '/workflow/admin/reports', label: 'Reports', icon: '▥' },
         { href: '/workflow/admin/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread },
       ];
     }
