@@ -12,24 +12,69 @@ export default function ApproverNotificationsPage() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. Initial Fetch - Focuses on PENDING items that need review
-  const fetchPendingSubmissions = async () => {
+  const getNotificationStatus = (eventType: string, currentStatus: string) => {
+    switch (eventType) {
+      case 'SUBMITTED':
+        return 'pending';
+      case 'VERIFICATION_PASSED':
+        return 'pending_admin';
+      case 'RETURNED_FOR_CORRECTION':
+        return 'declined_by_approver';
+      case 'FINAL_APPROVAL':
+        return 'approved';
+      case 'FINAL_REJECTION':
+        return 'declined_by_admin';
+      case 'WORKFLOW_COMPLETED':
+        return 'completed';
+      default:
+        return currentStatus;
+    }
+  };
+
+  const fetchNotifications = async () => {
     const { data, error } = await supabase
-      .from('workflow_submissions')
-      .select('*')
-      .in('status', ['pending', 'pending_approver']) // Items under verification
-      .order('updated_at', { ascending: false });
+      .from('workflow_notifications')
+      .select('*, workflow_submissions(*, profiles:user_id(email))')
+      .eq('recipient_id', (await supabase.auth.getUser()).data.user?.id || '')
+      .order('created_at', { ascending: false })
+      .limit(30);
 
     if (error) {
       console.error("Approver Fetch Error:", error.message);
     } else {
-      setNotifications(data || []);
+      const latestBySubmission = new Map<string, any>();
+      (data || []).forEach((notification) => {
+        if (!latestBySubmission.has(notification.submission_id)) {
+          latestBySubmission.set(notification.submission_id, {
+            ...notification.workflow_submissions,
+            id: notification.submission_id,
+            notification_id: notification.id,
+            updated_at: notification.created_at,
+            notification_title: notification.title,
+            notification_message: notification.message,
+            requester_email: notification.workflow_submissions?.profiles?.email,
+            notification_status: getNotificationStatus(
+              notification.event_type,
+              notification.workflow_submissions?.status
+            ),
+          });
+        }
+      });
+      setNotifications(Array.from(latestBySubmission.values()));
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase
+          .from('workflow_notifications')
+          .update({ read_at: new Date().toISOString() })
+          .eq('recipient_id', user.id)
+          .is('read_at', null);
+      }
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchPendingSubmissions();
+    fetchNotifications();
 
     // 2. Realtime Subscription
     // Listen for new insertions (new tasks) or status changes
@@ -38,24 +83,11 @@ export default function ApproverNotificationsPage() {
       .on(
         'postgres_changes',
         {
-          event: '*', 
+          event: 'INSERT',
           schema: 'public',
-          table: 'workflow_submissions',
+          table: 'workflow_notifications',
         },
-        (payload) => {
-          if (payload.eventType === 'INSERT' && payload.new.status === 'pending') {
-            setNotifications((current) => [payload.new, ...current]);
-          } else if (payload.eventType === 'UPDATE') {
-            // If an item is no longer pending (e.g., another approver handled it), remove it
-            if (payload.new.status !== 'pending') {
-              setNotifications((current) => current.filter((n) => n.id !== payload.new.id));
-            } else {
-              setNotifications((current) =>
-                current.map((n) => (n.id === payload.new.id ? payload.new : n))
-              );
-            }
-          }
-        }
+        () => fetchNotifications()
       )
       .subscribe();
 
@@ -98,6 +130,9 @@ export default function ApproverNotificationsPage() {
                       <span>//</span>
                       <span>{new Date(note.updated_at).toLocaleDateString()}</span>
                     </p>
+                    <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-blue-600">
+                      {note.notification_title || note.event_type?.replace(/_/g, ' ')}
+                    </p>
                     <p className="font-mono text-[10px] font-bold tracking-wider text-blue-600">
                       Tracking: {note.tracking_number || 'Pending assignment'}
                     </p>
@@ -105,13 +140,15 @@ export default function ApproverNotificationsPage() {
                       {note.file_name}
                     </h3>
                     <p className="text-xs text-zinc-500 italic mt-1 truncate max-w-md">
-                      Submitted by: {note.user_email || "System_User"}
+                      Submitted by: {note.requester_email || note.user_email || "Requester unavailable"}
                     </p>
                   </div>
 
                   <div className="flex items-center gap-4">
                     <div className="px-4 py-1.5 border-2 border-blue-600 text-blue-600 bg-blue-50 font-black text-[10px] uppercase tracking-widest animate-pulse">
-                      Awaiting Review
+                      {getNotificationStatus(note.event_type, note.status) === 'pending'
+                        ? 'Awaiting Review'
+                        : 'Event Recorded'}
                     </div>
                   </div>
                 </div>

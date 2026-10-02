@@ -176,7 +176,7 @@ export default function UserFileDetail() {
             Print_Submission_Receipt
           </button>
           <button 
-            onClick={() => window.open(sub.file_url, '_blank')}
+            onClick={() => window.open(`/api/workflow/files/${sub.id}?redirect=1`, '_blank')}
             className={`${fonts.mono} w-full py-4 bg-black text-white font-black text-[10px] tracking-[0.2em] shadow-[4px_4px_0px_0px_rgba(37,99,235,1)] hover:bg-blue-600 active:shadow-none active:translate-x-1 active:translate-y-1 transition-all`}
           >
             Download_Original_Manifest
@@ -196,14 +196,14 @@ export default function UserFileDetail() {
           {isImage(sub.file_type) ? (
             <div className="p-12 w-full h-full flex items-center justify-center">
               <img 
-                src={sub.file_url} 
+                src={`/api/workflow/files/${sub.id}?redirect=1`}
                 alt="Asset Preview" 
                 className="max-w-full max-h-full object-contain shadow-2xl animate-in zoom-in-95 duration-500" 
               />
             </div>
           ) : (
             <iframe 
-              src={`https://docs.google.com/gview?url=${encodeURIComponent(sub.file_url)}&embedded=true`} 
+              src={`/api/workflow/files/${sub.id}?redirect=1`}
               className="w-full h-full border-none" 
             />
           )}

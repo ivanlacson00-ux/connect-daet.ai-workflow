@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useSubmissions } from '@/hooks/useSubmissions';
 import Link from 'next/link';
+import { getWorkflowTiming, workflowTimingClasses } from '@/lib/workflow/timing';
 
 const fonts = {
   serif: "font-serif italic",
@@ -38,6 +39,10 @@ function StatusStamp({ status }: { status: string }) {
 export default function ApproverSubmissionsPage() {
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [fileTypeFilter, setFileTypeFilter] = useState('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const { submissions, loading } = useSubmissions();
 
   const filteredSubmissions = submissions.filter(sub => {
@@ -46,6 +51,12 @@ export default function ApproverSubmissionsPage() {
       || sub.file_name.toLowerCase().includes(query)
       || sub.tracking_number?.toLowerCase().includes(query);
     if (!matchesSearch) return false;
+    const createdDate = new Date(sub.created_at);
+    const matchesCategory = categoryFilter === 'all' || (sub.category || 'General') === categoryFilter;
+    const matchesFileType = fileTypeFilter === 'all' || sub.file_type === fileTypeFilter;
+    const matchesFromDate = !fromDate || createdDate >= new Date(`${fromDate}T00:00:00`);
+    const matchesToDate = !toDate || createdDate <= new Date(`${toDate}T23:59:59.999`);
+    if (!matchesCategory || !matchesFileType || !matchesFromDate || !matchesToDate) return false;
 
     const s = sub.status.toLowerCase();
     if (filter === 'all') return true;
@@ -89,6 +100,23 @@ export default function ApproverSubmissionsPage() {
           placeholder="DAET-2026-000001 or document name"
           className="w-full border-2 border-gray-900 bg-white px-5 py-4 font-mono text-sm outline-none focus:border-orange-500"
         />
+        <div className="grid grid-cols-1 gap-3 pt-3 md:grid-cols-4">
+          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="border-2 border-gray-900 bg-white p-3 font-mono text-xs">
+            <option value="all">All Categories</option>
+            <option value="General">General</option>
+            <option value="Tourism">Tourism</option>
+            <option value="Events">Events</option>
+            <option value="Marketing">Marketing</option>
+          </select>
+          <select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)} className="border-2 border-gray-900 bg-white p-3 font-mono text-xs">
+            <option value="all">All File Types</option>
+            {[...new Set(submissions.map((submission) => submission.file_type).filter(Boolean))].map((fileType) => (
+              <option key={fileType} value={fileType}>{fileType}</option>
+            ))}
+          </select>
+          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="From upload date" className="border-2 border-gray-900 bg-white p-3 font-mono text-xs" />
+          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="To upload date" className="border-2 border-gray-900 bg-white p-3 font-mono text-xs" />
+        </div>
       </div>
       <div className="flex flex-wrap gap-3">
         {filters.map((f) => (
@@ -132,7 +160,17 @@ export default function ApproverSubmissionsPage() {
                   <div className="text-[10px] font-mono text-gray-400 mt-1 uppercase">LOGGED: {new Date(sub.created_at).toLocaleDateString()}</div>
                 </td>
                 <td className="p-5 text-xs font-black text-gray-700">{sub.profiles?.email ?? 'Unknown'}</td>
-                <td className="p-5 text-center"><StatusStamp status={sub.status} /></td>
+                <td className="p-5 text-center">
+                  <StatusStamp status={sub.status} />
+                  {(() => {
+                    const timing = getWorkflowTiming(sub);
+                    return (
+                      <div className={`mt-2 inline-flex border px-2 py-1 font-mono text-[9px] uppercase ${workflowTimingClasses(timing.state)}`}>
+                        {timing.label}
+                      </div>
+                    );
+                  })()}
+                </td>
                 <td className="p-5 text-right">
                   <Link 
                     href={`/workflow/approver/file_management/${sub.id}`} 

@@ -198,7 +198,7 @@ export default function AdminDashboard() {
                     <td className="p-5 text-right">
                       <div className="flex justify-end gap-2">
                         <button 
-                          onClick={() => setPreviewFile({ url: sub.file_url, name: sub.file_name })}
+                          onClick={() => setPreviewFile({ url: `/api/workflow/files/${sub.id}?redirect=1`, name: sub.file_name })}
                           className="p-2 border-2 border-gray-900 hover:bg-blue-600 hover:text-white transition-all bg-white"
                         >
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -235,7 +235,7 @@ export default function AdminDashboard() {
             {isImage(previewFile.name) ? (
               <img src={previewFile.url} alt="Preview" className="max-w-full max-h-full object-contain p-8 animate-in zoom-in-95" />
             ) : (
-              <iframe className="w-full h-full border-none bg-white" src={`https://docs.google.com/gview?url=${encodeURIComponent(previewFile.url)}&embedded=true`} />
+              <iframe className="w-full h-full border-none bg-white" src={previewFile.url} />
             )}
           </div>
         </div>

@@ -251,10 +251,10 @@ export default function ApproverManagePage() {
         <div className="flex-1 bg-white border-[4px] border-black shadow-[30px_30px_0px_0px_rgba(0,0,0,0.5)] overflow-hidden flex items-center justify-center relative">
           {sub.file_name.match(/\.(jpg|jpeg|png|webp|gif|svg)$/i) ? (
             <div className="p-12 w-full h-full flex items-center justify-center">
-              <img src={sub.file_url} alt="Preview" className="max-w-full max-h-full object-contain shadow-2xl" />
+              <img src={`/api/workflow/files/${sub.id}?redirect=1`} alt="Preview" className="max-w-full max-h-full object-contain shadow-2xl" />
             </div>
           ) : (
-            <iframe src={`https://docs.google.com/gview?url=${encodeURIComponent(sub.file_url)}&embedded=true`} className="w-full h-full border-none" />
+            <iframe src={`/api/workflow/files/${sub.id}?redirect=1`} className="w-full h-full border-none" />
           )}
           <div className="absolute bottom-8 right-8 pointer-events-none opacity-20">
             <span className="text-[60px] font-black text-blue-600 select-none tracking-tighter uppercase leading-none">Connect<br/>Registry</span>
