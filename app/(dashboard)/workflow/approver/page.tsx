@@ -12,6 +12,7 @@ const fonts = {
 
 interface Submission {
   id: string | number;
+  tracking_number: string;
   file_name: string;
   file_url: string;
   status: string;
@@ -39,6 +40,11 @@ function StatusStamp({ status }: { status: string }) {
         return { 
           label: 'APPROVED', 
           styles: "text-blue-700 bg-blue-50 border-blue-400" 
+        };
+      case 'completed':
+        return {
+          label: 'COMPLETED',
+          styles: "text-green-700 bg-green-50 border-green-400"
         };
       case 'declined_by_approver':
       case 'declined_by_admin':
@@ -137,7 +143,7 @@ export default function ApproverDashboard() {
                 <div className="flex flex-col md:flex-row justify-between items-start gap-8 relative z-10">
                   <div className="space-y-4">
                     <div>
-                      <div className={`${fonts.mono} text-blue-500 mb-1`}>Ref_ID: {String(sub.id).slice(0,8)}</div>
+                      <div className={`${fonts.mono} text-blue-500 mb-1`}>Tracking: {sub.tracking_number || 'Pending assignment'}</div>
                       <h3 className={`${fonts.serif} text-4xl text-gray-900 group-hover:text-blue-600 transition-colors`}>
                         {sub.file_name || "Untitled_File"}
                       </h3>

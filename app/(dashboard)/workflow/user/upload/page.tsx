@@ -71,16 +71,12 @@ export default function UploadPage() {
       if (uploadError) throw uploadError;
       uploadedFilePath = filePath;
 
-      const { data: { publicUrl } } = supabase.storage
-        .from('workflow_uploads')
-        .getPublicUrl(filePath);
-
       const fileNameWithExt = title.toLowerCase().endsWith(`.${fileExt?.toLowerCase()}`) 
         ? title 
         : `${title}.${fileExt}`;
 
       // 4. Insert Record into Database
-      const { error: dbError } = await supabase
+      const { data: submission, error: dbError } = await supabase
         .from('workflow_submissions')
         .insert({
           user_id: user.id,
@@ -92,12 +88,17 @@ export default function UploadPage() {
           category: category,
           description: description,
           status: 'pending'
-        });
+        })
+        .select('tracking_number')
+        .single();
 
       if (dbError) throw dbError;
       uploadedFilePath = null;
 
-      setMessage({ text: 'Data Logged Successfully. Redirecting...', type: 'success' });
+      setMessage({
+        text: `Data Logged Successfully. Tracking Number: ${submission.tracking_number}. Redirecting...`,
+        type: 'success'
+      });
       setTimeout(() => router.push('/workflow/user'), 1500);
 
     } catch (error: unknown) {

@@ -13,6 +13,7 @@ const fonts = {
 
 interface Submission {
   id: string;
+  tracking_number: string;
   file_name: string;
   file_url: string;
   file_path?: string | null;

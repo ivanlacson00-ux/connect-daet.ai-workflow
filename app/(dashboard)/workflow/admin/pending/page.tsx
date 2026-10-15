@@ -9,6 +9,7 @@ export default function PendingPage() {
   const [declineComment, setDeclineComment] = useState('');
 
   const statusColor: Record<string, string> = {
+    pending:              'bg-yellow-100 text-yellow-700',
     pending_approver:     'bg-yellow-100 text-yellow-700',
     pending_admin:        'bg-orange-100 text-orange-700',
     approved:             'bg-green-100 text-green-700',
@@ -49,7 +50,7 @@ export default function PendingPage() {
                 <tr key={sub.id} className="border-b last:border-0 hover:bg-gray-50">
                   <td className="py-3">
                     <span
-                      onClick={() => window.open(sub.file_url, '_blank')}
+                      onClick={() => window.open(`/api/workflow/files/${sub.id}?redirect=1`, '_blank')}
                       className="text-blue-600 underline font-medium cursor-pointer"
                     >
                       {sub.file_name}
@@ -62,7 +63,7 @@ export default function PendingPage() {
                   </td>
                   <td className="py-3">
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor[sub.status]}`}>
-                      {sub.status.replace(/_/g, ' ')}
+                      {sub.status === 'pending_admin' ? 'PENDING APPROVAL' : sub.status.replace(/_/g, ' ')}
                     </span>
                   </td>
                   <td className="py-3">
