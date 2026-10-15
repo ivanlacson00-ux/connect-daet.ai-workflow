@@ -1,0 +1,31 @@
+name: Process workflow email outbox
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: process-workflow-email-outbox
+  cancel-in-progress: false
+
+jobs:
+  process-email-outbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Process queued emails
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          VERCEL_APP_URL: ${{ secrets.VERCEL_APP_URL }}
+        run: |
+          if [ -z "$CRON_SECRET" ] || [ -z "$VERCEL_APP_URL" ]; then
+            echo "::error::Add CRON_SECRET and VERCEL_APP_URL to the GitHub repository secrets."
+            exit 1
+          fi
+
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "${VERCEL_APP_URL%/}/api/notifications/email"

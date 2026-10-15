@@ -13,6 +13,7 @@ const fonts = {
 
 interface Submission {
   id: string;
+  tracking_number: string;
   file_name: string;
   file_url: string;
   file_path?: string | null;
@@ -118,6 +119,16 @@ export default function UserFileDetail() {
             <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${statusConfig.classes}`}>
               <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
               {statusConfig.label}
+            </div>
+          </section>
+
+          <section className="receipt-print border-2 border-black bg-white p-6">
+            <p className={`${fonts.mono} text-blue-600 mb-3`}>Submission_Receipt</p>
+            <div className="space-y-2 font-mono text-[11px]">
+              <p><span className="text-gray-400">Tracking_Number:</span> {sub.tracking_number || 'Pending assignment'}</p>
+              <p><span className="text-gray-400">Document:</span> {sub.file_name}</p>
+              <p><span className="text-gray-400">Status:</span> {statusConfig.label}</p>
+              <p><span className="text-gray-400">Submitted:</span> {new Date(sub.created_at).toLocaleString()}</p>
             </div>
           </section>
 

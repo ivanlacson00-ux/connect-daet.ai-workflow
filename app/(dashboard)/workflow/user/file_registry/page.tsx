@@ -54,6 +54,7 @@ export default function UserFileRegistry() {
   }, [supabase]);
 
   const filteredSubmissions = submissions.filter(file => {
+    const query = searchQuery.trim().toLowerCase();
     const title = file.file_name || '';
     const matchesSearch = title.toLowerCase().includes(searchQuery.toLowerCase());
 
@@ -66,7 +67,7 @@ export default function UserFileRegistry() {
       matchesFilter = file.status.includes('declined') || file.status.includes('rejected');
     }
 
-    return matchesSearch && matchesFilter;
+    return matchesSearch && matchesFilter && matchesCategory && matchesFileType && matchesFromDate && matchesToDate;
   });
 
   return (
@@ -95,7 +96,7 @@ export default function UserFileRegistry() {
             <span className="pointer-events-none absolute left-5 top-1/2 z-10 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">SEARCH //</span>
             <input
               type="text"
-              placeholder="Find a file by name..."
+              placeholder="Find by file name or tracking number..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="h-12 w-full rounded-full border border-warm-border bg-card pl-28 pr-5 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay max-md:h-11"
@@ -121,6 +122,23 @@ export default function UserFileRegistry() {
                 </button>
               );
             })}
+          </div>
+          <div className="lg:col-span-12 grid grid-cols-1 gap-3 md:grid-cols-4">
+            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="border-2 border-blue-600 bg-white p-3 font-mono text-xs">
+              <option value="ALL">All Categories</option>
+              <option value="General">General</option>
+              <option value="Tourism">Tourism</option>
+              <option value="Events">Events</option>
+              <option value="Marketing">Marketing</option>
+            </select>
+            <select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)} className="border-2 border-blue-600 bg-white p-3 font-mono text-xs">
+              <option value="ALL">All File Types</option>
+              {[...new Set(submissions.map((submission) => submission.file_type).filter(Boolean))].map((fileType) => (
+                <option key={fileType} value={fileType}>{fileType}</option>
+              ))}
+            </select>
+            <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="From upload date" className="border-2 border-blue-600 bg-white p-3 font-mono text-xs" />
+            <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="To upload date" className="border-2 border-blue-600 bg-white p-3 font-mono text-xs" />
           </div>
         </div>
 

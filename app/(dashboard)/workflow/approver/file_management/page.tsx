@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useSubmissions } from '@/hooks/useSubmissions';
 import Link from 'next/link';
+import { getWorkflowTiming, workflowTimingClasses } from '@/lib/workflow/timing';
 
 const fonts = {
   serif: "font-serif italic",
@@ -17,12 +18,13 @@ function StatusStamp({ status }: { status: string }) {
     const s = status?.toLowerCase();
     
     // For Approvers, pending_admin means they have already done their part
-    if (s === 'pending_admin') return { label: 'PENDING_ADMIN', color: 'text-blue-600', bg: 'bg-blue-50' };
+    if (s === 'pending_admin') return { label: 'PENDING APPROVAL', color: 'text-blue-600', bg: 'bg-blue-50' };
+    if (s === 'completed') return { label: 'COMPLETED', color: 'text-green-700', bg: 'bg-green-100' };
     if (s.includes('approved')) return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
     if (s.includes('declined')) return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
     
     // Standard pending status means it's sitting in the Approver's inbox
-    return { label: 'PENDING', color: 'text-orange-600', bg: 'bg-orange-50' };
+    return { label: 'UNDER VERIFICATION', color: 'text-orange-600', bg: 'bg-orange-50' };
   };
 
   const config = getDisplayConfig();
@@ -36,9 +38,26 @@ function StatusStamp({ status }: { status: string }) {
 
 export default function ApproverSubmissionsPage() {
   const [filter, setFilter] = useState<FilterStatus>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [fileTypeFilter, setFileTypeFilter] = useState('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const { submissions, loading } = useSubmissions();
 
   const filteredSubmissions = submissions.filter(sub => {
+    const query = searchQuery.trim().toLowerCase();
+    const matchesSearch = !query
+      || sub.file_name.toLowerCase().includes(query)
+      || sub.tracking_number?.toLowerCase().includes(query);
+    if (!matchesSearch) return false;
+    const createdDate = new Date(sub.created_at);
+    const matchesCategory = categoryFilter === 'all' || (sub.category || 'General') === categoryFilter;
+    const matchesFileType = fileTypeFilter === 'all' || sub.file_type === fileTypeFilter;
+    const matchesFromDate = !fromDate || createdDate >= new Date(`${fromDate}T00:00:00`);
+    const matchesToDate = !toDate || createdDate <= new Date(`${toDate}T23:59:59.999`);
+    if (!matchesCategory || !matchesFileType || !matchesFromDate || !matchesToDate) return false;
+
     const s = sub.status.toLowerCase();
     if (filter === 'all') return true;
     
@@ -72,6 +91,33 @@ export default function ApproverSubmissionsPage() {
       </div>
 
       {/* Filters */}
+      <div className="relative">
+        <label className={`${fonts.mono} block mb-2 font-bold text-gray-900`}>Search_By_File_Or_Tracking_Number</label>
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="DAET-2026-000001 or document name"
+          className="w-full border-2 border-gray-900 bg-white px-5 py-4 font-mono text-sm outline-none focus:border-orange-500"
+        />
+        <div className="grid grid-cols-1 gap-3 pt-3 md:grid-cols-4">
+          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="border-2 border-gray-900 bg-white p-3 font-mono text-xs">
+            <option value="all">All Categories</option>
+            <option value="General">General</option>
+            <option value="Tourism">Tourism</option>
+            <option value="Events">Events</option>
+            <option value="Marketing">Marketing</option>
+          </select>
+          <select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)} className="border-2 border-gray-900 bg-white p-3 font-mono text-xs">
+            <option value="all">All File Types</option>
+            {[...new Set(submissions.map((submission) => submission.file_type).filter(Boolean))].map((fileType) => (
+              <option key={fileType} value={fileType}>{fileType}</option>
+            ))}
+          </select>
+          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="From upload date" className="border-2 border-gray-900 bg-white p-3 font-mono text-xs" />
+          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="To upload date" className="border-2 border-gray-900 bg-white p-3 font-mono text-xs" />
+        </div>
+      </div>
       <div className="flex flex-wrap gap-3">
         {filters.map((f) => (
           <button
@@ -110,10 +156,21 @@ export default function ApproverSubmissionsPage() {
                   <div className="font-bold text-gray-900 underline decoration-orange-500/30 decoration-2 underline-offset-4">
                     {sub.file_name}
                   </div>
+                  <div className="text-[10px] font-mono text-orange-600 mt-1 uppercase">{sub.tracking_number || 'TRACKING PENDING'}</div>
                   <div className="text-[10px] font-mono text-gray-400 mt-1 uppercase">LOGGED: {new Date(sub.created_at).toLocaleDateString()}</div>
                 </td>
                 <td className="p-5 text-xs font-black text-gray-700">{sub.profiles?.email ?? 'Unknown'}</td>
-                <td className="p-5 text-center"><StatusStamp status={sub.status} /></td>
+                <td className="p-5 text-center">
+                  <StatusStamp status={sub.status} />
+                  {(() => {
+                    const timing = getWorkflowTiming(sub);
+                    return (
+                      <div className={`mt-2 inline-flex border px-2 py-1 font-mono text-[9px] uppercase ${workflowTimingClasses(timing.state)}`}>
+                        {timing.label}
+                      </div>
+                    );
+                  })()}
+                </td>
                 <td className="p-5 text-right">
                   <Link 
                     href={`/workflow/approver/file_management/${sub.id}`} 

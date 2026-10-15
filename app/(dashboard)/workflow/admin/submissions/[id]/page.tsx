@@ -20,6 +20,8 @@ export default function AdminManagePage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [adminComment, setAdminComment] = useState('');
+  const [archiveUpdating, setArchiveUpdating] = useState(false);
+  const [retentionDate, setRetentionDate] = useState('');
 
   const fetchDetails = useCallback(async () => {
     setLoading(true);
@@ -32,6 +34,7 @@ export default function AdminManagePage() {
     if (submission) {
       setSub(submission);
       setAdminComment(submission.admin_comments || '');
+      setRetentionDate(submission.retention_until?.slice(0, 10) || '');
       
       const { data: profile } = await supabase
         .from('profiles')
@@ -64,6 +67,8 @@ export default function AdminManagePage() {
         return { label: 'PENDING_ADMIN', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
       case 'approved':
         return { label: 'APPROVED', classes: 'border-2 border-blue-600 text-blue-600 bg-white' };
+      case 'completed':
+        return { label: 'COMPLETED', classes: 'border-2 border-green-600 text-green-600 bg-green-50' };
       case 'declined_by_approver':
       case 'declined_by_admin':
         return { label: 'REJECTED', classes: 'border-2 border-red-600 text-red-600 bg-red-50' };
@@ -77,19 +82,25 @@ export default function AdminManagePage() {
       case 'STAGE_1_AUTHORIZED': return 'APPROVED BY';
       case 'FINAL_AUTHORIZATION': return 'FINAL APPROVAL';
       case 'FINAL_REJECTION': return 'REJECTED BY';
+      case 'VERIFICATION_PASSED': return 'VERIFICATION PASSED';
+      case 'RETURNED_FOR_CORRECTION': return 'RETURNED FOR CORRECTION';
+      case 'WORKFLOW_COMPLETED': return 'WORKFLOW COMPLETED';
       case 'SUBMITTED': return 'SUBMITTED BY';
       default: return 'ACTION BY';
     }
   };
 
-  const handleAdminAction = async (decision: 'approved' | 'declined') => {
-    if (sub.status !== 'pending_admin') return;
+  const handleAdminAction = async (decision: 'approved' | 'declined' | 'completed') => {
+    if (decision === 'completed' && sub.status !== 'approved') return;
+    if (decision !== 'completed' && sub.status !== 'pending_admin') return;
 
     // Requirement check removed here to allow rejections without notes
     setUpdating(true);
-    const nextStatus = decision === 'approved' ? 'approved' : 'declined_by_admin';
-    const { data: { user } } = await supabase.auth.getUser();
-
+    const nextStatus = decision === 'approved'
+      ? 'approved'
+      : decision === 'declined'
+        ? 'declined_by_admin'
+        : 'completed';
     const { error: updateError } = await supabase
       .from('workflow_submissions')
       .update({ 
@@ -100,24 +111,35 @@ export default function AdminManagePage() {
       .eq('id', id);
 
     if (!updateError) {
-      await supabase.from('workflow_audit_logs').insert({
-        submission_id: id,
-        action_by: user?.id,
-        action_type: decision === 'approved' ? 'FINAL_AUTHORIZATION' : 'FINAL_REJECTION',
-        old_status: sub.status,
-        new_status: nextStatus,
-        comments: adminComment
-      });
       await fetchDetails();
     }
     setUpdating(false);
+  };
+
+  const handleArchive = async () => {
+    setArchiveUpdating(true);
+    const shouldArchive = !sub.archived_at;
+    const { data, error } = await supabase.rpc('set_workflow_submission_archive', {
+      target_submission_id: id,
+      should_archive: shouldArchive,
+      retention_date: shouldArchive && retentionDate ? new Date(`${retentionDate}T23:59:59.999Z`).toISOString() : null,
+    });
+
+    if (error) {
+      console.error('Archive update failed:', error.message);
+    } else if (data) {
+      setSub(data);
+      await fetchDetails();
+    }
+    setArchiveUpdating(false);
   };
 
   if (loading) return <div className="p-10 font-mono text-blue-600 animate-pulse uppercase tracking-widest">Initialising Secure Connection...</div>;
   if (!sub) return <div className="p-10 font-mono text-red-500">404: RESOURCE_NOT_FOUND</div>;
 
   const statusConfig = getStatusStyles(sub.status);
-  const isFinalized = sub.status === 'approved' || sub.status.includes('declined');
+  const isFinalized = sub.status === 'completed' || sub.status.includes('declined');
+  const isApproved = sub.status === 'approved';
 
   return (
     <div className="h-screen bg-[#fafafa] flex flex-col lg:flex-row overflow-hidden border-t-[6px] border-black">
@@ -138,9 +160,50 @@ export default function AdminManagePage() {
               <span className="bg-black text-white text-[9px] font-black px-2 py-0.5 tracking-tighter">MASTER_REGISTRY // STAGE_02</span>
             </div>
             <h1 className="text-5xl font-serif italic leading-[0.8] mb-8 break-words tracking-tighter text-zinc-900">{sub.file_name}</h1>
+            <div className="mb-4">
+              <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Tracking_Number</p>
+              <p className="font-mono text-sm font-black tracking-wider text-blue-600">{sub.tracking_number || 'Pending assignment'}</p>
+            </div>
             <div className={`inline-block px-4 py-1.5 font-black text-[11px] tracking-widest uppercase ${statusConfig.classes}`}>
               {statusConfig.label}
             </div>
+          </section>
+
+          <section className="receipt-print border-2 border-black bg-white p-6">
+            <p className={`${fonts.mono} text-blue-600 mb-3`}>Submission_Receipt</p>
+            <div className="space-y-2 font-mono text-[11px]">
+              <p><span className="text-gray-400">Tracking_Number:</span> {sub.tracking_number || 'Pending assignment'}</p>
+              <p><span className="text-gray-400">Document:</span> {sub.file_name}</p>
+              <p><span className="text-gray-400">Status:</span> {statusConfig.label}</p>
+              <p><span className="text-gray-400">Submitted:</span> {new Date(sub.created_at).toLocaleString()}</p>
+            </div>
+          </section>
+
+          <section className="border-2 border-black bg-white p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+            <p className={`${fonts.mono} text-blue-600 mb-3`}>Secure_Archive</p>
+            <p className="text-xs text-zinc-600 mb-4">
+              {sub.archived_at
+                ? `Archived ${new Date(sub.archived_at).toLocaleString()}`
+                : 'This record is active and visible to authorized workflow users.'}
+            </p>
+            {!sub.archived_at && (
+              <label className={`${fonts.mono} block text-gray-400 mb-2`}>
+                Retention_Until
+                <input
+                  type="date"
+                  value={retentionDate}
+                  onChange={(event) => setRetentionDate(event.target.value)}
+                  className="mt-2 w-full border-2 border-black bg-white p-3 font-mono text-xs normal-case tracking-normal"
+                />
+              </label>
+            )}
+            <button
+              onClick={handleArchive}
+              disabled={archiveUpdating}
+              className="w-full border-2 border-black bg-white py-3 font-mono text-[10px] font-black uppercase shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] disabled:opacity-50"
+            >
+              {archiveUpdating ? 'UPDATING_ARCHIVE...' : sub.archived_at ? 'Restore_From_Archive' : 'Archive_Record'}
+            </button>
           </section>
 
           {/* Submission Context (Category & Description) */}
@@ -214,7 +277,7 @@ export default function AdminManagePage() {
         </div>
 
         {/* Validation Footer */}
-        {!isFinalized && (
+        {!isFinalized && !isApproved && (
           <div className="p-10 border-t-2 border-black bg-white">
             <div className="mb-6">
               <label className={`${fonts.mono} mb-3 block font-black text-black`}>Final Validation Notes</label>
@@ -235,6 +298,23 @@ export default function AdminManagePage() {
             </div>
           </div>
         )}
+        {isApproved && (
+          <div className="no-print p-10 border-t-2 border-black bg-white">
+            <button onClick={() => handleAdminAction('completed')} disabled={updating} className="w-full bg-green-600 text-white py-4 font-black text-[10px] uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all disabled:opacity-50">
+              {updating ? 'PROCESSING' : 'Mark as Completed'}
+            </button>
+          </div>
+        )}
+        {isFinalized && (
+          <div className="no-print p-10 border-t-2 border-black bg-white">
+            <button
+              onClick={() => window.print()}
+              className={`${fonts.mono} w-full py-3 border-2 border-blue-600 text-blue-600 font-black text-[10px] tracking-[0.2em] hover:bg-blue-50 transition-all`}
+            >
+              Print_Submission_Receipt
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* Preview Section */}
@@ -248,10 +328,10 @@ export default function AdminManagePage() {
         <div className="flex-1 bg-white border-[4px] border-black shadow-[30px_30px_0px_0px_rgba(0,0,0,0.5)] overflow-hidden flex items-center justify-center relative">
           {sub.file_name.match(/\.(jpg|jpeg|png|webp|gif|svg)$/i) ? (
             <div className="p-12 w-full h-full flex items-center justify-center">
-              <img src={sub.file_url} alt="Secure Preview" className="max-w-full max-h-full object-contain shadow-2xl" />
+              <img src={`/api/workflow/files/${sub.id}?redirect=1`} alt="Secure Preview" className="max-w-full max-h-full object-contain shadow-2xl" />
             </div>
           ) : (
-            <iframe src={`https://docs.google.com/gview?url=${encodeURIComponent(sub.file_url)}&embedded=true`} className="w-full h-full border-none" />
+            <iframe src={`/api/workflow/files/${sub.id}?redirect=1`} className="w-full h-full border-none" />
           )}
           
           {/* Subtle Watermark Overlay */}
@@ -262,6 +342,12 @@ export default function AdminManagePage() {
       </main>
 
       <style jsx global>{`
+        @media print {
+          body * { visibility: hidden; }
+          .receipt-print, .receipt-print * { visibility: visible; }
+          .receipt-print { position: absolute; inset: 0; margin: 0; box-shadow: none; }
+          .no-print { display: none !important; }
+        }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #fafafa; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #000; }

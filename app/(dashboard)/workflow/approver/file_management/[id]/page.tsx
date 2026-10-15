@@ -59,9 +59,9 @@ export default function ApproverManagePage() {
     switch (status) {
       case 'pending':
       case 'pending_approver':
-        return { label: 'PENDING', classes: 'border-2 border-blue-600 text-blue-600 bg-white shadow-[3px_3px_0px_0px_rgba(37,99,235,1)]' };
+        return { label: 'UNDER VERIFICATION', classes: 'border-2 border-blue-600 text-blue-600 bg-white shadow-[3px_3px_0px_0px_rgba(37,99,235,1)]' };
       case 'pending_admin':
-        return { label: 'PENDING_ADMIN', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
+        return { label: 'PENDING APPROVAL', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
       case 'approved':
         return { label: 'APPROVED', classes: 'border-2 border-green-600 text-green-600 bg-green-50' };
       case 'declined_by_approver':
@@ -78,6 +78,9 @@ export default function ApproverManagePage() {
       case 'STAGE_1_REJECTED': return 'STAGE 1 REJECTED';
       case 'FINAL_AUTHORIZATION': return 'FINAL APPROVAL';
       case 'FINAL_REJECTION': return 'FINAL REJECTION';
+      case 'VERIFICATION_PASSED': return 'VERIFICATION PASSED';
+      case 'RETURNED_FOR_CORRECTION': return 'RETURNED FOR CORRECTION';
+      case 'WORKFLOW_COMPLETED': return 'WORKFLOW COMPLETED';
       case 'SUBMITTED': return 'SUBMITTED BY';
       default: return 'ACTION BY';
     }
@@ -89,8 +92,6 @@ export default function ApproverManagePage() {
 
     setUpdating(true);
     const nextStatus = decision === 'approved' ? 'pending_admin' : 'declined_by_approver';
-    const { data: { user } } = await supabase.auth.getUser();
-
     const { error: updateError } = await supabase
       .from('workflow_submissions')
       .update({ 
@@ -101,14 +102,6 @@ export default function ApproverManagePage() {
       .eq('id', id);
 
     if (!updateError) {
-      await supabase.from('workflow_audit_logs').insert({
-        submission_id: id,
-        action_by: user?.id,
-        action_type: decision === 'approved' ? 'STAGE_1_AUTHORIZED' : 'STAGE_1_REJECTED',
-        old_status: sub.status,
-        new_status: nextStatus,
-        comments: comment
-      });
       await fetchDetails();
     }
     setUpdating(false);
@@ -137,6 +130,10 @@ export default function ApproverManagePage() {
               <span className="bg-blue-600 text-white text-[9px] font-black px-2 py-0.5 tracking-tighter uppercase">Approver_Terminal // STAGE_01</span>
             </div>
             <h1 className="text-5xl font-serif italic leading-[0.8] mb-8 break-words tracking-tighter text-zinc-900">{sub.file_name}</h1>
+            <div className="mb-4">
+              <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Tracking_Number</p>
+              <p className="font-mono text-sm font-black tracking-wider text-blue-600">{sub.tracking_number || 'Pending assignment'}</p>
+            </div>
             <div className={`inline-block px-4 py-1.5 font-black text-[11px] tracking-widest uppercase ${statusConfig.classes}`}>
               {statusConfig.label}
             </div>
@@ -254,10 +251,10 @@ export default function ApproverManagePage() {
         <div className="flex-1 bg-white border-[4px] border-black shadow-[30px_30px_0px_0px_rgba(0,0,0,0.5)] overflow-hidden flex items-center justify-center relative">
           {sub.file_name.match(/\.(jpg|jpeg|png|webp|gif|svg)$/i) ? (
             <div className="p-12 w-full h-full flex items-center justify-center">
-              <img src={sub.file_url} alt="Preview" className="max-w-full max-h-full object-contain shadow-2xl" />
+              <img src={`/api/workflow/files/${sub.id}?redirect=1`} alt="Preview" className="max-w-full max-h-full object-contain shadow-2xl" />
             </div>
           ) : (
-            <iframe src={`https://docs.google.com/gview?url=${encodeURIComponent(sub.file_url)}&embedded=true`} className="w-full h-full border-none" />
+            <iframe src={`/api/workflow/files/${sub.id}?redirect=1`} className="w-full h-full border-none" />
           )}
           <div className="absolute bottom-8 right-8 pointer-events-none opacity-20">
             <span className="text-[60px] font-black text-blue-600 select-none tracking-tighter uppercase leading-none">Connect<br/>Registry</span>

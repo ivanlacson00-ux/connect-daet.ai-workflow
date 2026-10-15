@@ -7,12 +7,20 @@ import { createClient } from '@/lib/supabase/client';
 export interface Submission {
   id: string;
   user_id: string;
+  tracking_number: string;
   file_name: string;
   file_url: string;
   file_type: string;
+  category?: string | null;
   status: string;
   rejection_comment: string | null;
   created_at: string;
+  submitted_at?: string | null;
+  verified_at?: string | null;
+  approved_at?: string | null;
+  completed_at?: string | null;
+  current_stage_due_at?: string | null;
+  current_responsible_role?: string | null;
   profiles: {
     email: string;
   };
@@ -28,7 +36,10 @@ export function useSubmissions(statusFilter?: string) {
 
     let query = supabase
       .from('workflow_submissions')
-      .select(`*, profiles!user_id(email)`)   // ✅ fixed ambiguous join
+      .select(`
+        *,
+        profiles!user_id(email)
+      `)
       .order('created_at', { ascending: false });
 
     if (statusFilter) {
