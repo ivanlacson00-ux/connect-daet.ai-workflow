@@ -1,16 +1,26 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
+import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
 
 const fonts = {
   serif: "font-serif italic",
   mono: "font-mono uppercase tracking-[0.2em] text-[10px]",
 };
 
-const getFileTypeIcon = (fileName: string) => {
+interface PreviewSubmission {
+  file_name: string;
+  file_url: string;
+  file_path?: string | null;
+  file_type?: string | null;
+}
+
+const getFileTypeIcon = (fileName: string, fileType?: string) => {
   const ext = fileName?.split('.').pop()?.toLowerCase();
+  if (fileType?.startsWith('video/')) return '🎬';
+  if (fileType?.startsWith('audio/')) return '🎧';
   switch (ext) {
     case 'pdf': return '📕';
     case 'jpg':
@@ -21,6 +31,17 @@ const getFileTypeIcon = (fileName: string) => {
     case 'docx': return '📘';
     case 'xls':
     case 'xlsx': return '📗';
+    case 'mp4':
+    case 'webm':
+    case 'ogv':
+    case 'mov':
+    case 'm4v': return '🎬';
+    case 'mp3':
+    case 'wav':
+    case 'm4a':
+    case 'aac':
+    case 'oga':
+    case 'flac': return '🎧';
     default: return '📄';
   }
 };
@@ -30,7 +51,18 @@ export default function UserFileRegistry() {
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
-  const supabase = createClient();
+  const [previewFile, setPreviewFile] = useState<PreviewSubmission | null>(null);
+  const supabase = useMemo(() => createClient(), []);
+
+  useEffect(() => {
+    if (!previewFile) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreviewFile(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [previewFile]);
 
   useEffect(() => {
     async function fetchUserFiles() {
@@ -134,7 +166,7 @@ export default function UserFileRegistry() {
                 >
                   <div className="flex items-center gap-8 flex-1 w-full">
                     <div className="w-14 h-14 border-2 border-blue-600 flex items-center justify-center text-2xl bg-white shadow-[4px_4px_0px_0px_rgba(37,99,235,0.1)]">
-                      {getFileTypeIcon(file.file_name)}
+                      {getFileTypeIcon(file.file_name, file.file_type)}
                     </div>
 
                     <div className="flex-1">
@@ -172,7 +204,7 @@ export default function UserFileRegistry() {
                     
                     <div className="flex items-center gap-2">
                       <button 
-                        onClick={() => window.open(file.file_url, '_blank')}
+                        onClick={() => setPreviewFile(file)}
                         className="p-3 border-2 border-blue-600 text-blue-600 hover:bg-blue-600 hover:text-white transition-all shadow-[2px_2px_0px_0px_rgba(37,99,235,0.2)] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
                         title="Quick Preview"
                       >
@@ -195,6 +227,42 @@ export default function UserFileRegistry() {
           )}
         </div>
       </div>
+      {previewFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Preview ${previewFile.file_name}`}
+            className="flex h-[85vh] w-full max-w-5xl flex-col overflow-hidden border-2 border-blue-600 bg-white shadow-2xl"
+          >
+            <header className="flex min-h-16 items-center justify-between gap-4 border-b-2 border-blue-100 px-5 py-3">
+              <h2 className="truncate font-serif text-xl italic text-black">{previewFile.file_name}</h2>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const url = await getFileUrl(supabase, previewFile);
+                    await downloadFile(url, previewFile.file_name);
+                  }}
+                  className={`${fonts.mono} border-2 border-blue-600 px-4 py-2 text-blue-600 hover:bg-blue-600 hover:text-white`}
+                >
+                  Download
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewFile(null)}
+                  className={`${fonts.mono} border-2 border-black px-4 py-2 text-black hover:bg-black hover:text-white`}
+                >
+                  Close
+                </button>
+              </div>
+            </header>
+            <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-blue-50/20">
+              <FilePreview file={previewFile} />
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

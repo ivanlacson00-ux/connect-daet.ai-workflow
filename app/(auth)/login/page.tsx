@@ -5,11 +5,6 @@ import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
-const fonts = {
-  serif: "font-serif italic",
-  mono: "font-mono uppercase tracking-[0.2em] text-[10px]",
-};
-
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -56,75 +51,174 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#fcfcfc] text-gray-900 flex items-center justify-center p-6">
-      <div className="max-w-[500px] w-full">
-        
-        <div className="mb-12 border-b-2 border-gray-900 pb-8">
-          <h1 className={`${fonts.serif} text-6xl font-light text-gray-900 leading-tight`}>
-            Login
-          </h1>
-          <p className={`${fonts.mono} mt-2 text-blue-600`}>
-            CONNECT-Daet.ai // Security Gateway
-          </p>
+    <div
+      className="min-h-screen flex items-center justify-center px-4 py-12"
+      style={{
+        backgroundColor: '#0d1117',
+        fontFamily:
+          '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif',
+        color: '#e6edf3',
+      }}
+    >
+      <div className="w-full max-w-[340px]">
+        {/* Wordmark / product identity */}
+        <div className="flex flex-col items-center mb-6">
+          <div
+            className="w-10 h-10 rounded-md flex items-center justify-center mb-3"
+            style={{ backgroundColor: '#e6edf3' }}
+          >
+            <svg width="20" height="20" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M1.5 2.5h13v3h-13v-3ZM1.5 7h6v6.5h-6V7ZM9 7h5.5v6.5H9V7Z"
+                stroke="#0d1117"
+                strokeWidth="1.1"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </div>
+          <span className="text-[15px] font-semibold" style={{ color: '#e6edf3' }}>
+            CONNECT&#8209;Daet
+          </span>
+          <span className="text-[13px] mt-0.5" style={{ color: '#7d8590' }}>
+            File workflow tracking
+          </span>
         </div>
 
-        <div className="bg-white border border-blue-600 p-10 shadow-[12px_12px_0px_0px_rgba(37,99,235,1)] relative overflow-hidden">
-          <div className="absolute top-[-20px] right-[-20px] opacity-[0.03] pointer-events-none select-none text-9xl font-black uppercase">
-            AUTH
-          </div>
-
-          <form onSubmit={handleLogin} className="relative z-10 space-y-8">
-            <div className="space-y-2">
-              <label className={`${fonts.mono} text-gray-400 block`}>System Identifier (Email)</label>
+        {/* Sign-in card */}
+        <div
+          className="rounded-md px-5 py-6"
+          style={{
+            backgroundColor: '#0d1117',
+            border: '1px solid #30363d',
+          }}
+        >
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label
+                htmlFor="email"
+                className="block text-[13px] font-semibold mb-1"
+                style={{ color: '#e6edf3' }}
+              >
+                Email address
+              </label>
               <input
+                id="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-transparent border-b-2 border-gray-200 py-3 text-xl focus:outline-none focus:border-blue-600 transition-colors font-serif italic"
-                placeholder="identity@daet.ai"
+                className="w-full rounded-md px-3 py-[7px] text-[14px] outline-none transition-shadow"
+                style={{
+                  border: '1px solid #30363d',
+                  backgroundColor: '#0d1117',
+                  color: '#e6edf3',
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#1f6feb';
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(31,111,235,0.3)';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#30363d';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
                 required
               />
             </div>
 
-            <div className="space-y-2">
-              <label className={`${fonts.mono} text-gray-400 block`}>Security Key (Password)</label>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label
+                  htmlFor="password"
+                  className="block text-[13px] font-semibold"
+                  style={{ color: '#e6edf3' }}
+                >
+                  Password
+                </label>
+              </div>
               <input
+                id="password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-transparent border-b-2 border-gray-200 py-3 text-xl focus:outline-none focus:border-blue-600 transition-colors"
-                placeholder="••••••••"
+                className="w-full rounded-md px-3 py-[7px] text-[14px] outline-none transition-shadow"
+                style={{
+                  border: '1px solid #30363d',
+                  backgroundColor: '#0d1117',
+                  color: '#e6edf3',
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#1f6feb';
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(31,111,235,0.3)';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#30363d';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
                 required
               />
             </div>
 
             {error && (
-              <div className={`inline-flex items-center gap-2 border-2 px-4 py-2 rotate-[-1deg] w-full shadow-[4px_4px_0px_0px_currentColor] border-red-600 bg-red-50 text-red-600 ${fonts.mono} font-black`}>
-                <span className="text-lg">●</span>
-                {error}
+              <div
+                className="rounded-md px-3 py-2 text-[13px] flex items-start gap-2"
+                style={{
+                  backgroundColor: 'rgba(248,81,73,0.1)',
+                  border: '1px solid rgba(248,81,73,0.4)',
+                  color: '#f85149',
+                }}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 16 16"
+                  fill="currentColor"
+                  className="mt-[2px] flex-shrink-0"
+                >
+                  <path d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14ZM8 4a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 4Zm0 8a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z" />
+                </svg>
+                <span>{error}</span>
               </div>
             )}
 
             <button
               type="submit"
               disabled={loading}
-              className={`${fonts.mono} w-full bg-blue-600 text-white px-8 py-5 hover:bg-black transition-all shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:translate-x-1 active:translate-y-1 active:shadow-none font-bold text-sm`}
+              className="w-full rounded-md py-[7px] text-[14px] font-semibold transition-colors"
+              style={{
+                backgroundColor: loading ? '#2b6b3a' : '#238636',
+                color: '#ffffff',
+                border: '1px solid rgba(240,246,252,0.1)',
+                cursor: loading ? 'default' : 'pointer',
+              }}
+              onMouseEnter={(e) => {
+                if (!loading) e.currentTarget.style.backgroundColor = '#2ea043';
+              }}
+              onMouseLeave={(e) => {
+                if (!loading) e.currentTarget.style.backgroundColor = '#238636';
+              }}
             >
-              {loading ? '[ Authenticating... ]' : '[ Log In ]'}
+              {loading ? 'Signing in…' : 'Sign in'}
             </button>
-
-            <div className="text-center pt-4">
-              <p className={`${fonts.mono} text-gray-400`}>
-                No account? <Link href="/register" className="text-blue-600 hover:underline font-bold underline-offset-4 decoration-2">Register here</Link>
-              </p>
-            </div>
           </form>
-
-          <div className="mt-10 pt-6 border-t border-gray-100 flex justify-between items-center">
-             <div className={`${fonts.mono} text-gray-400`}>v1.0.4 r-status</div>
-             <div className="text-2xl">📁</div>
-          </div>
         </div>
+
+        {/* Register link, outside card GitHub-style */}
+        <div
+          className="mt-4 rounded-md px-5 py-4 text-center text-[13px]"
+          style={{
+            backgroundColor: '#161b22',
+            border: '1px solid #30363d',
+            color: '#e6edf3',
+          }}
+        >
+          New to CONNECT&#8209;Daet?{' '}
+          <Link href="/register" className="font-medium" style={{ color: '#4493f8' }}>
+            Create an account
+          </Link>
+        </div>
+
+        <p className="text-center text-[12px] mt-6" style={{ color: '#7d8590' }}>
+          v1.0.4
+        </p>
       </div>
     </div>
   );

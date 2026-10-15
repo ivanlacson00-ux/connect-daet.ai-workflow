@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
 
 const fonts = {
   serif: "font-serif italic",
@@ -13,6 +14,7 @@ interface Submission {
   id: string;
   file_name: string;
   file_url: string;
+  file_path?: string | null;
   file_type: string;
   file_size: number;
   status: string;
@@ -29,7 +31,7 @@ export default function UserFileDetail() {
   const router = useRouter();
   const [sub, setSub] = useState<Submission | null>(null);
   const [loading, setLoading] = useState(true);
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
     const fetchSubmission = async () => {
@@ -61,8 +63,6 @@ export default function UserFileDetail() {
         return { label: status?.toUpperCase(), classes: 'border-2 border-gray-400 text-gray-500' };
     }
   };
-
-  const isImage = (type: string) => type?.startsWith('image/');
 
   if (loading) return <div className={`${fonts.mono} p-20 animate-pulse text-blue-600 uppercase`}>Opening_Secure_Archive...</div>;
   if (!sub) return <div className="p-20 font-mono text-red-500 underline uppercase">Error: Record_Not_Found</div>;
@@ -153,7 +153,10 @@ export default function UserFileDetail() {
         {/* Footer Actions */}
         <div className="p-10 border-t-2 border-black bg-white">
           <button 
-            onClick={() => window.open(sub.file_url, '_blank')}
+            onClick={async () => {
+              const url = await getFileUrl(supabase, sub);
+              await downloadFile(url, sub.file_name);
+            }}
             className={`${fonts.mono} w-full py-4 bg-black text-white font-black text-[10px] tracking-[0.2em] shadow-[4px_4px_0px_0px_rgba(37,99,235,1)] hover:bg-blue-600 active:shadow-none active:translate-x-1 active:translate-y-1 transition-all`}
           >
             Download_Original_Manifest
@@ -170,20 +173,7 @@ export default function UserFileDetail() {
         </div>
 
         <div className="flex-1 bg-white border-[4px] border-black shadow-[30px_30px_0px_0px_rgba(0,0,0,0.5)] overflow-hidden flex items-center justify-center relative">
-          {isImage(sub.file_type) ? (
-            <div className="p-12 w-full h-full flex items-center justify-center">
-              <img 
-                src={sub.file_url} 
-                alt="Asset Preview" 
-                className="max-w-full max-h-full object-contain shadow-2xl animate-in zoom-in-95 duration-500" 
-              />
-            </div>
-          ) : (
-            <iframe 
-              src={`https://docs.google.com/gview?url=${encodeURIComponent(sub.file_url)}&embedded=true`} 
-              className="w-full h-full border-none" 
-            />
-          )}
+          <FilePreview file={sub} />
           
           <div className="absolute bottom-8 right-8 pointer-events-none opacity-10">
             <span className="text-[60px] font-black text-black select-none tracking-tighter uppercase leading-none">Dossier<br/>Archive</span>
