@@ -3,177 +3,365 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
+// ─── Styles & Fonts ──────────────────────────────────────────────────────────
 const fonts = {
-  serif: "font-serif italic",
-  mono: "font-mono uppercase tracking-[0.2em] text-[10px]",
+  serif: 'font-serif',
 };
 
 interface Submission {
   id: string | number;
-  tracking_number: string;
   file_name: string;
   file_url: string;
+  file_path?: string | null;
+  file_size?: number | null;
+  file_type?: string | null;
   status: string;
   user_id: string;
   submitter_email?: string;
+  approver_comments?: string | null;
+  admin_comments?: string | null;
   created_at: string;
 }
 
-// ─── Status Stamp (Synced with User Portal Logic) ──────────────────────────────
+// ─── Timeout helper (stops a hanging request from freezing the page) ─────────
+const withTimeout = <T,>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> =>
+  Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)
+    ),
+  ]);
+
+// ─── Status groups ───────────────────────────────────────────────────────────
+const QUEUE_STATUSES = ['pending', 'pending_approver'];
+// Approving a file passes it to the admin, so 'pending_admin' counts as approved here
+const APPROVED_STATUSES = ['pending_admin', 'approved', 'completed'];
+const DECLINED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'rejected'];
+
+// ─── Filters ─────────────────────────────────────────────────────────────────
+type Filter = 'all' | 'queue' | 'approved' | 'declined';
+
+const FILTERS: { key: Filter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'queue', label: 'Needs review' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'declined', label: 'Declined' },
+];
+
+const matchesFilter = (status: string, filter: Filter) => {
+  const s = (status || '').toLowerCase();
+  switch (filter) {
+    case 'queue':
+      return QUEUE_STATUSES.includes(s);
+    case 'approved':
+      return APPROVED_STATUSES.includes(s);
+    case 'declined':
+      return DECLINED_STATUSES.includes(s);
+    default:
+      return true;
+  }
+};
+
+// ─── Status Stamp (same logic and styles as the user dashboard) ──────────────
 function StatusStamp({ status }: { status: string }) {
   const getDisplayConfig = () => {
-    switch (status) {
+    switch ((status || '').toLowerCase()) {
       case 'pending':
       case 'pending_approver':
-        return { 
-          label: 'PENDING', 
-          styles: "text-blue-600 bg-white border-blue-600 shadow-[3px_3px_0px_0px_rgba(37,99,235,0.3)]" 
-        };
+        return { label: 'Pending', styles: 'bg-pending-bg text-pending-text' };
       case 'pending_admin':
-        return { 
-          label: 'UNDER REVIEW', 
-          styles: "text-white bg-blue-600 border-blue-600 shadow-[3px_3px_0px_0px_rgba(0,0,0,0.2)]" 
-        };
       case 'approved':
-        return { 
-          label: 'APPROVED', 
-          styles: "text-blue-700 bg-blue-50 border-blue-400" 
-        };
       case 'completed':
-        return {
-          label: 'COMPLETED',
-          styles: "text-green-700 bg-green-50 border-green-400"
-        };
+        return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
       case 'declined_by_approver':
       case 'declined_by_admin':
-        return { 
-          label: 'REJECTED', 
-          styles: "text-red-600 bg-red-50 border-red-600" 
-        };
+      case 'rejected':
+        return { label: 'Rejected', styles: 'bg-rejected-bg text-rejected-text' };
       default:
-        return { 
-          label: status.toUpperCase().replace('_', ' '), 
-          styles: "text-gray-600 bg-gray-50 border-gray-400" 
-        };
+        return { label: status?.replaceAll('_', ' ') || 'Unknown', styles: 'bg-sidebar text-muted-text' };
     }
   };
 
   const config = getDisplayConfig();
 
   return (
-    <div className={`inline-block px-4 py-1.5 border-2 font-black rotate-[-1deg] ${fonts.mono} ${config.styles}`}>
+    <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${config.styles}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
       {config.label}
     </div>
   );
 }
 
-export default function ApproverDashboard() {
+// ─── Individual Card Component ───────────────────────────────────────────────
+function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Submission) => void }) {
   const router = useRouter();
-  const supabase = createClient();
+  const needsReview = matchesFilter(sub.status, 'queue');
+  const isDeclined = matchesFilter(sub.status, 'declined');
+  const feedback = sub.admin_comments || sub.approver_comments;
+
+  return (
+    <article className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
+      <div className="flex min-w-0 items-center gap-4">
+        <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
+          <span className="text-lg leading-4" aria-hidden="true">▤</span>
+          <span className="mt-1 text-[8px] font-semibold uppercase">
+            {sub.file_type?.split('/').at(-1)?.slice(0, 3) || 'File'}
+          </span>
+        </div>
+        <div className="min-w-0">
+          <h3 className="truncate text-sm font-semibold text-warm-text group-hover:text-clay">
+            {sub.file_name || 'Untitled file'}
+          </h3>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
+            <span>{String(sub.id).slice(0, 7).toUpperCase()}</span>
+            <span aria-hidden="true">·</span>
+            <span className="truncate">From {sub.submitter_email || 'unknown submitter'}</span>
+            <span aria-hidden="true">·</span>
+            <span>Uploaded {new Date(sub.created_at).toLocaleDateString()}</span>
+            {sub.file_size ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{(sub.file_size / 1024).toFixed(1)} KB</span>
+              </>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+        <div className="max-md:self-start">
+          <StatusStamp status={sub.status} />
+        </div>
+        <button
+          onClick={() => onPreview(sub)}
+          className="inline-flex h-10 items-center gap-2 rounded-full border border-warm-border px-4 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11 max-md:w-full max-md:justify-center"
+        >
+          <span aria-hidden="true">⌕</span> Preview
+        </button>
+        <button
+          onClick={() => router.push(`/workflow/approver/file_management/${sub.id}`)}
+          className="inline-flex h-10 items-center gap-2 rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full max-md:justify-center"
+        >
+          {needsReview ? 'Review file' : 'View entry'} <span aria-hidden="true">→</span>
+        </button>
+      </div>
+
+      {/* Decline feedback panel */}
+      {isDeclined && feedback && (
+        <div className="rounded-xl border border-rejected-bg bg-rejected-bg/50 p-5 sm:basis-full">
+          <div className="mb-2 text-xs font-semibold text-rejected-text">Decline reason</div>
+          <p className="font-serif text-base leading-relaxed text-warm-text">"{feedback}"</p>
+        </div>
+      )}
+    </article>
+  );
+}
+
+// ─── Main Approver Dashboard ─────────────────────────────────────────────────
+export default function ApproverDashboard() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<any>(null);
+  const [previewFile, setPreviewFile] = useState<Submission | null>(null);
+  const [filter, setFilter] = useState<Filter>('all');
 
-  // ─── Data Metrics ──────────────────────────────────────────────────────────
-  const stats = useMemo(() => {
-    return {
-      pending: submissions.filter(s => s.status === 'pending_approver' || s.status === 'pending').length,
-      forwarded: submissions.filter(s => s.status === 'pending_admin').length,
-      declined: submissions.filter(s => s.status.includes('declined') || s.status.includes('rejected')).length,
-    };
-  }, [submissions]);
+  // Stable client so fetchSubmissions doesn't re-run every render
+  const supabase = useMemo(() => createClient(), []);
 
   const fetchSubmissions = useCallback(async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("workflow_submissions")
-      .select("*")
-      .order("created_at", { ascending: false });
+    try {
+      const { data: { session } } = await withTimeout(supabase.auth.getSession(), 8000, 'getSession');
+      setUser(session?.user ?? null);
 
-    if (!error && data) setSubmissions(data);
-    setLoading(false);
+      const { data, error } = await withTimeout(
+        supabase
+          .from('workflow_submissions')
+          .select('*')
+          .order('created_at', { ascending: false }),
+        10000,
+        'Fetching submissions'
+      );
+
+      if (error) console.error('Fetch error:', error);
+      if (data) setSubmissions(data);
+    } catch (err) {
+      console.error('Dashboard load failed:', err);
+    } finally {
+      setLoading(false);
+    }
   }, [supabase]);
 
   useEffect(() => { fetchSubmissions(); }, [fetchSubmissions]);
 
-  return (
-    <div className="min-h-screen bg-[#fcfcfc] text-gray-900 relative pb-20">
-      <div className="max-w-[1100px] mx-auto px-6 py-20">
-        
-        {/* Header Section */}
-        <div className="mb-12 border-b-2 border-gray-900 pb-10">
-          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-            <div>
-              <h1 className={`${fonts.serif} text-7xl font-light text-gray-900 leading-none`}>Registry</h1>
-              <p className={`${fonts.mono} mt-4 text-blue-600`}>Approver_Queue // Stage_01_Verification</p>
-            </div>
+  // Close preview with Escape
+  useEffect(() => {
+    if (!previewFile) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreviewFile(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [previewFile]);
 
-            <div className="grid grid-cols-3 gap-4 md:w-80">
-              <div className="bg-white border-2 border-blue-600 p-3 text-center shadow-[3px_3px_0px_0px_rgba(37,99,235,0.2)]">
-                <div className={`${fonts.mono} text-[8px] text-blue-600 mb-1 font-bold`}>Your Queue</div>
-                <div className="text-xl font-black text-blue-600 leading-none">{stats.pending}</div>
-              </div>
-              <div className="bg-blue-600 border-2 border-blue-600 p-3 text-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.1)]">
-                <div className={`${fonts.mono} text-[8px] text-white mb-1 font-bold`}>To Admin</div>
-                <div className="text-xl font-black text-white leading-none">{stats.forwarded}</div>
-              </div>
-              <div className="bg-red-50 border-2 border-red-600 p-3 text-center shadow-[3px_3px_0px_0px_rgba(220,38,38,0.1)]">
-                <div className={`${fonts.mono} text-[8px] text-red-600 mb-1 font-bold`}>Declined</div>
-                <div className="text-xl font-black text-red-600 leading-none">{stats.declined}</div>
-              </div>
-            </div>
+  // Dashboard stats
+  const stats = useMemo(() => {
+    const count = (f: Filter) => submissions.filter(s => matchesFilter(s.status, f)).length;
+    return [
+      { label: 'Your queue', value: count('queue'), hint: 'Waiting for your review', icon: '▤', iconStyles: 'bg-clay-soft text-clay' },
+      { label: 'Approved', value: count('approved'), hint: 'Approved and passed to admin', icon: '✓', iconStyles: 'bg-approved-bg text-approved-text' },
+      { label: 'Declined', value: count('declined'), hint: 'Returned to the submitter', icon: '✕', iconStyles: 'bg-rejected-bg text-rejected-text' },
+    ];
+  }, [submissions]);
+
+  // Filter counts + filtered list
+  const filterCounts = useMemo(() => {
+    const counts: Record<Filter, number> = { all: submissions.length, queue: 0, approved: 0, declined: 0 };
+    submissions.forEach(s => {
+      if (matchesFilter(s.status, 'queue')) counts.queue++;
+      else if (matchesFilter(s.status, 'approved')) counts.approved++;
+      else if (matchesFilter(s.status, 'declined')) counts.declined++;
+    });
+    return counts;
+  }, [submissions]);
+
+  const filteredSubmissions = useMemo(
+    () => submissions.filter(s => matchesFilter(s.status, filter)),
+    [submissions, filter]
+  );
+
+  return (
+    <div className="w-full">
+      <div>
+        <div className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-center max-md:mb-5 max-md:gap-3">
+          <div>
+            <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Approver workspace
+            </p>
+            <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>Review queue</h1>
+            <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">
+              Signed in as <span className="text-warm-text">{user?.email}</span>
+            </p>
           </div>
         </div>
 
+        <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 max-md:mb-6 max-md:gap-3">
+          {stats.map(stat => (
+            <div key={stat.label} className="min-h-39.5 rounded-2xl border border-warm-border bg-card p-5 max-md:min-h-0 max-md:p-3.5">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xs font-medium text-muted-text">{stat.label}</h2>
+                <span className={`flex h-9 w-9 items-center justify-center rounded-xl text-base ${stat.iconStyles}`} aria-hidden="true">
+                  {stat.icon}
+                </span>
+              </div>
+              <p className={`${fonts.serif} mt-3 text-[34px] leading-none text-warm-text max-md:mt-2 max-md:text-[27px]`}>{stat.value}</p>
+              <p className="mt-3 text-[11px] text-muted-text max-md:mt-1.5">{stat.hint}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-semibold text-warm-text">Submissions</h2>
+            <span className="rounded-md bg-sidebar px-2 py-1 text-[10px] font-medium text-muted-text">{filteredSubmissions.length}</span>
+          </div>
+          <span className="text-[11px] text-muted-text max-md:hidden">All submitters</span>
+        </div>
+
+        {/* Filter pills (scroll inside their own row on mobile) */}
+        <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden">
+          {FILTERS.map(f => {
+            const active = filter === f.key;
+            return (
+              <button
+                key={f.key}
+                onClick={() => setFilter(f.key)}
+                aria-pressed={active}
+                className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-xs font-medium transition-colors max-md:h-11 ${
+                  active
+                    ? 'border-clay bg-clay text-white'
+                    : 'border-warm-border bg-card text-warm-text hover:bg-sidebar'
+                }`}
+              >
+                {f.label}
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${active ? 'bg-white/25 text-white' : 'bg-sidebar text-muted-text'}`}>
+                  {filterCounts[f.key]}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
         {loading ? (
-          <div className={`${fonts.mono} animate-pulse text-blue-600 flex items-center gap-2`}>
-            <span className="w-2 h-2 bg-blue-600 rounded-full animate-ping" />
-            [ Syncing Submissions ]
+          <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Syncing records...
           </div>
         ) : (
-          <div className="space-y-8">
-            {submissions.map((sub) => (
-              <article key={sub.id} className="bg-white border-2 border-black p-8 transition-all hover:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] relative overflow-hidden group">
-                {/* Background Watermark */}
-                <div className="absolute top-[-10px] right-[-10px] opacity-[0.03] pointer-events-none select-none text-8xl font-black uppercase">
-                  {sub.status.split('_')[0]}
-                </div>
-
-                <div className="flex flex-col md:flex-row justify-between items-start gap-8 relative z-10">
-                  <div className="space-y-4">
-                    <div>
-                      <div className={`${fonts.mono} text-blue-500 mb-1`}>Tracking: {sub.tracking_number || 'Pending assignment'}</div>
-                      <h3 className={`${fonts.serif} text-4xl text-gray-900 group-hover:text-blue-600 transition-colors`}>
-                        {sub.file_name || "Untitled_File"}
-                      </h3>
-                      <p className={`${fonts.mono} text-gray-400 mt-2`}>
-                        {sub.submitter_email || 'anonymous_user'} // {new Date(sub.created_at).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <StatusStamp status={sub.status} />
-                  </div>
-
-                  <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-                    <button 
-                      onClick={() => router.push(`/workflow/approver/file_management/${sub.id}`)}
-                      className={`${fonts.mono} bg-blue-600 text-white px-10 py-4 hover:bg-black transition-all font-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-1 active:translate-y-1 active:shadow-none whitespace-nowrap`}
-                    >
-                      Manage Entry →
-                    </button>
-                  </div>
-                </div>
-              </article>
-            ))}
-
-            {submissions.length === 0 && (
-              <div className="border-4 border-dashed border-gray-100 py-32 text-center">
-                <p className={`${fonts.mono} text-gray-300 font-black`}>NO_RECORDS_IN_QUEUE</p>
+          <div className="space-y-3">
+            {submissions.length === 0 ? (
+              <div className="rounded-2xl border border-warm-border bg-card py-20 text-center">
+                <p className={`${fonts.serif} text-2xl text-warm-text`}>Your queue is empty</p>
+                <p className="mt-2 text-xs text-muted-text">New submissions will appear here for review.</p>
               </div>
+            ) : filteredSubmissions.length === 0 ? (
+              <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
+                <p className={`${fonts.serif} text-2xl text-warm-text`}>Nothing here</p>
+                <p className="mt-2 text-xs text-muted-text">
+                  No {FILTERS.find(f => f.key === filter)?.label.toLowerCase()} submissions.
+                </p>
+                <button
+                  onClick={() => setFilter('all')}
+                  className="mt-5 inline-flex h-10 items-center rounded-full border border-warm-border px-5 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11"
+                >
+                  Show all
+                </button>
+              </div>
+            ) : (
+              filteredSubmissions.map(sub => (
+                <SubmissionCard key={sub.id} sub={sub} onPreview={setPreviewFile} />
+              ))
             )}
           </div>
         )}
       </div>
+
+      {previewFile && (
+        <div className="fixed inset-0 z-100 flex flex-col bg-warm-text/75 backdrop-blur-sm animate-in fade-in duration-300 max-md:bg-card max-md:backdrop-blur-none">
+          <div className="flex min-h-16 items-center justify-between border-b border-warm-border bg-card px-4 py-3 sm:px-8">
+            <div className="flex min-w-0 flex-col">
+              <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">Document preview</span>
+              <h2 className="max-w-[55vw] truncate text-sm font-semibold text-warm-text">{previewFile.file_name}</h2>
+            </div>
+            <div className="flex shrink-0 items-center gap-2 sm:gap-4">
+              <button
+                onClick={async () => {
+                  const url = await getFileUrl(supabase, previewFile as any);
+                  await downloadFile(url, previewFile.file_name);
+                }}
+                aria-label="Download preview file"
+                className="rounded-full border border-warm-border px-4 py-2 text-[11px] font-medium text-warm-text transition-colors hover:bg-sidebar max-md:flex max-md:h-11 max-md:w-11 max-md:items-center max-md:justify-center max-md:border-0 max-md:p-0"
+              >
+                <svg className="hidden max-md:block" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                  <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3" />
+                </svg>
+                <span className="max-md:sr-only">Download</span>
+              </button>
+              <button
+                onClick={() => setPreviewFile(null)}
+                aria-label="Close preview"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-muted-text transition-colors hover:bg-sidebar hover:text-warm-text max-md:h-11 max-md:w-11"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M18 6L6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-1 items-center justify-center overflow-hidden bg-cream p-3 sm:p-8 max-md:bg-card max-md:p-0">
+            <div className="relative flex h-full w-full max-w-6xl items-center justify-center overflow-hidden rounded-xl border border-warm-border bg-card shadow-xl max-md:max-w-none max-md:rounded-none max-md:border-0 max-md:shadow-none">
+              <FilePreview file={previewFile as any} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
