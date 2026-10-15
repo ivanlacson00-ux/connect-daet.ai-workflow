@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 
@@ -19,7 +19,7 @@ export default function UploadPage() {
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -39,6 +39,7 @@ export default function UploadPage() {
     setUploading(true);
     setMessage(null);
 
+    let uploadedFilePath: string | null = null;
     try {
       // 1. Identify User
       const { data: { user } } = await supabase.auth.getUser();
@@ -62,12 +63,13 @@ export default function UploadPage() {
       const { error: uploadError } = await supabase.storage
         .from('workflow_uploads')
         .upload(filePath, file, {
-          contentType: file.type,
+          contentType: file.type || undefined,
           cacheControl: '3600',
           upsert: false
         });
 
       if (uploadError) throw uploadError;
+      uploadedFilePath = filePath;
 
       const fileNameWithExt = title.toLowerCase().endsWith(`.${fileExt?.toLowerCase()}`) 
         ? title 
@@ -78,7 +80,7 @@ export default function UploadPage() {
         .from('workflow_submissions')
         .insert({
           user_id: user.id,
-          file_url: '',
+          file_url: publicUrl,
           file_path: filePath,
           file_name: fileNameWithExt, 
           file_size: file.size,
@@ -91,9 +93,7 @@ export default function UploadPage() {
         .single();
 
       if (dbError) throw dbError;
-      if (!submission?.tracking_number) {
-        throw new Error('Submission was created without a tracking number.');
-      }
+      uploadedFilePath = null;
 
       setMessage({
         text: `Data Logged Successfully. Tracking Number: ${submission.tracking_number}. Redirecting...`,
@@ -101,9 +101,22 @@ export default function UploadPage() {
       });
       setTimeout(() => router.push('/workflow/user'), 1500);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Upload Error:", error);
-      setMessage({ text: error.message, type: 'error' });
+      if (uploadedFilePath) {
+        try {
+          const { error: cleanupError } = await supabase.storage
+            .from('workflow_uploads')
+            .remove([uploadedFilePath]);
+          if (cleanupError) console.error('Uploaded file cleanup error:', cleanupError);
+        } catch (cleanupError) {
+          console.error('Uploaded file cleanup error:', cleanupError);
+        }
+      }
+      setMessage({
+        text: error instanceof Error ? error.message : 'An unexpected upload error occurred.',
+        type: 'error',
+      });
       setUploading(false);
     }
   };
