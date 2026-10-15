@@ -38,7 +38,7 @@ type Filter = 'all' | 'pending' | 'completed' | 'rejected';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'pending', label: 'Pending' },
-  { key: 'completed', label: 'Completed' },
+  { key: 'completed', label: 'Approved' },
   { key: 'rejected', label: 'Rejected' },
 ];
 
