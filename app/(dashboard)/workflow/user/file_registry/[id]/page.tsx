@@ -5,9 +5,10 @@ import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
 
+// ─── Styles & Fonts (synced with dashboard) ──────────────────────────────────
 const fonts = {
-  serif: "font-serif italic",
-  mono: "font-mono uppercase tracking-[0.2em] text-[10px]",
+  serif: "font-serif",
+  mono: "font-sans text-xs",
 };
 
 interface Submission {
@@ -52,58 +53,71 @@ export default function UserFileDetail() {
     switch (status) {
       case 'pending':
       case 'pending_approver':
-        return { label: 'UNDER VERIFICATION', classes: 'border-2 border-blue-600 text-blue-600 bg-white shadow-[3px_3px_0px_0px_rgba(37,99,235,1)]' };
+        return { label: 'Pending', classes: 'bg-pending-bg text-pending-text' };
       case 'pending_admin':
-        return { label: 'PENDING APPROVAL', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
+        return { label: 'Under review', classes: 'bg-review-bg text-review-text' };
       case 'approved':
-        return { label: 'APPROVED', classes: 'border-2 border-blue-600 text-blue-600 bg-white' };
-      case 'completed':
-        return { label: 'COMPLETED', classes: 'border-2 border-green-600 text-green-600 bg-green-50' };
+        return { label: 'Approved', classes: 'bg-approved-bg text-approved-text' };
       case 'declined_by_approver':
       case 'declined_by_admin':
-        return { label: 'REJECTED', classes: 'border-2 border-red-600 text-red-600 bg-red-50' };
+        return { label: 'Rejected', classes: 'bg-rejected-bg text-rejected-text' };
       default:
-        return { label: status?.toUpperCase(), classes: 'border-2 border-gray-400 text-gray-500' };
+        return { label: status?.replaceAll('_', ' ') || 'Unknown', classes: 'bg-sidebar text-muted-text' };
     }
   };
 
-  if (loading) return <div className={`${fonts.mono} p-20 animate-pulse text-blue-600 uppercase`}>Opening_Secure_Archive...</div>;
-  if (!sub) return <div className="p-20 font-mono text-red-500 underline uppercase">Error: Record_Not_Found</div>;
+  if (loading) {
+    return (
+      <div className="w-full">
+        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Loading submission...
+        </div>
+      </div>
+    );
+  }
+
+  if (!sub) {
+    return (
+      <div className="w-full">
+        <div className="rounded-2xl border border-rejected-bg bg-rejected-bg/50 px-5 py-8 text-xs font-semibold text-rejected-text">
+          Submission not found.
+        </div>
+      </div>
+    );
+  }
 
   const statusConfig = getStatusStyles(sub.status);
-  
+
   // Logic: Only show feedback if it's REJECTED or FINAL APPROVED
   const showFeedback = sub.status === 'approved' || sub.status.includes('declined');
   const officialNote = sub.admin_comments || sub.rejection_comment || sub.approver_comments;
+  const isApproved = sub.status === 'approved';
 
   return (
-    <div className="h-screen bg-[#fafafa] flex flex-col lg:flex-row overflow-hidden border-t-[6px] border-black">
-      
-      {/* SIDEBAR */}
-      <aside className="w-full lg:w-[480px] border-r-2 border-black flex flex-col bg-[#fafafa]">
-        
-        <div className="px-8 pt-8">
-          <button 
-            onClick={() => router.back()} 
-            className={`${fonts.mono} text-gray-400 hover:text-black transition-all flex items-center gap-2 group mb-6`}
-          >
-            ← BACK TO ARCHIVE
-          </button>
-        </div>
+    <div className="w-full">
+      {/* Back */}
+      <div className="mb-5 max-md:mb-4">
+        <button
+          onClick={() => router.back()}
+          className="inline-flex h-10 items-center gap-2 rounded-full border border-warm-border px-4 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11"
+        >
+          <span aria-hidden="true">←</span> Back to files
+        </button>
+      </div>
 
-        <div className="flex-1 overflow-y-auto px-10 py-4 space-y-10 custom-scrollbar">
-          
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 max-md:gap-3">
+
+        {/* DETAILS COLUMN */}
+        <aside className="space-y-4 lg:col-span-5 max-md:space-y-3">
+
           {/* Header */}
-          <section>
-            <div className="flex items-center gap-2 mb-4">
-              <span className="bg-black text-white text-[9px] font-black px-2 py-0.5 tracking-tighter uppercase">Document_Entry // ID: {sub.id.split('-')[0]}</span>
-            </div>
-            <h1 className="text-4xl font-serif italic leading-[0.9] mb-8 break-words tracking-tighter text-zinc-900">{sub.file_name}</h1>
-            <div className="mb-4">
-              <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Tracking_Number</p>
-              <p className="font-mono text-sm font-black tracking-wider text-blue-600">{sub.tracking_number}</p>
-            </div>
-            <div className={`inline-block px-4 py-1.5 font-black text-[11px] tracking-widest uppercase ${statusConfig.classes}`}>
+          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+            <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Submission ID: {sub.id.split('-')[0]}
+            </p>
+            <h1 className={`${fonts.serif} mb-4 break-words text-[28px] leading-tight text-warm-text max-md:text-[24px]`}>{sub.file_name}</h1>
+            <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${statusConfig.classes}`}>
+              <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
               {statusConfig.label}
             </div>
           </section>
@@ -119,102 +133,87 @@ export default function UserFileDetail() {
           </section>
 
           {/* Context Card */}
-          <section className="relative">
-             <div className="border-2 border-black p-6 space-y-6 bg-white shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                <div>
-                  <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Category_Ref</p>
-                  <p className="text-xl font-black tracking-tight text-blue-600 uppercase">{sub.category || 'UNASSIGNED'}</p>
-                </div>
-                <div>
-                  <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>User_Manifest_Context</p>
-                  <p className="text-sm italic leading-relaxed text-zinc-600 whitespace-pre-wrap break-words border-l-2 border-zinc-100 pl-4">
-                    "{sub.description || 'No context brief provided.'}"
-                  </p>
-                </div>
-                <div className="pt-4 border-t border-zinc-100 flex justify-between items-end">
-                   <div>
-                      <p className={`${fonts.mono} text-[8px] text-gray-400`}>Registry_Timestamp</p>
-                      <p className="text-[11px] font-bold">{new Date(sub.created_at).toLocaleDateString()} // {new Date(sub.created_at).toLocaleTimeString()}</p>
-                   </div>
-                   <div className="text-right">
-                      <p className={`${fonts.mono} text-[8px] text-gray-400`}>Weight</p>
-                      <p className="text-[11px] font-bold">{(sub.file_size / 1024).toFixed(2)} KB</p>
-                   </div>
-                </div>
-             </div>
+          <section className="space-y-5 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-muted-text">Category</p>
+              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">{sub.category || 'Unassigned'}</p>
+            </div>
+            <div>
+              <p className="mb-1.5 text-[11px] font-medium text-muted-text">Description</p>
+              <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
+                "{sub.description || 'No description provided.'}"
+              </p>
+            </div>
+            <div className="flex items-end justify-between gap-4 border-t border-warm-border pt-4">
+              <div>
+                <p className="text-[10px] font-medium text-muted-text">Submitted on</p>
+                <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{new Date(sub.created_at).toLocaleDateString()} at {new Date(sub.created_at).toLocaleTimeString()}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] font-medium text-muted-text">File size</p>
+                <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{(sub.file_size / 1024).toFixed(2)} KB</p>
+              </div>
+            </div>
           </section>
 
           {/* Official Feedback Section */}
           {showFeedback && officialNote && (
-            <section className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
-               <p className={`${fonts.mono} text-red-600 border-b border-red-100 pb-2`}>Official_Validation_Feedback</p>
-               <div className="p-6 border-2 border-black bg-white shadow-[6px_6px_0px_0px_rgba(239,68,68,1)] relative overflow-hidden">
-                  <div className="absolute top-0 right-0 p-1 bg-red-600 text-white text-[7px] font-black uppercase">Official</div>
-                  <p className="text-sm italic leading-relaxed text-zinc-800 break-words">
-                    "{officialNote}"
-                  </p>
-               </div>
+            <section
+              className={`animate-in fade-in slide-in-from-bottom-4 rounded-2xl border p-5 duration-700 max-md:p-3.5 ${
+                isApproved
+                  ? 'border-approved-bg bg-approved-bg/50'
+                  : 'border-rejected-bg bg-rejected-bg/50'
+              }`}
+            >
+              <div className="mb-2 flex items-center justify-between">
+                <p className={`text-xs font-semibold ${isApproved ? 'text-approved-text' : 'text-rejected-text'}`}>Official feedback</p>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${isApproved ? 'bg-approved-bg text-approved-text' : 'bg-rejected-bg text-rejected-text'}`}>Official</span>
+              </div>
+              <p className="break-words font-serif text-base leading-relaxed text-warm-text">
+                "{officialNote}"
+              </p>
             </section>
           )}
 
           {/* Locked Status for Active Review */}
           {!showFeedback && (
-             <section className="p-6 border-2 border-dashed border-zinc-300 bg-zinc-50">
-                <p className={`${fonts.mono} text-zinc-400 text-center leading-tight`}>
-                  Note: Official feedback will be visible once the validation process is finalized.
-                </p>
-             </section>
+            <section className="rounded-2xl border border-dashed border-warm-border bg-sidebar p-5 max-md:p-3.5">
+              <p className="text-center text-xs leading-relaxed text-muted-text">
+                Official feedback will appear here once the review is complete.
+              </p>
+            </section>
           )}
-        </div>
 
-        {/* Footer Actions */}
-        <div className="p-10 border-t-2 border-black bg-white">
+          {/* Footer Actions */}
           <button
-            onClick={() => window.print()}
-            className={`${fonts.mono} no-print w-full py-3 mb-3 border-2 border-blue-600 text-blue-600 font-black text-[10px] tracking-[0.2em] hover:bg-blue-50 transition-all`}
-          >
-            Print_Submission_Receipt
-          </button>
-          <button 
             onClick={async () => {
               const url = await getFileUrl(supabase, sub);
               await downloadFile(url, sub.file_name);
             }}
-            className={`${fonts.mono} w-full py-4 bg-black text-white font-black text-[10px] tracking-[0.2em] shadow-[4px_4px_0px_0px_rgba(37,99,235,1)] hover:bg-blue-600 active:shadow-none active:translate-x-1 active:translate-y-1 transition-all`}
+            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
           >
-            Download_Original_Manifest
+            Download original file
           </button>
-        </div>
-      </aside>
+        </aside>
 
-      {/* PREVIEW PANEL */}
-      <main className="flex-1 bg-zinc-900 flex flex-col p-8 relative overflow-hidden">
-        <div className="absolute top-4 left-6 z-20">
-           <div className={`${fonts.mono} text-white/50 text-[9px] bg-white/5 border border-white/10 px-3 py-1 backdrop-blur-md`}>
-             SECURE_ASSET_PREVIEW // {sub.id.split('-')[0].toUpperCase()}
-           </div>
-        </div>
+        {/* PREVIEW PANEL */}
+        <main className="lg:col-span-7">
+          <div className="flex flex-col overflow-hidden rounded-2xl border border-warm-border bg-card lg:sticky lg:top-10">
+            <div className="flex min-h-12 items-center border-b border-warm-border px-5 py-3 max-md:px-3.5">
+              <div className="flex min-w-0 flex-col">
+                <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">Document preview</span>
+                <span className="truncate text-[11px] font-medium text-warm-text">
+                  {sub.file_name}
+                </span>
+              </div>
+            </div>
 
-        <div className="flex-1 bg-white border-[4px] border-black shadow-[30px_30px_0px_0px_rgba(0,0,0,0.5)] overflow-hidden flex items-center justify-center relative">
-          <FilePreview file={sub} />
-          
-          <div className="absolute bottom-8 right-8 pointer-events-none opacity-10">
-            <span className="text-[60px] font-black text-black select-none tracking-tighter uppercase leading-none">Dossier<br/>Archive</span>
+            <div className="relative flex h-[60vh] min-h-[380px] items-center justify-center overflow-hidden bg-cream lg:h-[75vh]">
+              <FilePreview file={sub} />
+            </div>
           </div>
-        </div>
-      </main>
-
-      <style jsx global>{`
-        @media print {
-          body * { visibility: hidden; }
-          .receipt-print, .receipt-print * { visibility: visible; }
-          .receipt-print { position: absolute; inset: 0; margin: 0; box-shadow: none; }
-          .no-print { display: none !important; }
-        }
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #fafafa; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #000; }
-      `}</style>
+        </main>
+      </div>
     </div>
   );
 }
