@@ -177,7 +177,7 @@ export default function UploadPage() {
             <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>New Log</h1>
           </div>
           <button
-            onClick={() => router.back()}
+            onClick={() => router.push('/workflow/user')}
             className="inline-flex h-10 items-center justify-center gap-2 self-start rounded-full border border-warm-border px-5 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar sm:self-auto max-md:h-11 max-md:w-full max-md:self-stretch"
           >
             [ Cancel_Exit ]

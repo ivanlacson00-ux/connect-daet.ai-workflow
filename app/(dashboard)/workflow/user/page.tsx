@@ -26,6 +26,15 @@ interface Submission {
   updated_at: string;
 }
 
+// ─── Timeout helper (stops a hanging request from freezing the page) ─────────
+const withTimeout = <T,>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> =>
+  Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)
+    ),
+  ]);
+
 // ─── Status groups ───────────────────────────────────────────────────────────
 // Add any other status values from your database to these lists
 const PENDING_STATUSES = ['pending', 'pending_approver', 'pending_admin'];
@@ -154,18 +163,31 @@ export default function WorkflowDashboard() {
   const supabase = useMemo(() => createClient(), []);
 
   const fetchAll = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    setUser(user);
-    if (!user) return;
+    try {
+      // getSession reads from local storage, so it can't hang on a network call like getUser can
+      const { data: { session } } = await withTimeout(supabase.auth.getSession(), 8000, 'getSession');
+      const user = session?.user ?? null;
+      setUser(user);
+      if (!user) return;
 
-    const { data, error } = await supabase
-      .from('workflow_submissions')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
+      const { data, error } = await withTimeout(
+        supabase
+          .from('workflow_submissions')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false }),
+        10000,
+        'Fetching submissions'
+      );
 
-    if (!error && data) setSubmissions(data);
-    setLoading(false);
+      if (error) console.error('Fetch error:', error);
+      if (data) setSubmissions(data);
+    } catch (err) {
+      console.error('Dashboard load failed:', err);
+    } finally {
+      // Always stop the "Syncing records..." spinner, even if something failed or timed out
+      setLoading(false);
+    }
   }, [supabase]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
