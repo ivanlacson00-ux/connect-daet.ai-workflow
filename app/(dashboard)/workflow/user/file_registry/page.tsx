@@ -18,35 +18,6 @@ interface PreviewSubmission {
   file_type?: string | null;
 }
 
-const getFileTypeIcon = (fileName: string, fileType?: string) => {
-  const ext = fileName?.split('.').pop()?.toLowerCase();
-  if (fileType?.startsWith('video/')) return '🎬';
-  if (fileType?.startsWith('audio/')) return '🎧';
-  switch (ext) {
-    case 'pdf': return '📕';
-    case 'jpg':
-    case 'jpeg':
-    case 'png':
-    case 'svg': return '🖼️';
-    case 'doc':
-    case 'docx': return '📘';
-    case 'xls':
-    case 'xlsx': return '📗';
-    case 'mp4':
-    case 'webm':
-    case 'ogv':
-    case 'mov':
-    case 'm4v': return '🎬';
-    case 'mp3':
-    case 'wav':
-    case 'm4a':
-    case 'aac':
-    case 'oga':
-    case 'flac': return '🎧';
-    default: return '📄';
-  }
-};
-
 export default function UserFileRegistry() {
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -174,8 +145,9 @@ export default function UserFileRegistry() {
                   className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-4">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-sidebar text-xl">
-                      {getFileTypeIcon(file.file_name, file.file_type)}
+                    <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
+                      <span className="text-lg leading-4" aria-hidden="true">▤</span>
+                      <span className="mt-1 text-[8px] font-semibold uppercase">{file.file_type?.split('/').at(-1)?.slice(0, 3) || 'File'}</span>
                     </div>
 
                     <div className="min-w-0 flex-1">
