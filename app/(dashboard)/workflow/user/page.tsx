@@ -26,6 +26,12 @@ interface Submission {
   updated_at: string;
 }
 
+// ─── Status groups ───────────────────────────────────────────────────────────
+// Add any other status values from your database to these lists
+const PENDING_STATUSES = ['pending', 'pending_approver', 'pending_admin'];
+const COMPLETED_STATUSES = ['approved', 'completed'];
+const REJECTED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'rejected'];
+
 // ─── Filters ─────────────────────────────────────────────────────────────────
 type Filter = 'all' | 'pending' | 'completed' | 'rejected';
 
@@ -37,13 +43,14 @@ const FILTERS: { key: Filter; label: string }[] = [
 ];
 
 const matchesFilter = (status: string, filter: Filter) => {
+  const s = (status || '').toLowerCase();
   switch (filter) {
     case 'pending':
-      return ['pending', 'pending_approver', 'pending_admin'].includes(status);
+      return PENDING_STATUSES.includes(s);
     case 'completed':
-      return status === 'approved';
+      return COMPLETED_STATUSES.includes(s);
     case 'rejected':
-      return status === 'declined_by_approver' || status === 'declined_by_admin';
+      return REJECTED_STATUSES.includes(s);
     default:
       return true;
   }
@@ -52,16 +59,18 @@ const matchesFilter = (status: string, filter: Filter) => {
 // ─── Status Stamp (Synced Unified Logic) ─────────────────────────────────────
 function StatusStamp({ status }: { status: string }) {
   const getDisplayConfig = () => {
-    switch (status) {
+    switch ((status || '').toLowerCase()) {
       case 'pending':
       case 'pending_approver':
         return { label: 'Pending', styles: 'bg-pending-bg text-pending-text' };
       case 'pending_admin':
         return { label: 'Under review', styles: 'bg-review-bg text-review-text' };
       case 'approved':
+      case 'completed':
         return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
       case 'declined_by_approver':
       case 'declined_by_admin':
+      case 'rejected':
         return { label: 'Rejected', styles: 'bg-rejected-bg text-rejected-text' };
       default:
         return { label: status?.replaceAll('_', ' ') || 'Unknown', styles: 'bg-sidebar text-muted-text' };
@@ -81,7 +90,7 @@ function StatusStamp({ status }: { status: string }) {
 // ─── Individual Card Component ───────────────────────────────────────────────
 function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Submission) => void }) {
   const router = useRouter();
-  const isRejected = sub.status.includes('declined') || sub.status.includes('rejected');
+  const isRejected = matchesFilter(sub.status, 'rejected');
 
   return (
     <article className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
@@ -161,12 +170,23 @@ export default function WorkflowDashboard() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  // Close preview with Escape
+  useEffect(() => {
+    if (!previewFile) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreviewFile(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [previewFile]);
+
   // Dynamic Dashboard Stats
-  const stats = useMemo(() => [
-    { label: 'Logged Files', value: submissions.length },
-    { label: 'Cleared', value: submissions.filter(s => s.status === 'approved').length },
-    { label: 'Reward Bal', value: `${submissions.filter(s => s.status === 'approved').length * 50} pts` },
-  ], [submissions]);
+  const stats = useMemo(() => {
+    const cleared = submissions.filter(s => matchesFilter(s.status, 'completed')).length;
+    return [
+      { label: 'Logged Files', value: submissions.length },
+      { label: 'Cleared', value: cleared },
+      { label: 'Reward Bal', value: `${cleared * 50} pts` },
+    ];
+  }, [submissions]);
 
   // Filter counts + filtered list
   const filterCounts = useMemo(() => {
