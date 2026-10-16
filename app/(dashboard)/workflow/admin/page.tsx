@@ -1,14 +1,14 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAdminStats } from '@/hooks/useAdminStats';
 import Link from 'next/link';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
-  serif: "font-serif italic",
-  mono: "font-mono uppercase tracking-[0.2em] text-[10px]",
+  serif: "font-serif",
+  mono: "font-sans text-xs",
 };
 
 interface Submission {
@@ -27,34 +27,35 @@ interface Submission {
 function StatusStamp({ status }: { status: string }) {
   const getDisplayConfig = () => {
     const s = status?.toLowerCase();
-    
+
     if (s === 'pending_admin') {
-      return { label: 'PENDING APPROVAL', color: 'text-blue-600', bg: 'bg-blue-50' };
+      return { label: 'Pending approval', styles: 'bg-review-bg text-review-text' };
     }
     if (s.includes('approved')) {
-      return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
+      return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
     }
     if (s === 'completed') {
-      return { label: 'COMPLETED', color: 'text-green-700', bg: 'bg-green-100' };
+      return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
     }
     if (s.includes('declined')) {
-      return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
+      return { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' };
     }
-    
-    return { label: 'UNDER VERIFICATION', color: 'text-orange-600', bg: 'bg-orange-50' };
+
+    return { label: 'Under verification', styles: 'bg-pending-bg text-pending-text' };
   };
 
   const config = getDisplayConfig();
 
   return (
-    <div className={`inline-flex items-center gap-2 border-2 border-current px-3 py-0.5 ${config.color} ${config.bg} ${fonts.mono} font-black shadow-[2px_2px_0px_0px_currentColor] text-[9px]`}>
+    <div className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3 py-1.5 text-[11px] font-medium ${config.styles}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
       {config.label}
     </div>
   );
 }
 
 export default function AdminDashboard() {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const { stats: adminStats } = useAdminStats();
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,10 +66,10 @@ export default function AdminDashboard() {
   const declinedCount = (adminStats.declinedByApprover || 0) + (adminStats.declinedByAdmin || 0);
 
   const statCards = [
-    { label: 'Total Users', value: adminStats.totalUsers },
-    { label: 'Pending',    value: pendingCount },
-    { label: 'Approved',   value: adminStats.approved },
-    { label: 'Declined',   value: declinedCount },
+    { label: 'Total users', value: adminStats.totalUsers, hint: 'Registered accounts', icon: '♧', iconStyles: 'bg-clay-soft text-clay' },
+    { label: 'Pending', value: pendingCount, hint: 'Waiting on a review', icon: '▤', iconStyles: 'bg-pending-bg text-pending-text' },
+    { label: 'Approved', value: adminStats.approved, hint: 'Reviewed and approved', icon: '✓', iconStyles: 'bg-approved-bg text-approved-text' },
+    { label: 'Declined', value: declinedCount, hint: 'Returned to submitters', icon: '✕', iconStyles: 'bg-rejected-bg text-rejected-text' },
   ];
 
   // ─── Data Fetching ──────────────────────────────────────────────────────────
@@ -116,127 +117,129 @@ export default function AdminDashboard() {
   const isImage = (fileName: string) => /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(fileName);
 
   return (
-    <div className="space-y-12 pb-20">
+    <div className="w-full">
       {/* Header Section */}
-      <div className="border-b-4 border-gray-900 pb-8">
-        <h1 className={`${fonts.serif} text-7xl font-light text-gray-900 leading-none tracking-tight`}>
-          Admin Hub
-        </h1>
-        <p className={`${fonts.mono} mt-4 text-blue-600 font-bold`}>
-          System Diagnostics // Node Status: Online
+      <div className="mb-8 max-md:mb-5">
+        <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Admin workspace
+        </p>
+        <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>Admin hub</h1>
+        <p className="mt-2 flex items-center gap-2 text-xs text-muted-text max-md:mt-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-approved-text" /> System status: online
         </p>
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4 max-md:mb-6 max-md:gap-3">
         {statCards.map((card) => (
-          <div key={card.label} className="bg-[#001f3f] border-4 border-blue-900 p-6 text-white shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-            <p className={`${fonts.mono} text-gray-400 opacity-90 leading-tight mb-2 text-[9px] font-bold`}>{card.label}</p>
-            <p className="text-5xl font-black leading-none tracking-tighter">{card.value}</p>
+          <div key={card.label} className="min-h-39.5 rounded-2xl border border-warm-border bg-card p-5 max-md:min-h-0 max-md:p-3.5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-medium text-muted-text">{card.label}</h2>
+              <span className={`flex h-9 w-9 items-center justify-center rounded-xl text-base ${card.iconStyles}`} aria-hidden="true">
+                {card.icon}
+              </span>
+            </div>
+            <p className={`${fonts.serif} mt-3 text-[34px] leading-none text-warm-text max-md:mt-2 max-md:text-[27px]`}>{card.value}</p>
+            <p className="mt-3 text-[11px] text-muted-text max-md:mt-1.5">{card.hint}</p>
           </div>
         ))}
       </div>
 
-      {/* Recent Submissions Table (Merged Design) */}
-      <div className="bg-white border-2 border-gray-900 shadow-[10px_10px_0px_0px_rgba(37,99,235,0.1)] overflow-hidden">
-        <div className="p-4 border-b-2 border-gray-900 bg-gray-50 flex items-center justify-between">
-          <h2 className={`${fonts.mono} font-black text-gray-900`}>Recent_Entry_Log</h2>
-          <div className="flex items-center gap-2">
-            {loading && <span className={`${fonts.mono} text-blue-600 animate-pulse`}>Syncing...</span>}
-            <div className="w-2 h-2 bg-blue-900 rounded-full animate-pulse" />
-          </div>
+      {/* Recent Submissions */}
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-semibold text-warm-text">Recent submissions</h2>
+          <span className="rounded-md bg-sidebar px-2 py-1 text-[10px] font-medium text-muted-text">{submissions.length}</span>
         </div>
-        
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className={`${fonts.mono} bg-gray-900 text-white`}>
-                <th className="p-5 font-bold">Document</th>
-                <th className="p-5 font-bold">Origin</th>
-                <th className="p-5 font-bold text-center">Status</th>
-                <th className="p-5 font-bold">Timestamp</th>
-                <th className="p-5 font-bold text-right">Utility</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y-2 divide-gray-900">
-              {loading ? (
-                <tr>
-                  <td colSpan={5} className="py-20 text-center">
-                    <span className={`${fonts.mono} text-gray-400 animate-pulse text-lg`}>SYNCING_DATABASE...</span>
-                  </td>
-                </tr>
-              ) : submissions.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-20 text-center">
-                    <p className={`${fonts.mono} text-gray-400`}>Zero_Entries_Found</p>
-                  </td>
-                </tr>
-              ) : (
-                submissions.map((sub) => (
-                  <tr key={sub.id} className="hover:bg-blue-50/30 transition-colors group">
-                    <td className="p-5">
-                      <div className="font-bold text-gray-900 underline decoration-blue-500/30 decoration-2 underline-offset-4 truncate max-w-[200px]">
-                        {sub.file_name}
-                      </div>
-                      <div className="text-[10px] font-mono text-blue-600 mt-1 uppercase">
-                        {sub.tracking_number || 'TRACKING PENDING'} // TYPE: {sub.file_type || 'DOC'}
-                      </div>
-                    </td>
-                    <td className="p-5">
-                      <div className="font-bold text-gray-700 text-xs truncate max-w-[180px]">
-                        {sub.submitter_email}
-                      </div>
-                    </td>
-                    <td className="p-5 text-center">
-                      <StatusStamp status={sub.status} />
-                    </td>
-                    <td className="p-5">
-                      <div className={`${fonts.mono} text-gray-600`}>
-                        {new Date(sub.created_at).toLocaleDateString()}
-                      </div>
-                    </td>
-                    <td className="p-5 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button 
-                          onClick={() => setPreviewFile({ url: `/api/workflow/files/${sub.id}?redirect=1`, name: sub.file_name })}
-                          className="p-2 border-2 border-gray-900 hover:bg-blue-600 hover:text-white transition-all bg-white"
-                        >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                        </button>
-                        <Link 
-                          href={`/workflow/admin/submissions/${sub.id}`}
-                          className={`${fonts.mono} inline-block bg-white border-2 border-gray-900 px-4 py-1.5 font-bold text-[10px] shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all text-gray-900`}
-                        >
-                          Manage
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        <span className="text-[11px] text-muted-text max-md:hidden">Latest 10 entries</span>
       </div>
+
+      {loading ? (
+        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Syncing records...
+        </div>
+      ) : submissions.length === 0 ? (
+        <div className="rounded-2xl border border-warm-border bg-card py-20 text-center">
+          <p className={`${fonts.serif} text-2xl text-warm-text`}>No submissions yet</p>
+          <p className="mt-2 text-xs text-muted-text">New submissions will appear here.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {submissions.map((sub) => (
+            <article
+              key={sub.id}
+              className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+            >
+              <div className="flex min-w-0 items-center gap-4">
+                <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
+                  <span className="text-lg leading-4" aria-hidden="true">▤</span>
+                  <span className="mt-1 text-[8px] font-semibold uppercase">
+                    {sub.file_type?.split('/').at(-1)?.slice(0, 3) || 'Doc'}
+                  </span>
+                </div>
+                <div className="min-w-0">
+                  <h3 className="truncate text-sm font-semibold text-warm-text group-hover:text-clay">{sub.file_name}</h3>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
+                    <span>{sub.tracking_number || 'Tracking pending'}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="truncate">From {sub.submitter_email}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{new Date(sub.created_at).toLocaleDateString()}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+                <div className="max-md:self-start">
+                  <StatusStamp status={sub.status} />
+                </div>
+                <button
+                  onClick={() => setPreviewFile({ url: `/api/workflow/files/${sub.id}?redirect=1`, name: sub.file_name })}
+                  className="inline-flex h-10 items-center gap-2 rounded-full border border-warm-border px-4 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11 max-md:w-full max-md:justify-center"
+                  aria-label={`Preview ${sub.file_name}`}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+                  </svg>
+                  Preview
+                </button>
+                <Link
+                  href={`/workflow/admin/submissions/${sub.id}`}
+                  className="inline-flex h-10 items-center gap-2 rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full max-md:justify-center"
+                >
+                  Manage <span aria-hidden="true">→</span>
+                </Link>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
 
       {/* Preview Modal */}
       {previewFile && (
-        <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col animate-in fade-in duration-300">
-          <div className="px-6 py-4 flex justify-between items-center border-b-2 border-white/10 bg-black">
-            <div className="flex flex-col text-white">
-              <span className={`${fonts.mono} text-blue-500 mb-0.5`}>Vault_Preview_Engine</span>
-              <h2 className="text-lg font-medium">{previewFile.name}</h2>
+        <div className="fixed inset-0 z-100 flex flex-col bg-warm-text/75 backdrop-blur-sm animate-in fade-in duration-300 max-md:bg-card max-md:backdrop-blur-none">
+          <div className="flex min-h-16 items-center justify-between border-b border-warm-border bg-card px-4 py-3 sm:px-8">
+            <div className="flex min-w-0 flex-col">
+              <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">Document preview</span>
+              <h2 className="max-w-[55vw] truncate text-sm font-semibold text-warm-text">{previewFile.name}</h2>
             </div>
-            <button onClick={() => setPreviewFile(null)} className="text-white hover:text-red-500 transition-all p-2">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            <button
+              onClick={() => setPreviewFile(null)}
+              aria-label="Close preview"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-text transition-colors hover:bg-sidebar hover:text-warm-text max-md:h-11 max-md:w-11"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M18 6L6 18M6 6l12 12" /></svg>
             </button>
           </div>
-          <div className="flex-1 flex items-center justify-center overflow-hidden bg-[#1a1a1a]">
-            {isImage(previewFile.name) ? (
-              <img src={previewFile.url} alt="Preview" className="max-w-full max-h-full object-contain p-8 animate-in zoom-in-95" />
-            ) : (
-              <iframe className="w-full h-full border-none bg-white" src={previewFile.url} />
-            )}
+
+          <div className="flex flex-1 items-center justify-center overflow-hidden bg-cream p-3 sm:p-8 max-md:bg-card max-md:p-0">
+            <div className="relative flex h-full w-full max-w-6xl items-center justify-center overflow-hidden rounded-xl border border-warm-border bg-card shadow-xl max-md:max-w-none max-md:rounded-none max-md:border-0 max-md:shadow-none">
+              {isImage(previewFile.name) ? (
+                <img src={previewFile.url} alt="Preview" className="max-h-full max-w-full object-contain p-4 animate-in zoom-in-95" />
+              ) : (
+                <iframe className="h-full w-full border-none bg-white" src={previewFile.url} />
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -1,13 +1,16 @@
 // src/app/(dashboard)/workflow/admin/user_management/page.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
+// ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
-  serif: "font-serif italic",
-  mono: "font-mono uppercase tracking-[0.15em] text-[10px]",
+  serif: 'font-serif',
 };
+
+type Role = 'user' | 'approver' | 'admin';
+type RoleFilter = 'all' | Role;
 
 interface UserProfile {
   id: string;
@@ -16,18 +19,43 @@ interface UserProfile {
   created_at: string;
 }
 
+const ROLES: Role[] = ['user', 'approver', 'admin'];
+
+const FILTERS: { key: RoleFilter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'admin', label: 'Admin' },
+  { key: 'approver', label: 'Approver' },
+  { key: 'user', label: 'User' },
+];
+
+const ROLE_STYLES: Record<string, string> = {
+  admin: 'bg-clay-soft text-clay',
+  approver: 'bg-review-bg text-review-text',
+  user: 'bg-sidebar text-muted-text',
+};
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// ─── Role Badge ──────────────────────────────────────────────────────────────
+function RoleBadge({ role }: { role: string }) {
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${ROLE_STYLES[role] ?? ROLE_STYLES.user}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
+      {capitalize(role || 'unknown')}
+    </span>
+  );
+}
+
 export default function UserManagementPage() {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
   const [updating, setUpdating] = useState<string | null>(null);
 
-  // --- DATA ACTIONS ---
-
-  const fetchUsers = async () => {
-    setLoading(true);
+  // ─── Data actions ──────────────────────────────────────────────────────────
+  const fetchUsers = useCallback(async () => {
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
@@ -36,9 +64,9 @@ export default function UserManagementPage() {
     if (error) console.error('Fetch error:', error.message);
     setUsers(data ?? []);
     setLoading(false);
-  };
+  }, [supabase]);
 
-  const updateRole = async (userId: string, newRole: 'user' | 'approver' | 'admin') => {
+  const updateRole = async (userId: string, newRole: Role) => {
     setUpdating(userId);
     const { error } = await supabase
       .from('profiles')
@@ -47,17 +75,16 @@ export default function UserManagementPage() {
 
     if (error) {
       console.error('Role update failed:', error.message);
+    } else {
+      setUsers(prev => prev.map(u => (u.id === userId ? { ...u, role: newRole } : u)));
     }
-
     setUpdating(null);
-    fetchUsers();
   };
 
   const deleteUser = async (userId: string, email: string) => {
     const confirmed = window.confirm(
       `WARNING: Are you sure you want to delete ${email}? This will remove their profile record.`
     );
-    
     if (!confirmed) return;
 
     setUpdating(userId);
@@ -69,163 +96,174 @@ export default function UserManagementPage() {
     if (error) {
       console.error('Delete error:', error.message);
       alert('Failed to delete user profile.');
+    } else {
+      setUsers(prev => prev.filter(u => u.id !== userId));
     }
-
     setUpdating(null);
-    fetchUsers();
   };
 
-  // --- LIFECYCLE ---
-
+  // ─── Lifecycle ─────────────────────────────────────────────────────────────
   useEffect(() => {
     fetchUsers();
 
     const channel = supabase
       .channel('realtime-user-management')
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'profiles',
-      }, fetchUsers)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, fetchUsers)
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [supabase, fetchUsers]);
 
-  // --- FILTERING ---
+  // ─── Filtering ─────────────────────────────────────────────────────────────
+  const roleCounts = useMemo(() => {
+    const counts: Record<RoleFilter, number> = { all: users.length, admin: 0, approver: 0, user: 0 };
+    users.forEach(u => {
+      if (u.role in counts) counts[u.role as Role]++;
+    });
+    return counts;
+  }, [users]);
 
-  const filtered = users.filter((u) => {
-    const matchesSearch = u.email.toLowerCase().includes(search.toLowerCase());
-    const matchesRole = roleFilter === 'all' || u.role === roleFilter;
-    return matchesSearch && matchesRole;
-  });
-
-  const roleStyles: Record<string, string> = {
-    admin: 'border-blue-600 text-blue-600 bg-blue-50',
-    approver: 'border-purple-600 text-purple-600 bg-purple-50',
-    user: 'border-gray-400 text-gray-500 bg-gray-50',
-  };
+  const filtered = useMemo(() => {
+    const query = search.toLowerCase();
+    return users.filter(u =>
+      (u.email || '').toLowerCase().includes(query) &&
+      (roleFilter === 'all' || u.role === roleFilter)
+    );
+  }, [users, search, roleFilter]);
 
   return (
-    <div className="space-y-10 pb-20">
-      {/* Header Section */}
-      <div className="border-b-4 border-gray-900 pb-8">
-        <h1 className={`${fonts.serif} text-7xl font-light text-gray-900 leading-none tracking-tight`}>
-          User Management
-        </h1>
-        <div className="flex items-center justify-between mt-4">
-          <p className={`${fonts.mono} text-blue-600 font-bold`}>
-            System Access Control
-          </p>
-          <p className={`${fonts.mono} text-gray-400 font-bold`}>
-            Total Users: {users.length}
-          </p>
-        </div>
+    <div className="w-full">
+      {/* Header */}
+      <div className="mb-8 max-md:mb-5">
+        <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Admin workspace
+        </p>
+        <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>User management</h1>
+        <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">
+          Control who can submit, review and administer files. Total users: <span className="text-warm-text">{users.length}</span>
+        </p>
       </div>
 
-      {/* Filters Bar */}
-      <div className="flex flex-col md:flex-row gap-6">
-        <div className="flex-1 max-w-md">
-          <label className={`${fonts.mono} block mb-2 font-bold text-gray-900`}>Search By Email</label>
+      {/* Toolbar */}
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="relative w-full lg:max-w-xl lg:flex-1">
           <input
             type="text"
-            placeholder="Enter email address..."
+            placeholder="Search by email..."
+            aria-label="Search by email"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-white border-2 border-gray-900 p-4 font-medium text-sm shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:shadow-none focus:translate-x-1 focus:translate-y-1 transition-all outline-none"
+            className="h-12 w-full rounded-full border border-warm-border bg-card px-5 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay max-md:h-11"
           />
         </div>
 
-        <div className="w-full md:w-48">
-          <label className={`${fonts.mono} block mb-2 font-bold text-gray-900`}>Filter Role</label>
-          <select
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
-            className="w-full bg-white border-2 border-gray-900 p-4 font-bold text-xs shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:shadow-none focus:translate-x-1 focus:translate-y-1 transition-all cursor-pointer uppercase"
-          >
-            <option value="all">All Roles</option>
-            <option value="admin">Admin</option>
-            <option value="approver">Approver</option>
-            <option value="user">User</option>
-          </select>
+        {/* Role filter pills (scroll inside their own row on mobile) */}
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden">
+          {FILTERS.map(f => {
+            const active = roleFilter === f.key;
+            return (
+              <button
+                key={f.key}
+                onClick={() => setRoleFilter(f.key)}
+                aria-pressed={active}
+                className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-xs font-medium transition-colors max-md:h-11 ${
+                  active
+                    ? 'border-clay bg-clay text-white'
+                    : 'border-warm-border bg-card text-warm-text hover:bg-sidebar'
+                }`}
+              >
+                {f.label}
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${active ? 'bg-white/25 text-white' : 'bg-sidebar text-muted-text'}`}>
+                  {roleCounts[f.key]}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Users Table */}
-      <div className="bg-white border-2 border-gray-900 shadow-[10px_10px_0px_0px_rgba(37,99,235,0.1)] overflow-hidden">
-        <div className="p-4 border-b-2 border-gray-900 bg-gray-50 flex items-center justify-between">
-          <h2 className={`${fonts.mono} font-black text-gray-900`}>User Directory</h2>
-          <div className="flex items-center gap-2">
-            {loading && <span className={`${fonts.mono} text-blue-600 animate-pulse`}>Loading...</span>}
-            <div className="w-2 h-2 bg-blue-900 rounded-full animate-pulse" />
-          </div>
+      {/* List header */}
+      <div className="mb-4 flex items-center gap-3">
+        <h2 className="text-sm font-semibold text-warm-text">User directory</h2>
+        <span className="rounded-md bg-sidebar px-2 py-1 text-[10px] font-medium text-muted-text">{filtered.length}</span>
+      </div>
+
+      {/* List */}
+      {loading ? (
+        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Loading users...
         </div>
-
-        <div className="overflow-x-auto">
-          {filtered.length === 0 && !loading ? (
-            <div className="py-20 text-center border-b-2 border-gray-900">
-              <p className="font-medium text-gray-400 italic">No users match your criteria.</p>
-            </div>
-          ) : (
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className={`${fonts.mono} bg-gray-900 text-white`}>
-                  <th className="p-5 font-bold">User Details</th>
-                  <th className="p-5 font-bold text-center">Current Role</th>
-                  <th className="p-5 font-bold">Date Joined</th>
-                  <th className="p-5 font-bold text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y-2 divide-gray-900">
-                {filtered.map((user) => (
-                  <tr key={user.id} className="hover:bg-blue-50/30 transition-colors">
-                    <td className="p-5">
-                      <div className="font-bold text-gray-900">{user.email}</div>
-                      <div className="text-[10px] font-mono text-gray-400 mt-0.5">ID: {user.id.slice(0, 8)}</div>
-                    </td>
-                    <td className="p-5 text-center">
-                      <span className={`inline-block border-2 px-3 py-0.5 ${fonts.mono} font-black text-[9px] shadow-[2px_2px_0px_0px_currentColor] uppercase ${roleStyles[user.role]}`}>
-                        {user.role}
-                      </span>
-                    </td>
-                    <td className="p-5">
-                      <div className="text-sm text-gray-600 font-medium">
-                        {new Date(user.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
-                      </div>
-                    </td>
-                    <td className="p-5 text-right">
-                      <div className="flex items-center justify-end gap-3">
-                        {updating === user.id ? (
-                          <div className="text-xs font-bold text-blue-600 animate-pulse uppercase">Processing...</div>
-                        ) : (
-                          <>
-                            <select
-                              value={user.role}
-                              onChange={(e) => updateRole(user.id, e.target.value as 'user' | 'approver' | 'admin')}
-                              className="bg-white border-2 border-gray-900 px-3 py-1 font-bold text-[11px] shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all cursor-pointer outline-none uppercase"
-                            >
-                              <option value="user">User</option>
-                              <option value="approver">Approver</option>
-                              <option value="admin">Admin</option>
-                            </select>
-
-                            <button
-                              onClick={() => deleteUser(user.id, user.email)}
-                              className="bg-red-50 text-red-600 border-2 border-red-600 px-3 py-1 font-bold text-[11px] shadow-[3px_3px_0px_0px_rgba(220,38,38,1)] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all cursor-pointer uppercase"
-                            >
-                              Delete
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      ) : filtered.length === 0 ? (
+        <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
+          <p className={`${fonts.serif} text-2xl text-warm-text`}>Nothing here</p>
+          <p className="mt-2 text-xs text-muted-text">No users match your search or filter.</p>
+          {(search || roleFilter !== 'all') && (
+            <button
+              onClick={() => { setSearch(''); setRoleFilter('all'); }}
+              className="mt-5 inline-flex h-10 items-center rounded-full border border-warm-border px-5 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11"
+            >
+              Clear filters
+            </button>
           )}
         </div>
-      </div>
+      ) : (
+        <div className="space-y-3">
+          {filtered.map((user) => (
+            <article
+              key={user.id}
+              className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+            >
+              <div className="flex min-w-0 items-center gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-sidebar text-lg font-semibold uppercase text-muted-text" aria-hidden="true">
+                  {user.email?.charAt(0) || '?'}
+                </div>
+                <div className="min-w-0">
+                  <h3 className="truncate text-sm font-semibold text-warm-text group-hover:text-clay">{user.email}</h3>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
+                    <span>{user.id.slice(0, 8)}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      Joined {new Date(user.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+                <div className="max-md:self-start">
+                  <RoleBadge role={user.role} />
+                </div>
+
+                {updating === user.id ? (
+                  <div className="flex h-10 items-center gap-2 px-2 text-xs text-muted-text max-md:h-11">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Processing...
+                  </div>
+                ) : (
+                  <>
+                    <select
+                      value={user.role}
+                      onChange={(e) => updateRole(user.id, e.target.value as Role)}
+                      aria-label={`Change role for ${user.email}`}
+                      className="h-10 cursor-pointer rounded-full border border-warm-border bg-card px-4 text-xs font-medium text-warm-text outline-none transition-colors hover:bg-sidebar focus:border-clay max-md:h-11 max-md:w-full"
+                    >
+                      {ROLES.map(r => (
+                        <option key={r} value={r}>{capitalize(r)}</option>
+                      ))}
+                    </select>
+
+                    <button
+                      onClick={() => deleteUser(user.id, user.email)}
+                      className="inline-flex h-10 items-center justify-center rounded-full border border-rejected-bg px-5 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 max-md:h-11 max-md:w-full"
+                    >
+                      Delete
+                    </button>
+                  </>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
