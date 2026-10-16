@@ -1,36 +1,57 @@
 'use client';
 
-import { useState } from 'react';
-import { useSubmissions } from '@/hooks/useSubmissions';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { getWorkflowTiming, workflowTimingClasses } from '@/lib/workflow/timing';
+import { useSubmissions } from '@/hooks/useSubmissions';
 
 const fonts = {
-  serif: "font-serif italic",
-  mono: "font-mono uppercase tracking-[0.15em] text-[10px]",
+  serif: 'font-serif',
 };
+
+// ─── Status groups ───────────────────────────────────────────────────────────
+// Approving a file passes it to the admin, so 'pending_admin' counts as approved here
+const QUEUE_STATUSES = ['pending', 'pending_approver'];
+const APPROVED_STATUSES = ['pending_admin', 'approved', 'completed'];
+const DECLINED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'rejected'];
 
 type FilterStatus = 'all' | 'pending' | 'approved' | 'declined';
 
-// ─── Status Stamp Component ──────────────────────────────────────────────────
+const FILTERS: { value: FilterStatus; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'pending', label: 'Needs review' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'declined', label: 'Declined' },
+];
+
+const matchesFilter = (status: string, filter: FilterStatus) => {
+  const s = (status || '').toLowerCase();
+  switch (filter) {
+    case 'pending':
+      return QUEUE_STATUSES.includes(s);
+    case 'approved':
+      return APPROVED_STATUSES.includes(s);
+    case 'declined':
+      return DECLINED_STATUSES.includes(s);
+    default:
+      return true;
+  }
+};
+
+// ─── Status Stamp (same styles as the other dashboards) ──────────────────────
 function StatusStamp({ status }: { status: string }) {
   const getDisplayConfig = () => {
-    const s = status?.toLowerCase();
-    
-    // For Approvers, pending_admin means they have already done their part
-    if (s === 'pending_admin') return { label: 'PENDING APPROVAL', color: 'text-blue-600', bg: 'bg-blue-50' };
-    if (s === 'completed') return { label: 'COMPLETED', color: 'text-green-700', bg: 'bg-green-100' };
-    if (s.includes('approved')) return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
-    if (s.includes('declined')) return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
-    
-    // Standard pending status means it's sitting in the Approver's inbox
-    return { label: 'UNDER VERIFICATION', color: 'text-orange-600', bg: 'bg-orange-50' };
+    const s = (status || '').toLowerCase();
+    if (APPROVED_STATUSES.includes(s)) return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
+    if (DECLINED_STATUSES.includes(s)) return { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' };
+    if (QUEUE_STATUSES.includes(s)) return { label: 'Pending', styles: 'bg-pending-bg text-pending-text' };
+    return { label: s.replaceAll('_', ' ') || 'Unknown', styles: 'bg-sidebar text-muted-text' };
   };
 
   const config = getDisplayConfig();
 
   return (
-    <div className={`inline-flex items-center gap-2 border-2 border-current px-3 py-0.5 ${config.color} ${config.bg} ${fonts.mono} font-black shadow-[2px_2px_0px_0px_currentColor] text-[9px]`}>
+    <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${config.styles}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
       {config.label}
     </div>
   );
@@ -38,152 +59,138 @@ function StatusStamp({ status }: { status: string }) {
 
 export default function ApproverSubmissionsPage() {
   const [filter, setFilter] = useState<FilterStatus>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('all');
-  const [fileTypeFilter, setFileTypeFilter] = useState('all');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
   const { submissions, loading } = useSubmissions();
 
-  const filteredSubmissions = submissions.filter(sub => {
-    const query = searchQuery.trim().toLowerCase();
-    const matchesSearch = !query
-      || sub.file_name.toLowerCase().includes(query)
-      || sub.tracking_number?.toLowerCase().includes(query);
-    if (!matchesSearch) return false;
-    const createdDate = new Date(sub.created_at);
-    const matchesCategory = categoryFilter === 'all' || (sub.category || 'General') === categoryFilter;
-    const matchesFileType = fileTypeFilter === 'all' || sub.file_type === fileTypeFilter;
-    const matchesFromDate = !fromDate || createdDate >= new Date(`${fromDate}T00:00:00`);
-    const matchesToDate = !toDate || createdDate <= new Date(`${toDate}T23:59:59.999`);
-    if (!matchesCategory || !matchesFileType || !matchesFromDate || !matchesToDate) return false;
+  const filterCounts = useMemo(() => {
+    const counts: Record<FilterStatus, number> = { all: submissions.length, pending: 0, approved: 0, declined: 0 };
+    submissions.forEach(sub => {
+      if (matchesFilter(sub.status, 'pending')) counts.pending++;
+      else if (matchesFilter(sub.status, 'approved')) counts.approved++;
+      else if (matchesFilter(sub.status, 'declined')) counts.declined++;
+    });
+    return counts;
+  }, [submissions]);
 
-    const s = sub.status.toLowerCase();
-    if (filter === 'all') return true;
-    
-    // For Approvers, "Pending" filter should show items waiting for THEM
-    if (filter === 'pending') return s === 'pending'; 
-    
-    if (filter === 'approved') return s === 'approved' || s === 'pending_admin';
-    if (filter === 'declined') return s.includes('declined');
-    return true;
-  });
-
-  const filters: { value: FilterStatus; label: string }[] = [
-    { value: 'all', label: 'All Records' },
-    { value: 'pending', label: 'My Queue' },
-    { value: 'approved', label: 'Cleared' },
-    { value: 'declined', label: 'Rejected' },
-  ];
+  const filteredSubmissions = useMemo(
+    () => submissions.filter(sub => matchesFilter(sub.status, filter)),
+    [submissions, filter]
+  );
 
   return (
-    <div className="space-y-10 pb-20 p-8 bg-[#fafafa] min-h-screen">
-      {/* Header Section */}
-      <div className="border-b-4 border-gray-900 pb-8">
-        <h1 className={`${fonts.serif} text-7xl font-light text-gray-900 leading-none tracking-tight`}>
-          File Registry
-        </h1>
-        <div className="flex items-center justify-between mt-4">
-          <p className={`${fonts.mono} text-orange-600 font-bold`}>
-            Stage_01 // Internal Review Queue
-          </p>
-        </div>
+    <div className="w-full">
+      {/* Header */}
+      <div className="mb-8 max-md:mb-5">
+        <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Approver workspace
+        </p>
+        <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>File registry</h1>
+        <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">Every submission, including ones you've already reviewed.</p>
       </div>
 
-      {/* Filters */}
-      <div className="relative">
-        <label className={`${fonts.mono} block mb-2 font-bold text-gray-900`}>Search_By_File_Or_Tracking_Number</label>
-        <input
-          type="search"
-          value={searchQuery}
-          onChange={(event) => setSearchQuery(event.target.value)}
-          placeholder="DAET-2026-000001 or document name"
-          className="w-full border-2 border-gray-900 bg-white px-5 py-4 font-mono text-sm outline-none focus:border-orange-500"
-        />
-        <div className="grid grid-cols-1 gap-3 pt-3 md:grid-cols-4">
-          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="border-2 border-gray-900 bg-white p-3 font-mono text-xs">
-            <option value="all">All Categories</option>
-            <option value="General">General</option>
-            <option value="Tourism">Tourism</option>
-            <option value="Events">Events</option>
-            <option value="Marketing">Marketing</option>
-          </select>
-          <select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)} className="border-2 border-gray-900 bg-white p-3 font-mono text-xs">
-            <option value="all">All File Types</option>
-            {[...new Set(submissions.map((submission) => submission.file_type).filter(Boolean))].map((fileType) => (
-              <option key={fileType} value={fileType}>{fileType}</option>
-            ))}
-          </select>
-          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="From upload date" className="border-2 border-gray-900 bg-white p-3 font-mono text-xs" />
-          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="To upload date" className="border-2 border-gray-900 bg-white p-3 font-mono text-xs" />
+      {/* List header */}
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-semibold text-warm-text">Submissions</h2>
+          <span className="rounded-md bg-sidebar px-2 py-1 text-[10px] font-medium text-muted-text">{filteredSubmissions.length}</span>
         </div>
-      </div>
-      <div className="flex flex-wrap gap-3">
-        {filters.map((f) => (
-          <button
-            key={f.value}
-            onClick={() => setFilter(f.value)}
-            className={`border-2 px-6 py-2 text-[11px] font-bold transition-all uppercase shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-1 hover:translate-y-1 ${
-              filter === f.value 
-                ? 'bg-orange-500 text-white border-orange-900' 
-                : 'bg-white text-gray-600 border-gray-900'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
+        <span className="text-[11px] text-muted-text max-md:hidden">All submitters</span>
       </div>
 
-      {/* Table */}
-      <div className="bg-white border-2 border-gray-900 shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] overflow-hidden">
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className={`${fonts.mono} bg-gray-900 text-white`}>
-              <th className="p-5">Document</th>
-              <th className="p-5">Origin</th>
-              <th className="p-5 text-center">Status_Stamp</th>
-              <th className="p-5 text-right">Utility</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y-2 divide-gray-900">
-            {loading ? (
-               <tr><td colSpan={4} className="p-20 text-center animate-pulse font-mono uppercase">Syncing_Records...</td></tr>
-            ) : filteredSubmissions.length === 0 ? (
-               <tr><td colSpan={4} className="p-20 text-center font-mono text-gray-400">Zero_Entries_Found</td></tr>
-            ) : filteredSubmissions.map((sub) => (
-              <tr key={sub.id} className="hover:bg-orange-50/30 transition-colors group">
-                <td className="p-5">
-                  <div className="font-bold text-gray-900 underline decoration-orange-500/30 decoration-2 underline-offset-4">
-                    {sub.file_name}
-                  </div>
-                  <div className="text-[10px] font-mono text-orange-600 mt-1 uppercase">{sub.tracking_number || 'TRACKING PENDING'}</div>
-                  <div className="text-[10px] font-mono text-gray-400 mt-1 uppercase">LOGGED: {new Date(sub.created_at).toLocaleDateString()}</div>
-                </td>
-                <td className="p-5 text-xs font-black text-gray-700">{sub.profiles?.email ?? 'Unknown'}</td>
-                <td className="p-5 text-center">
-                  <StatusStamp status={sub.status} />
-                  {(() => {
-                    const timing = getWorkflowTiming(sub);
-                    return (
-                      <div className={`mt-2 inline-flex border px-2 py-1 font-mono text-[9px] uppercase ${workflowTimingClasses(timing.state)}`}>
-                        {timing.label}
+      {/* Filter pills (scroll inside their own row on mobile) */}
+      <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden">
+        {FILTERS.map(f => {
+          const active = filter === f.value;
+          return (
+            <button
+              key={f.value}
+              onClick={() => setFilter(f.value)}
+              aria-pressed={active}
+              className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-xs font-medium transition-colors max-md:h-11 ${
+                active
+                  ? 'border-clay bg-clay text-white'
+                  : 'border-warm-border bg-card text-warm-text hover:bg-sidebar'
+              }`}
+            >
+              {f.label}
+              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${active ? 'bg-white/25 text-white' : 'bg-sidebar text-muted-text'}`}>
+                {filterCounts[f.value]}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* List */}
+      {loading ? (
+        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Syncing records...
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {submissions.length === 0 ? (
+            <div className="rounded-2xl border border-warm-border bg-card py-20 text-center">
+              <p className={`${fonts.serif} text-2xl text-warm-text`}>No submissions yet</p>
+              <p className="mt-2 text-xs text-muted-text">New submissions will appear here for review.</p>
+            </div>
+          ) : filteredSubmissions.length === 0 ? (
+            <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
+              <p className={`${fonts.serif} text-2xl text-warm-text`}>Nothing here</p>
+              <p className="mt-2 text-xs text-muted-text">
+                No {FILTERS.find(f => f.value === filter)?.label.toLowerCase()} submissions.
+              </p>
+              <button
+                onClick={() => setFilter('all')}
+                className="mt-5 inline-flex h-10 items-center rounded-full border border-warm-border px-5 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11"
+              >
+                Show all
+              </button>
+            </div>
+          ) : (
+            filteredSubmissions.map(sub => {
+              const needsReview = matchesFilter(sub.status, 'pending');
+              const ext = sub.file_name?.split('.').at(-1)?.slice(0, 3);
+
+              return (
+                <article
+                  key={sub.id}
+                  className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+                >
+                  <div className="flex min-w-0 items-center gap-4">
+                    <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
+                      <span className="text-lg leading-4" aria-hidden="true">▤</span>
+                      <span className="mt-1 text-[8px] font-semibold uppercase">{ext || 'File'}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="truncate text-sm font-semibold text-warm-text group-hover:text-clay">
+                        {sub.file_name || 'Untitled file'}
+                      </h3>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
+                        <span>{String(sub.id).slice(0, 7).toUpperCase()}</span>
+                        <span aria-hidden="true">·</span>
+                        <span className="truncate">From {sub.profiles?.email ?? 'unknown submitter'}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>Uploaded {new Date(sub.created_at).toLocaleDateString()}</span>
                       </div>
-                    );
-                  })()}
-                </td>
-                <td className="p-5 text-right">
-                  <Link 
-                    href={`/workflow/approver/file_management/${sub.id}`} 
-                    className={`${fonts.mono} border-2 border-black bg-white px-4 py-1.5 font-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all inline-block`}
-                  >
-                    Open_File
-                  </Link>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+                    <div className="max-md:self-start">
+                      <StatusStamp status={sub.status} />
+                    </div>
+                    <Link
+                      href={`/workflow/approver/file_management/${sub.id}`}
+                      className="inline-flex h-10 items-center gap-2 rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full max-md:justify-center"
+                    >
+                      {needsReview ? 'Review file' : 'View entry'} <span aria-hidden="true">→</span>
+                    </Link>
+                  </div>
+                </article>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 }

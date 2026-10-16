@@ -11,6 +11,28 @@ const fonts = {
   mono: "font-sans text-xs",
 };
 
+// ─── Status groups (same lists as the user dashboard) ────────────────────────
+const PENDING_STATUSES = ['pending', 'pending_approver', 'pending_admin'];
+const APPROVED_STATUSES = ['approved', 'completed'];
+const REJECTED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'rejected'];
+
+const FILTERS = ['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const;
+type Filter = (typeof FILTERS)[number];
+
+const matchesFilter = (status: string, filter: Filter) => {
+  const s = (status || '').toLowerCase();
+  switch (filter) {
+    case 'PENDING':
+      return PENDING_STATUSES.includes(s);
+    case 'APPROVED':
+      return APPROVED_STATUSES.includes(s);
+    case 'REJECTED':
+      return REJECTED_STATUSES.includes(s);
+    default:
+      return true;
+  }
+};
+
 interface PreviewSubmission {
   file_name: string;
   file_url: string;
@@ -21,7 +43,7 @@ interface PreviewSubmission {
 export default function UserFileRegistry() {
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeFilter, setActiveFilter] = useState('ALL');
+  const [activeFilter, setActiveFilter] = useState<Filter>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [previewFile, setPreviewFile] = useState<PreviewSubmission | null>(null);
   const supabase = useMemo(() => createClient(), []);
@@ -38,36 +60,32 @@ export default function UserFileRegistry() {
 
   useEffect(() => {
     async function fetchUserFiles() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
 
-      const { data, error } = await supabase
-        .from('workflow_submissions')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+        const { data, error } = await supabase
+          .from('workflow_submissions')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
 
-      if (!error) setSubmissions(data || []);
-      setLoading(false);
+        if (error) console.error('Fetch error:', error);
+        setSubmissions(data || []);
+      } catch (err) {
+        console.error('Failed to load files:', err);
+      } finally {
+        // Always stop the loading spinner, even when there is no user or the request fails
+        setLoading(false);
+      }
     }
     fetchUserFiles();
   }, [supabase]);
 
   const filteredSubmissions = submissions.filter(file => {
-    const query = searchQuery.trim().toLowerCase();
     const title = file.file_name || '';
     const matchesSearch = title.toLowerCase().includes(searchQuery.toLowerCase());
-
-    let matchesFilter = true;
-    if (activeFilter === 'PENDING') {
-      matchesFilter = file.status.includes('pending');
-    } else if (activeFilter === 'APPROVED') {
-      matchesFilter = file.status === 'approved';
-    } else if (activeFilter === 'REJECTED') {
-      matchesFilter = file.status.includes('declined') || file.status.includes('rejected');
-    }
-
-    return matchesSearch && matchesFilter && matchesCategory && matchesFileType && matchesFromDate && matchesToDate;
+    return matchesSearch && matchesFilter(file.status, activeFilter);
   });
 
   return (
@@ -96,7 +114,7 @@ export default function UserFileRegistry() {
             <span className="pointer-events-none absolute left-5 top-1/2 z-10 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">SEARCH //</span>
             <input
               type="text"
-              placeholder="Find by file name or tracking number..."
+              placeholder="Find a file by name..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="h-12 w-full rounded-full border border-warm-border bg-card pl-28 pr-5 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay max-md:h-11"
@@ -105,7 +123,7 @@ export default function UserFileRegistry() {
 
           {/* Filter pills (scroll inside their own row on mobile) */}
           <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden">
-            {['ALL', 'PENDING', 'APPROVED', 'REJECTED'].map((f) => {
+            {FILTERS.map((f) => {
               const active = activeFilter === f;
               return (
                 <button
@@ -122,23 +140,6 @@ export default function UserFileRegistry() {
                 </button>
               );
             })}
-          </div>
-          <div className="lg:col-span-12 grid grid-cols-1 gap-3 md:grid-cols-4">
-            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="border-2 border-blue-600 bg-white p-3 font-mono text-xs">
-              <option value="ALL">All Categories</option>
-              <option value="General">General</option>
-              <option value="Tourism">Tourism</option>
-              <option value="Events">Events</option>
-              <option value="Marketing">Marketing</option>
-            </select>
-            <select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)} className="border-2 border-blue-600 bg-white p-3 font-mono text-xs">
-              <option value="ALL">All File Types</option>
-              {[...new Set(submissions.map((submission) => submission.file_type).filter(Boolean))].map((fileType) => (
-                <option key={fileType} value={fileType}>{fileType}</option>
-              ))}
-            </select>
-            <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="From upload date" className="border-2 border-blue-600 bg-white p-3 font-mono text-xs" />
-            <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="To upload date" className="border-2 border-blue-600 bg-white p-3 font-mono text-xs" />
           </div>
         </div>
 
@@ -174,7 +175,7 @@ export default function UserFileRegistry() {
                           {file.category || "General"}
                         </span>
                         <span className="text-[11px] text-muted-text">
-                          ID: {file.id.slice(0, 8)}
+                          ID: {String(file.id).slice(0, 8)}
                         </span>
                       </div>
 
@@ -187,10 +188,12 @@ export default function UserFileRegistry() {
                           <span className="text-[10px] font-medium text-muted-text">Date Uploaded</span>
                           <span className="text-[11px] text-warm-text">{new Date(file.created_at).toLocaleDateString()}</span>
                         </div>
-                        <div className="flex flex-col border-l border-warm-border pl-5">
-                          <span className="text-[10px] font-medium text-muted-text">Size</span>
-                          <span className="text-[11px] text-warm-text">{(file.file_size / 1024).toFixed(1)} KB</span>
-                        </div>
+                        {file.file_size ? (
+                          <div className="flex flex-col border-l border-warm-border pl-5">
+                            <span className="text-[10px] font-medium text-muted-text">Size</span>
+                            <span className="text-[11px] text-warm-text">{(file.file_size / 1024).toFixed(1)} KB</span>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -274,7 +277,8 @@ export default function UserFileRegistry() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const getStatusDisplay = (s: string) => {
+  const getStatusDisplay = (raw: string) => {
+    const s = (raw || '').toLowerCase();
     switch (s) {
       case 'pending':
       case 'pending_approver':
@@ -282,12 +286,14 @@ function StatusBadge({ status }: { status: string }) {
       case 'pending_admin':
         return { label: 'UNDER REVIEW', styles: "bg-review-bg text-review-text" };
       case 'approved':
+      case 'completed':
         return { label: 'APPROVED', styles: "bg-approved-bg text-approved-text" };
       case 'declined_by_approver':
       case 'declined_by_admin':
+      case 'rejected':
         return { label: 'REJECTED', styles: "bg-rejected-bg text-rejected-text" };
       default:
-        return { label: s.toUpperCase().replace('_', ' '), styles: "bg-sidebar text-muted-text" };
+        return { label: s.toUpperCase().replaceAll('_', ' ') || 'UNKNOWN', styles: "bg-sidebar text-muted-text" };
     }
   };
 
