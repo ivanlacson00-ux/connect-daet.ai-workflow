@@ -1,272 +1,341 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
 
+// ─── Styles & Fonts (synced with the user file page) ─────────────────────────
 const fonts = {
-  serif: "font-serif italic",
-  mono: "font-mono uppercase tracking-[0.2em] text-[10px]",
+  serif: 'font-serif',
+};
+
+interface Submission {
+  id: string;
+  user_id: string;
+  tracking_number?: string | null;
+  file_name: string;
+  file_url: string;
+  file_path?: string | null;
+  file_type: string;
+  file_size: number;
+  status: string;
+  category?: string | null;
+  description?: string | null;
+  approver_comments?: string | null;
+  admin_comments?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Status groups ───────────────────────────────────────────────────────────
+// Approving a file passes it to the admin, so 'pending_admin' reads as approved here
+const QUEUE_STATUSES = ['pending', 'pending_approver'];
+const APPROVED_STATUSES = ['pending_admin', 'approved', 'completed'];
+const DECLINED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'rejected'];
+
+const getStatusStyles = (status: string) => {
+  const s = (status || '').toLowerCase();
+  if (QUEUE_STATUSES.includes(s)) return { label: 'Needs review', classes: 'bg-pending-bg text-pending-text' };
+  if (APPROVED_STATUSES.includes(s)) return { label: 'Approved', classes: 'bg-approved-bg text-approved-text' };
+  if (DECLINED_STATUSES.includes(s)) return { label: 'Rejected', classes: 'bg-rejected-bg text-rejected-text' };
+  return { label: s.replaceAll('_', ' ') || 'Unknown', classes: 'bg-sidebar text-muted-text' };
+};
+
+const getActionLabel = (type: string) => {
+  switch (type) {
+    case 'STAGE_1_AUTHORIZED': return 'Stage 1 approved';
+    case 'STAGE_1_REJECTED': return 'Stage 1 rejected';
+    case 'FINAL_AUTHORIZATION': return 'Final approval';
+    case 'FINAL_REJECTION': return 'Final rejection';
+    case 'VERIFICATION_PASSED': return 'Verification passed';
+    case 'RETURNED_FOR_CORRECTION': return 'Returned for correction';
+    case 'WORKFLOW_COMPLETED': return 'Workflow completed';
+    case 'SUBMITTED': return 'Submitted by';
+    default: return 'Action by';
+  }
 };
 
 export default function ApproverManagePage() {
   const { id } = useParams();
   const router = useRouter();
-  const supabase = createClient();
-  
-  const [sub, setSub] = useState<any>(null);
+  const supabase = useMemo(() => createClient(), []);
+
+  const [sub, setSub] = useState<Submission | null>(null);
   const [sender, setSender] = useState<any>(null);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
+  const [actionError, setActionError] = useState('');
   const [comment, setComment] = useState('');
 
   const fetchDetails = useCallback(async () => {
-    setLoading(true);
-    const { data: submission } = await supabase
-      .from('workflow_submissions')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (submission) {
-      setSub(submission);
-      setComment(submission.approver_comments || '');
-      
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('email, full_name, role')
-        .eq('id', submission.user_id)
+    try {
+      const { data: submission } = await supabase
+        .from('workflow_submissions')
+        .select('*')
+        .eq('id', id)
         .single();
-      if (profile) setSender(profile);
 
-      const { data: logs } = await supabase
-        .from('workflow_audit_logs')
-        .select(`
-          *,
-          profiles:action_by (full_name, email, role)
-        `)
-        .eq('submission_id', id)
-        .order('created_at', { ascending: false });
-      if (logs) setAuditLogs(logs);
+      if (submission) {
+        setSub(submission);
+        setComment(submission.approver_comments || '');
+
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('email, full_name, role')
+          .eq('id', submission.user_id)
+          .single();
+        if (profile) setSender(profile);
+
+        const { data: logs } = await supabase
+          .from('workflow_audit_logs')
+          .select('*, profiles:action_by (full_name, email, role)')
+          .eq('submission_id', id)
+          .order('created_at', { ascending: false });
+        if (logs) setAuditLogs(logs);
+      }
+    } catch (err) {
+      console.error('Failed to load submission:', err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [id, supabase]);
 
   useEffect(() => { fetchDetails(); }, [fetchDetails]);
 
-  const getStatusStyles = (status: string) => {
-    switch (status) {
-      case 'pending':
-      case 'pending_approver':
-        return { label: 'UNDER VERIFICATION', classes: 'border-2 border-blue-600 text-blue-600 bg-white shadow-[3px_3px_0px_0px_rgba(37,99,235,1)]' };
-      case 'pending_admin':
-        return { label: 'PENDING APPROVAL', classes: 'bg-blue-600 text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]' };
-      case 'approved':
-        return { label: 'APPROVED', classes: 'border-2 border-green-600 text-green-600 bg-green-50' };
-      case 'declined_by_approver':
-      case 'declined_by_admin':
-        return { label: 'REJECTED', classes: 'border-2 border-red-600 text-red-600 bg-red-50' };
-      default:
-        return { label: status.toUpperCase(), classes: 'border-2 border-gray-400 text-gray-500' };
-    }
-  };
-
-  const getActionLabel = (type: string) => {
-    switch (type) {
-      case 'STAGE_1_AUTHORIZED': return 'STAGE 1 APPROVED';
-      case 'STAGE_1_REJECTED': return 'STAGE 1 REJECTED';
-      case 'FINAL_AUTHORIZATION': return 'FINAL APPROVAL';
-      case 'FINAL_REJECTION': return 'FINAL REJECTION';
-      case 'VERIFICATION_PASSED': return 'VERIFICATION PASSED';
-      case 'RETURNED_FOR_CORRECTION': return 'RETURNED FOR CORRECTION';
-      case 'WORKFLOW_COMPLETED': return 'WORKFLOW COMPLETED';
-      case 'SUBMITTED': return 'SUBMITTED BY';
-      default: return 'ACTION BY';
-    }
-  };
-
   const handleApproverAction = async (decision: 'approved' | 'declined') => {
-    const isActionable = sub.status === 'pending' || sub.status === 'pending_approver';
-    if (!isActionable) return;
+    if (!sub || !QUEUE_STATUSES.includes(sub.status)) return;
 
     setUpdating(true);
+    setActionError('');
     const nextStatus = decision === 'approved' ? 'pending_admin' : 'declined_by_approver';
     const { error: updateError } = await supabase
       .from('workflow_submissions')
-      .update({ 
-        status: nextStatus, 
-        approver_comments: comment, 
-        updated_at: new Date().toISOString() 
+      .update({
+        status: nextStatus,
+        approver_comments: comment,
+        updated_at: new Date().toISOString(),
       })
       .eq('id', id);
 
-    if (!updateError) {
+    if (updateError) {
+      console.error('Update failed:', updateError);
+      setActionError('Could not save your decision. Please try again.');
+    } else {
       await fetchDetails();
     }
     setUpdating(false);
   };
 
-  if (loading) return <div className="p-10 font-mono text-blue-600 animate-pulse uppercase tracking-widest text-sm">Authenticating Access...</div>;
-  if (!sub) return <div className="p-10 font-mono text-red-500">404: RECORD_MISSING</div>;
+  if (loading) {
+    return (
+      <div className="w-full">
+        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Loading submission...
+        </div>
+      </div>
+    );
+  }
+
+  if (!sub) {
+    return (
+      <div className="w-full">
+        <div className="rounded-2xl border border-rejected-bg bg-rejected-bg/50 px-5 py-8 text-xs font-semibold text-rejected-text">
+          Submission not found.
+        </div>
+      </div>
+    );
+  }
 
   const statusConfig = getStatusStyles(sub.status);
-  const isLocked = sub.status !== 'pending' && sub.status !== 'pending_approver';
+  const isLocked = !QUEUE_STATUSES.includes(sub.status);
+  const isDeclined = DECLINED_STATUSES.includes(sub.status.toLowerCase());
 
   return (
-    <div className="h-screen bg-[#fafafa] flex flex-col lg:flex-row overflow-hidden border-t-[6px] border-blue-600">
-      <aside className="w-full lg:w-[500px] border-r-2 border-black flex flex-col bg-[#fafafa] overflow-hidden">
-        
-        <div className="px-8 pt-8">
-          <button onClick={() => router.back()} className={`${fonts.mono} text-gray-400 hover:text-black transition-all flex items-center gap-2 group mb-6`}>
-            ← APPROVAL QUEUE
-          </button>
-        </div>
+    <div className="w-full">
+      {/* Back */}
+      <div className="mb-5 max-md:mb-4">
+        <button
+          onClick={() => router.back()}
+          className="inline-flex h-10 items-center gap-2 rounded-full border border-warm-border px-4 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11"
+        >
+          <span aria-hidden="true">←</span> Back to queue
+        </button>
+      </div>
 
-        <div className="flex-1 overflow-y-auto px-12 py-4 space-y-10 custom-scrollbar">
-          
-          <section>
-            <div className="flex items-center gap-2 mb-4">
-              <span className="bg-blue-600 text-white text-[9px] font-black px-2 py-0.5 tracking-tighter uppercase">Approver_Terminal // STAGE_01</span>
-            </div>
-            <h1 className="text-5xl font-serif italic leading-[0.8] mb-8 break-words tracking-tighter text-zinc-900">{sub.file_name}</h1>
-            <div className="mb-4">
-              <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Tracking_Number</p>
-              <p className="font-mono text-sm font-black tracking-wider text-blue-600">{sub.tracking_number || 'Pending assignment'}</p>
-            </div>
-            <div className={`inline-block px-4 py-1.5 font-black text-[11px] tracking-widest uppercase ${statusConfig.classes}`}>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 max-md:gap-3">
+
+        {/* DETAILS COLUMN */}
+        <aside className="space-y-4 lg:col-span-5 max-md:space-y-3">
+
+          {/* Header */}
+          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+            <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Submission ID: {String(sub.id).split('-')[0]}
+            </p>
+            <h1 className={`${fonts.serif} mb-4 break-words text-[28px] leading-tight text-warm-text max-md:text-[24px]`}>{sub.file_name}</h1>
+            <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${statusConfig.classes}`}>
+              <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
               {statusConfig.label}
             </div>
+            <div className="mt-4 border-t border-warm-border pt-4">
+              <p className="text-[10px] font-medium text-muted-text">Tracking number</p>
+              <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{sub.tracking_number || 'Pending assignment'}</p>
+            </div>
           </section>
 
-          {/* User Details Section */}
-          <section className="relative">
-             <div className="border-2 border-black p-6 space-y-6 bg-white shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-               <div>
-                 <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-2 border-b border-blue-100 pb-1 inline-block">Entry Summary</p>
-                 <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Category</p>
-                 <p className="text-xl font-black tracking-tight text-blue-600 uppercase">{sub.category || 'GENERAL'}</p>
-               </div>
-               <div>
-                 <p className={`${fonts.mono} text-[9px] text-gray-400 mb-1`}>Sender_Notes</p>
-                 <p className="text-sm italic leading-relaxed text-zinc-600 whitespace-pre-wrap break-words border-l-2 border-zinc-100 pl-4">
-                   "{sub.description || 'No description provided.'}"
-                 </p>
-               </div>
-               <div className="pt-4 border-t border-zinc-100">
-                 <p className={`${fonts.mono} text-[9px] text-gray-400`}>Originator</p>
-                 <p className="font-black text-sm">{sender?.full_name}</p>
-                 <p className="text-[10px] text-zinc-400 font-mono">{sender?.email}</p>
-               </div>
-             </div>
+          {/* Context Card */}
+          <section className="space-y-5 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-muted-text">Category</p>
+              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">{sub.category || 'Unassigned'}</p>
+            </div>
+            <div>
+              <p className="mb-1.5 text-[11px] font-medium text-muted-text">Sender notes</p>
+              <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
+                "{sub.description || 'No description provided.'}"
+              </p>
+            </div>
+            <div className="border-t border-warm-border pt-4">
+              <p className="text-[10px] font-medium text-muted-text">Submitted by</p>
+              <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{sender?.full_name || 'Unknown'}</p>
+              <p className="text-[11px] text-muted-text">{sender?.email}</p>
+            </div>
+            <div className="flex items-end justify-between gap-4 border-t border-warm-border pt-4">
+              <div>
+                <p className="text-[10px] font-medium text-muted-text">Submitted on</p>
+                <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{new Date(sub.created_at).toLocaleDateString()} at {new Date(sub.created_at).toLocaleTimeString()}</p>
+              </div>
+              {sub.file_size ? (
+                <div className="text-right">
+                  <p className="text-[10px] font-medium text-muted-text">File size</p>
+                  <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{(sub.file_size / 1024).toFixed(2)} KB</p>
+                </div>
+              ) : null}
+            </div>
           </section>
 
-          {/* Audit Logs Section */}
-          <section className="space-y-6 pt-4 pb-12">
-            <p className={`${fonts.mono} text-gray-400 border-b border-zinc-200 pb-2`}>Audit_Logs</p>
-            <div className="relative border-l-2 border-zinc-200 ml-1 space-y-10">
-              {auditLogs.map((log) => (
-                <div key={log.id} className="relative pl-6">
-                  <div className="absolute -left-[5.5px] top-1 w-2.5 h-2.5 bg-blue-600 rounded-full ring-4 ring-white" />
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-[10px] font-black uppercase text-blue-600 tracking-tight">{getActionLabel(log.action_type)}</p>
+          {/* Review Actions */}
+          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+            {isLocked ? (
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-warm-text">Your review</p>
+                {sub.approver_comments ? (
+                  <div className={`rounded-xl border p-4 ${isDeclined ? 'border-rejected-bg bg-rejected-bg/50' : 'border-approved-bg bg-approved-bg/50'}`}>
+                    <p className={`mb-2 text-xs font-semibold ${isDeclined ? 'text-rejected-text' : 'text-approved-text'}`}>Your notes</p>
+                    <p className="whitespace-pre-wrap break-words font-serif text-base leading-relaxed text-warm-text">
+                      "{sub.approver_comments}"
+                    </p>
+                    <p className="mt-3 text-[10px] text-muted-text">{new Date(sub.updated_at).toLocaleDateString()}</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <p className="text-[11px] font-black text-black">{log.profiles?.full_name || 'SYSTEM'}</p>
-                    {log.profiles?.role && (
-                      <span className="text-[8px] px-1.5 py-0.5 bg-zinc-200 text-zinc-600 font-bold uppercase rounded-sm tracking-tighter">
-                        {log.profiles.role}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[9px] text-gray-400 font-mono mt-0.5 uppercase">
-                    {new Date(log.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                ) : (
+                  <p className="text-xs text-muted-text">You didn't leave any notes on this review.</p>
+                )}
+                <div className="rounded-xl border border-dashed border-warm-border bg-sidebar p-4 text-center text-xs leading-relaxed text-muted-text">
+                  {sub.status === 'pending_admin'
+                    ? 'You approved this file. It is now with the admin for final review.'
+                    : 'This review is closed.'}
+                </div>
+              </div>
+            ) : (
+              <>
+                <label htmlFor="approver-notes" className="mb-2 block text-xs font-semibold text-warm-text">
+                  Review notes
+                </label>
+                <textarea
+                  id="approver-notes"
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  className="mb-4 h-32 w-full resize-none rounded-xl border border-warm-border bg-card p-4 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay"
+                  placeholder="Add notes for the admin or the submitter (optional)..."
+                />
+                {actionError && (
+                  <p className="mb-3 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">
+                    {actionError}
                   </p>
-                  {log.comments && (
-                    <div className="mt-3 p-4 bg-white border-2 border-dashed border-blue-600 relative">
-                       <p className="text-[10px] font-black text-blue-600 uppercase mb-2 tracking-tighter">Action Note</p>
-                       <p className="text-[11px] italic leading-tight text-zinc-600 whitespace-pre-wrap break-words">
+                )}
+                <div className="flex gap-3 max-md:flex-col">
+                  <button
+                    onClick={() => handleApproverAction('approved')}
+                    disabled={updating}
+                    className="inline-flex h-11 flex-1 items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
+                  >
+                    {updating ? 'Saving...' : 'Approve'}
+                  </button>
+                  <button
+                    onClick={() => handleApproverAction('declined')}
+                    disabled={updating}
+                    className="inline-flex h-11 flex-1 items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 disabled:opacity-50"
+                  >
+                    Decline
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
+
+          {/* Audit Log */}
+          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+            <p className="mb-4 text-xs font-semibold text-warm-text">Activity</p>
+            {auditLogs.length === 0 ? (
+              <p className="text-xs text-muted-text">No activity recorded yet.</p>
+            ) : (
+              <div className="relative ml-1 space-y-6 border-l border-warm-border">
+                {auditLogs.map((log) => (
+                  <div key={log.id} className="relative pl-5">
+                    <span className="absolute -left-[4.5px] top-1.5 h-2 w-2 rounded-full bg-clay ring-4 ring-card" />
+                    <p className="text-[11px] font-semibold text-clay">{getActionLabel(log.action_type)}</p>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                      <p className="text-[11px] font-medium text-warm-text">{log.profiles?.full_name || 'System'}</p>
+                      {log.profiles?.role && (
+                        <span className="rounded-md bg-sidebar px-1.5 py-0.5 text-[10px] font-medium capitalize text-muted-text">
+                          {log.profiles.role}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-[10px] text-muted-text">
+                      {new Date(log.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                    </p>
+                    {log.comments && (
+                      <p className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-sidebar p-3 font-serif text-sm leading-relaxed text-warm-text">
                         "{log.comments}"
                       </p>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
-
-        {/* ACTION FOOTER */}
-        <div className="p-10 border-t-2 border-black bg-white">
-          <label className={`${fonts.mono} mb-3 block font-black text-black`}>
-            {isLocked ? (sub.approver_comments ? 'APPROVER NOTES' : 'SYSTEM STATUS') : 'VALIDATION_NOTES'}
-          </label>
-          
-          {isLocked ? (
-            <div className="space-y-4">
-              {/* Only show the stamp box if comments exist */}
-              {sub.approver_comments && (
-                <div className={`p-5 border-2 border-black italic text-sm shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col min-w-0 ${sub.status.includes('declined') ? 'bg-red-50 text-red-900 border-red-600' : 'bg-blue-50 text-blue-900 border-blue-600'}`}>
-                  <p className="whitespace-pre-wrap break-words leading-relaxed">
-                    "{sub.approver_comments}"
-                  </p>
-                  <div className="mt-4 pt-3 border-t border-current flex justify-between items-center not-italic gap-2">
-                      <span className="text-[9px] font-black uppercase tracking-tighter">Approver</span>
-                      <span className="text-[10px] font-mono whitespace-nowrap">{new Date(sub.updated_at).toLocaleDateString()}</span>
+                    )}
                   </div>
-                </div>
-              )}
-              <div className="bg-zinc-100 text-zinc-400 p-4 text-center font-black text-[10px] uppercase tracking-[0.2em] border-2 border-dashed border-zinc-300">
-                {sub.status === 'pending_admin' ? 'STAMPED // AWAITING_ADMIN_FINAL' : 'ARCHIVED // CLOSED'}
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Footer Actions */}
+          <button
+            onClick={async () => {
+              const url = await getFileUrl(supabase, sub);
+              await downloadFile(url, sub.file_name);
+            }}
+            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar"
+          >
+            Download original file
+          </button>
+        </aside>
+
+        {/* PREVIEW PANEL */}
+        <main className="lg:col-span-7">
+          <div className="flex flex-col overflow-hidden rounded-2xl border border-warm-border bg-card lg:sticky lg:top-10">
+            <div className="flex min-h-12 items-center border-b border-warm-border px-5 py-3 max-md:px-3.5">
+              <div className="flex min-w-0 flex-col">
+                <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">Document preview</span>
+                <span className="truncate text-[11px] font-medium text-warm-text">{sub.file_name}</span>
               </div>
             </div>
-          ) : (
-            <>
-              <textarea 
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                className="w-full h-32 p-4 border-2 border-black bg-zinc-50 text-sm outline-none resize-none focus:bg-white transition-colors mb-6"
-                placeholder="Enter internal notes for Admin review (optional)..."
-              />
-              <div className="flex gap-4">
-                <button onClick={() => handleApproverAction('approved')} disabled={updating} className="flex-1 bg-blue-600 text-white py-4 font-black text-[10px] uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all disabled:opacity-50">
-                  {updating ? 'SIGNING...' : 'Authorize'}
-                </button>
-                <button onClick={() => handleApproverAction('declined')} disabled={updating} className="flex-1 bg-black text-white py-4 font-black text-[10px] uppercase tracking-widest shadow-[4px_4px_0px_0px_rgba(239,68,68,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all disabled:opacity-50">
-                  Decline
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </aside>
 
-      <main className="flex-1 bg-zinc-900 flex flex-col p-8 relative overflow-hidden">
-        <div className="absolute top-4 left-6 z-20">
-           <div className={`${fonts.mono} text-white/50 text-[9px] bg-white/5 border border-white/10 px-3 py-1 backdrop-blur-md`}>
-             SECURE_ASSET_PREVIEW // {sub.id.split('-')[0].toUpperCase()}
-           </div>
-        </div>
-
-        <div className="flex-1 bg-white border-[4px] border-black shadow-[30px_30px_0px_0px_rgba(0,0,0,0.5)] overflow-hidden flex items-center justify-center relative">
-          {sub.file_name.match(/\.(jpg|jpeg|png|webp|gif|svg)$/i) ? (
-            <div className="p-12 w-full h-full flex items-center justify-center">
-              <img src={`/api/workflow/files/${sub.id}?redirect=1`} alt="Preview" className="max-w-full max-h-full object-contain shadow-2xl" />
+            <div className="relative flex h-[60vh] min-h-[380px] items-center justify-center overflow-hidden bg-cream lg:h-[75vh]">
+              <FilePreview file={sub} />
             </div>
-          ) : (
-            <iframe src={`/api/workflow/files/${sub.id}?redirect=1`} className="w-full h-full border-none" />
-          )}
-          <div className="absolute bottom-8 right-8 pointer-events-none opacity-20">
-            <span className="text-[60px] font-black text-blue-600 select-none tracking-tighter uppercase leading-none">Connect<br/>Registry</span>
           </div>
-        </div>
-      </main>
-
-      <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #fafafa; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #000; }
-      `}</style>
+        </main>
+      </div>
     </div>
   );
 }
