@@ -4,10 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 
+// ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
-  serif: 'font-serif italic',
-  mono: 'font-mono uppercase tracking-[0.15em] text-[10px]',
+  serif: 'font-serif',
 };
+
+const fieldClasses =
+  'h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text caret-current outline-none transition-colors focus:border-clay';
 
 type ArchivedSubmission = {
   id: string;
@@ -22,12 +25,33 @@ type ArchivedSubmission = {
   profiles: { email: string } | null;
 };
 
-function statusLabel(status: string) {
-  return status.replaceAll('_', ' ').toUpperCase();
+// ─── Status Stamp ────────────────────────────────────────────────────────────
+function StatusStamp({ status }: { status: string }) {
+  const s = (status || '').toLowerCase();
+
+  const config =
+    s === 'pending_admin'
+      ? { label: 'Pending approval', styles: 'bg-review-bg text-review-text' }
+      : s === 'completed'
+        ? { label: 'Completed', styles: 'bg-approved-bg text-approved-text' }
+        : s.includes('approved')
+          ? { label: 'Approved', styles: 'bg-approved-bg text-approved-text' }
+          : s.includes('declined') || s === 'rejected'
+            ? { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' }
+            : s === 'pending' || s === 'pending_approver'
+              ? { label: 'Under verification', styles: 'bg-pending-bg text-pending-text' }
+              : { label: s.replaceAll('_', ' ') || 'Unknown', styles: 'bg-sidebar text-muted-text' };
+
+  return (
+    <div className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3 py-1.5 text-[11px] font-medium capitalize ${config.styles}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
+      {config.label}
+    </div>
+  );
 }
 
 export default function ArchiveRegistryPage() {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [records, setRecords] = useState<ArchivedSubmission[]>([]);
   const [search, setSearch] = useState('');
   const [fromDate, setFromDate] = useState('');
@@ -36,7 +60,6 @@ export default function ArchiveRegistryPage() {
   const [restoring, setRestoring] = useState<string | null>(null);
 
   const fetchArchives = useCallback(async () => {
-    setLoading(true);
     const { data, error } = await supabase
       .from('workflow_submissions')
       .select('id, tracking_number, file_name, file_type, status, category, created_at, archived_at, retention_until, profiles:user_id(email)')
@@ -59,17 +82,28 @@ export default function ArchiveRegistryPage() {
     fetchArchives();
   }, [fetchArchives]);
 
-  const filteredRecords = useMemo(() => records.filter((record) => {
+  const filteredRecords = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const matchesSearch = !query
-      || record.file_name.toLowerCase().includes(query)
-      || record.tracking_number?.toLowerCase().includes(query)
-      || record.profiles?.email.toLowerCase().includes(query);
-    const archivedDate = record.archived_at.slice(0, 10);
-    const matchesFrom = !fromDate || archivedDate >= fromDate;
-    const matchesTo = !toDate || archivedDate <= toDate;
-    return matchesSearch && matchesFrom && matchesTo;
-  }), [fromDate, records, search, toDate]);
+
+    return records.filter((record) => {
+      const matchesSearch = !query
+        || record.file_name.toLowerCase().includes(query)
+        || record.tracking_number?.toLowerCase().includes(query)
+        || record.profiles?.email?.toLowerCase().includes(query);
+      const archivedDate = record.archived_at.slice(0, 10);
+      const matchesFrom = !fromDate || archivedDate >= fromDate;
+      const matchesTo = !toDate || archivedDate <= toDate;
+      return matchesSearch && matchesFrom && matchesTo;
+    });
+  }, [fromDate, records, search, toDate]);
+
+  const hasActiveFilters = !!search || !!fromDate || !!toDate;
+
+  const clearFilters = () => {
+    setSearch('');
+    setFromDate('');
+    setToDate('');
+  };
 
   const restoreRecord = async (record: ArchivedSubmission) => {
     setRestoring(record.id);
@@ -87,76 +121,123 @@ export default function ArchiveRegistryPage() {
   };
 
   return (
-    <div className="space-y-10 pb-20">
-      <header className="border-b-4 border-gray-900 pb-8">
-        <h1 className={`${fonts.serif} text-7xl font-light leading-none tracking-tight`}>Archive Registry</h1>
-        <div className="mt-4 flex items-center justify-between">
-          <p className={`${fonts.mono} font-bold text-blue-600`}>Secure Records // Administrator View</p>
-          <p className={`${fonts.mono} text-gray-400`}>{filteredRecords.length} Archived Records</p>
-        </div>
-      </header>
+    <div className="w-full">
+      {/* Header */}
+      <div className="mb-8 max-md:mb-5">
+        <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Admin workspace
+        </p>
+        <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>Archive registry</h1>
+        <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">
+          Secure records. Displaying <span className="text-warm-text">{filteredRecords.length}</span> archived records.
+        </p>
+      </div>
 
-      <section className="space-y-4 border-2 border-gray-900 bg-white p-6">
-        <label className={`${fonts.mono} block font-bold`}>Search_Archive</label>
+      {/* Filters */}
+      <div className="mb-4 space-y-3">
         <input
           type="search"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="File name, tracking number, or requester email"
-          className="w-full border-2 border-gray-900 p-4 font-mono text-sm outline-none focus:border-blue-600"
+          aria-label="Search by file name, tracking number or requester"
+          placeholder="Search by tracking number, document name or requester email"
+          className="h-12 w-full rounded-full border border-warm-border bg-card px-5 text-sm text-warm-text caret-current outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay max-md:h-11"
         />
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <label className={`${fonts.mono} flex flex-col gap-2`}>
-            Archived_From
-            <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className="border-2 border-gray-900 p-3 font-mono text-xs normal-case tracking-normal" />
-          </label>
-          <label className={`${fonts.mono} flex flex-col gap-2`}>
-            Archived_To
-            <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className="border-2 border-gray-900 p-3 font-mono text-xs normal-case tracking-normal" />
-          </label>
-        </div>
-      </section>
 
-      <section className="overflow-x-auto border-2 border-gray-900 bg-white">
-        <table className="w-full text-left">
-          <thead className={`${fonts.mono} bg-gray-900 text-white`}>
-            <tr>
-              <th className="p-4">Document</th>
-              <th className="p-4">Requester</th>
-              <th className="p-4">Workflow Status</th>
-              <th className="p-4">Archived</th>
-              <th className="p-4">Retention Until</th>
-              <th className="p-4 text-right">Action</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y-2 divide-gray-900">
-            {loading ? (
-              <tr><td colSpan={6} className="p-16 text-center font-mono">Loading_Archive...</td></tr>
-            ) : filteredRecords.length === 0 ? (
-              <tr><td colSpan={6} className="p-16 text-center font-mono text-gray-400">No_Archived_Records_Found</td></tr>
-            ) : filteredRecords.map((record) => (
-              <tr key={record.id} className="hover:bg-blue-50/30">
-                <td className="p-4">
-                  <Link href={`/workflow/admin/submissions/${record.id}`} className="font-bold underline decoration-blue-500/40 underline-offset-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="archived-from" className="mb-1.5 block text-[11px] font-medium text-muted-text">
+              Archived from
+            </label>
+            <input id="archived-from" type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className={fieldClasses} />
+          </div>
+          <div>
+            <label htmlFor="archived-to" className="mb-1.5 block text-[11px] font-medium text-muted-text">
+              Archived to
+            </label>
+            <input id="archived-to" type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className={fieldClasses} />
+          </div>
+        </div>
+      </div>
+
+      {/* List header */}
+      <div className="mb-4 flex items-center gap-3">
+        <h2 className="text-sm font-semibold text-warm-text">Archived records</h2>
+        <span className="rounded-md bg-sidebar px-2 py-1 text-[10px] font-medium text-muted-text">{filteredRecords.length}</span>
+      </div>
+
+      {/* List */}
+      {loading ? (
+        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Loading archive...
+        </div>
+      ) : filteredRecords.length === 0 ? (
+        <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
+          <p className={`${fonts.serif} text-2xl text-warm-text`}>Nothing here</p>
+          <p className="mt-2 text-xs text-muted-text">No archived records found.</p>
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="mt-5 inline-flex h-10 items-center rounded-full border border-warm-border px-5 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filteredRecords.map((record) => (
+            <article
+              key={record.id}
+              className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+            >
+              <div className="flex min-w-0 items-center gap-4">
+                <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
+                  <span className="text-lg leading-4" aria-hidden="true">▤</span>
+                  <span className="mt-1 text-[8px] font-semibold uppercase">
+                    {record.file_type?.split('/').at(-1)?.slice(0, 3) || 'Doc'}
+                  </span>
+                </div>
+                <div className="min-w-0">
+                  <Link
+                    href={`/workflow/admin/submissions/${record.id}`}
+                    className="block truncate text-sm font-semibold text-warm-text transition-colors group-hover:text-clay"
+                  >
                     {record.file_name}
                   </Link>
-                  <p className="mt-1 font-mono text-[10px] text-blue-600">{record.tracking_number || 'TRACKING PENDING'}</p>
-                  <p className="mt-1 font-mono text-[10px] text-gray-400">{record.category || 'GENERAL'} // {record.file_type || 'UNKNOWN TYPE'}</p>
-                </td>
-                <td className="p-4 text-xs font-bold">{record.profiles?.email || 'Requester unavailable'}</td>
-                <td className="p-4 font-mono text-xs">{statusLabel(record.status)}</td>
-                <td className="p-4 font-mono text-xs">{new Date(record.archived_at).toLocaleDateString()}</td>
-                <td className="p-4 font-mono text-xs">{record.retention_until ? new Date(record.retention_until).toLocaleDateString() : 'Not specified'}</td>
-                <td className="p-4 text-right">
-                  <button onClick={() => restoreRecord(record)} disabled={restoring === record.id} className="border-2 border-black bg-white px-3 py-2 font-mono text-[10px] font-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] disabled:opacity-50">
-                    {restoring === record.id ? 'RESTORING...' : 'RESTORE'}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
+                    <span>{record.tracking_number || 'Tracking pending'}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{record.category || 'General'}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="truncate">From {record.profiles?.email || 'Requester unavailable'}</span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
+                    <span>Archived {new Date(record.archived_at).toLocaleDateString()}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      Retention until {record.retention_until ? new Date(record.retention_until).toLocaleDateString() : 'not specified'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+                <div className="max-md:self-start">
+                  <StatusStamp status={record.status} />
+                </div>
+                <button
+                  onClick={() => restoreRecord(record)}
+                  disabled={restoring === record.id}
+                  className="inline-flex h-10 items-center justify-center rounded-full border border-warm-border px-5 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar disabled:opacity-50 max-md:h-11 max-md:w-full"
+                >
+                  {restoring === record.id ? 'Restoring...' : 'Restore'}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
