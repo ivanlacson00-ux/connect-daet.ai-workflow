@@ -1,44 +1,65 @@
 'use client';
 
-import { useState } from 'react';
-import { useSubmissions } from '@/hooks/useSubmissions';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useSubmissions } from '@/hooks/useSubmissions';
 import { getWorkflowTiming, workflowTimingClasses } from '@/lib/workflow/timing';
 
+// ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
-  serif: "font-serif italic",
-  mono: "font-mono uppercase tracking-[0.15em] text-[10px]",
+  serif: 'font-serif',
 };
 
 type FilterStatus = 'all' | 'pending' | 'approved' | 'declined';
 
-// ─── Status Stamp Component ──────────────────────────────────────────────────
+const CATEGORIES = ['General', 'Tourism', 'Events', 'Marketing'];
+
+const STATUS_FILTERS: { value: FilterStatus; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'pending', label: 'Pending approval' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'declined', label: 'Declined' },
+];
+
+// "Pending" looks specifically for items waiting on the admin.
+// "Approved" includes completed files, since completing is the step after approval.
+const matchesStatus = (status: string, filter: FilterStatus) => {
+  const s = status.toLowerCase();
+  switch (filter) {
+    case 'pending':
+      return s === 'pending_admin';
+    case 'approved':
+      return s === 'approved' || s === 'completed';
+    case 'declined':
+      return s.includes('declined');
+    default:
+      return true;
+  }
+};
+
+const fieldClasses =
+  'h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none transition-colors focus:border-clay';
+
+// ─── Status Stamp ────────────────────────────────────────────────────────────
 function StatusStamp({ status }: { status: string }) {
   const getDisplayConfig = () => {
     const s = status?.toLowerCase();
-    
-    // Admin Stage Logic
-    if (s === 'pending_admin') {
-      return { label: 'PENDING APPROVAL', color: 'text-blue-600', bg: 'bg-blue-50' };
-    }
-    if (s === 'completed') {
-      return { label: 'COMPLETED', color: 'text-green-700', bg: 'bg-green-100' };
-    }
-    if (s.includes('approved')) {
-      return { label: 'APPROVED', color: 'text-green-600', bg: 'bg-green-50' };
-    }
-    if (s.includes('declined')) {
-      return { label: 'DECLINED', color: 'text-red-600', bg: 'bg-red-50' };
-    }
-    
-    // Default / Stage 01
-    return { label: 'UNDER VERIFICATION', color: 'text-orange-600', bg: 'bg-orange-50' };
+
+    // Admin stage logic
+    if (s === 'pending_admin') return { label: 'Pending approval', styles: 'bg-review-bg text-review-text' };
+    if (s === 'completed') return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
+    if (s.includes('approved')) return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
+    if (s.includes('declined')) return { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' };
+
+    // Default / stage 01
+    return { label: 'Under verification', styles: 'bg-pending-bg text-pending-text' };
   };
 
   const config = getDisplayConfig();
 
   return (
-    <div className={`inline-flex items-center gap-2 border-2 border-current px-3 py-0.5 ${config.color} ${config.bg} ${fonts.mono} font-black shadow-[2px_2px_0px_0px_currentColor] text-[9px]`}>
+    <div className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3 py-1.5 text-[11px] font-medium ${config.styles}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
       {config.label}
     </div>
   );
@@ -53,184 +74,205 @@ export default function SubmissionsPage() {
   const [toDate, setToDate] = useState('');
   const { submissions, loading } = useSubmissions();
 
-  const filteredSubmissions = submissions.filter(sub => {
+  const fileTypes = useMemo(
+    () => [...new Set(submissions.map((s) => s.file_type).filter(Boolean))],
+    [submissions]
+  );
+
+  // Everything except the status pills, so each pill can show its own count
+  const baseFiltered = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    const matchesSearch = !query
-      || sub.file_name.toLowerCase().includes(query)
-      || sub.tracking_number?.toLowerCase().includes(query)
-      || sub.profiles?.email?.toLowerCase().includes(query);
-    if (!matchesSearch) return false;
-    const createdDate = new Date(sub.created_at);
-    const matchesCategory = categoryFilter === 'all' || (sub.category || 'General') === categoryFilter;
-    const matchesFileType = fileTypeFilter === 'all' || sub.file_type === fileTypeFilter;
-    const matchesFromDate = !fromDate || createdDate >= new Date(`${fromDate}T00:00:00`);
-    const matchesToDate = !toDate || createdDate <= new Date(`${toDate}T23:59:59.999`);
-    if (!matchesCategory || !matchesFileType || !matchesFromDate || !matchesToDate) return false;
+    const from = fromDate ? new Date(`${fromDate}T00:00:00`) : null;
+    const to = toDate ? new Date(`${toDate}T23:59:59.999`) : null;
 
-    const s = sub.status.toLowerCase();
-    if (filter === 'all') return true;
-    
-    // The "Pending" filter now specifically looks for Admin Action
-    if (filter === 'pending') return s === 'pending_admin'; 
-    
-    if (filter === 'approved') return s === 'approved';
-    if (filter === 'declined') return s.includes('declined');
-    return true;
-  });
+    return submissions.filter((sub) => {
+      const matchesSearch = !query
+        || sub.file_name.toLowerCase().includes(query)
+        || sub.tracking_number?.toLowerCase().includes(query)
+        || sub.profiles?.email?.toLowerCase().includes(query);
+      if (!matchesSearch) return false;
 
-  const filters: { value: FilterStatus; label: string }[] = [
-    { value: 'all', label: 'All Submissions' },
-    { value: 'pending', label: 'Pending Approval' },
-    { value: 'approved', label: 'Approved' },
-    { value: 'declined', label: 'Declined' },
-  ];
+      const createdDate = new Date(sub.created_at);
+      return (
+        (categoryFilter === 'all' || (sub.category || 'General') === categoryFilter) &&
+        (fileTypeFilter === 'all' || sub.file_type === fileTypeFilter) &&
+        (!from || createdDate >= from) &&
+        (!to || createdDate <= to)
+      );
+    });
+  }, [submissions, searchQuery, categoryFilter, fileTypeFilter, fromDate, toDate]);
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<FilterStatus, number> = { all: baseFiltered.length, pending: 0, approved: 0, declined: 0 };
+    baseFiltered.forEach((sub) => {
+      (['pending', 'approved', 'declined'] as const).forEach((key) => {
+        if (matchesStatus(sub.status, key)) counts[key]++;
+      });
+    });
+    return counts;
+  }, [baseFiltered]);
+
+  const filteredSubmissions = useMemo(
+    () => baseFiltered.filter((sub) => matchesStatus(sub.status, filter)),
+    [baseFiltered, filter]
+  );
+
+  const hasActiveFilters =
+    filter !== 'all' || !!searchQuery || categoryFilter !== 'all' || fileTypeFilter !== 'all' || !!fromDate || !!toDate;
+
+  const clearFilters = () => {
+    setFilter('all');
+    setSearchQuery('');
+    setCategoryFilter('all');
+    setFileTypeFilter('all');
+    setFromDate('');
+    setToDate('');
+  };
 
   return (
-    <div className="space-y-10 pb-20">
-      {/* Header Section */}
-      <div className="border-b-4 border-gray-900 pb-8">
-        <h1 className={`${fonts.serif} text-7xl font-light text-gray-900 leading-none tracking-tight`}>
-          Master Logs
-        </h1>
-        <div className="flex items-center justify-between mt-4">
-          <p className={`${fonts.mono} text-blue-600 font-bold`}>
-            Global Archive // Level_02 Finalization
-          </p>
-          <p className={`${fonts.mono} text-gray-400 font-bold`}>
-            Displaying: {filteredSubmissions.length} Records
-          </p>
-        </div>
+    <div className="w-full">
+      {/* Header */}
+      <div className="mb-8 max-md:mb-5">
+        <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Admin workspace
+        </p>
+        <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>Master logs</h1>
+        <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">
+          Global archive and final review. Displaying <span className="text-warm-text">{filteredSubmissions.length}</span> records.
+        </p>
       </div>
 
-      {/* Filter Bar */}
-      <div className="space-y-3">
-        <label className={`${fonts.mono} font-bold text-gray-900`}>Search_By_File_Tracking_Number_Or_Requester</label>
+      {/* Filters */}
+      <div className="mb-4 space-y-3">
         <input
           type="search"
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
-          placeholder="DAET-2026-000001, document name, or requester email"
-          className="w-full border-2 border-gray-900 bg-white px-5 py-4 font-mono text-sm outline-none focus:border-blue-600"
+          aria-label="Search by file name, tracking number or requester"
+          placeholder="Search by tracking number, document name or requester email"
+          className="h-12 w-full rounded-full border border-warm-border bg-card px-5 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay max-md:h-11"
         />
-        <div className="grid grid-cols-1 gap-3 pt-3 md:grid-cols-4">
-          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="border-2 border-gray-900 bg-white p-3 font-mono text-xs">
-            <option value="all">All Categories</option>
-            <option value="General">General</option>
-            <option value="Tourism">Tourism</option>
-            <option value="Events">Events</option>
-            <option value="Marketing">Marketing</option>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label="Category" className={fieldClasses}>
+            <option value="all">All categories</option>
+            {CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
           </select>
-          <select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)} className="border-2 border-gray-900 bg-white p-3 font-mono text-xs">
-            <option value="all">All File Types</option>
-            {[...new Set(submissions.map((submission) => submission.file_type).filter(Boolean))].map((fileType) => (
+          <select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)} aria-label="File type" className={fieldClasses}>
+            <option value="all">All file types</option>
+            {fileTypes.map((fileType) => (
               <option key={fileType} value={fileType}>{fileType}</option>
             ))}
           </select>
-          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="From upload date" className="border-2 border-gray-900 bg-white p-3 font-mono text-xs" />
-          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="To upload date" className="border-2 border-gray-900 bg-white p-3 font-mono text-xs" />
+          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="From upload date" className={fieldClasses} />
+          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="To upload date" className={fieldClasses} />
         </div>
-        <label className={`${fonts.mono} font-bold text-gray-900`}>Filter_Database_By_Status</label>
-        <div className="flex flex-wrap gap-3">
-          {filters.map((f) => (
-            <button
-              key={f.value}
-              onClick={() => setFilter(f.value)}
-              className={`border-2 px-6 py-2 text-[11px] font-bold transition-all uppercase shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-1 hover:translate-y-1 ${
-                filter === f.value
-                  ? 'bg-blue-600 text-white border-blue-900'
-                  : 'bg-white text-gray-600 border-gray-900 hover:bg-gray-50'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
+
+        {/* Status pills (scroll inside their own row on mobile) */}
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden">
+          {STATUS_FILTERS.map((f) => {
+            const active = filter === f.value;
+            return (
+              <button
+                key={f.value}
+                onClick={() => setFilter(f.value)}
+                aria-pressed={active}
+                className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-xs font-medium transition-colors max-md:h-11 ${
+                  active
+                    ? 'border-clay bg-clay text-white'
+                    : 'border-warm-border bg-card text-warm-text hover:bg-sidebar'
+                }`}
+              >
+                {f.label}
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${active ? 'bg-white/25 text-white' : 'bg-sidebar text-muted-text'}`}>
+                  {statusCounts[f.value]}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Results Table */}
-      <div className="bg-white border-2 border-gray-900 shadow-[10px_10px_0px_0px_rgba(37,99,235,0.1)] overflow-hidden">
-        <div className="p-4 border-b-2 border-gray-900 bg-gray-50 flex items-center justify-between">
-          <h2 className={`${fonts.mono} font-black text-gray-900`}>Archive_Index</h2>
-          <div className="flex items-center gap-2">
-            {loading && <span className={`${fonts.mono} text-blue-600 animate-pulse`}>Fetching...</span>}
-            <div className="w-2 h-2 bg-blue-900 rounded-full animate-pulse" />
-          </div>
-        </div>
+      {/* List header */}
+      <div className="mb-4 flex items-center gap-3">
+        <h2 className="text-sm font-semibold text-warm-text">Archive index</h2>
+        <span className="rounded-md bg-sidebar px-2 py-1 text-[10px] font-medium text-muted-text">{filteredSubmissions.length}</span>
+      </div>
 
-        <div className="overflow-x-auto">
-          {loading ? (
-            <div className="py-20 text-center border-b-2 border-gray-900">
-               <span className={`${fonts.mono} text-gray-400 animate-pulse text-lg`}>SYNCING_DATABASE...</span>
-            </div>
-          ) : filteredSubmissions.length === 0 ? (
-            <div className="py-20 text-center border-b-2 border-gray-900">
-              <p className={`${fonts.mono} text-gray-400`}>Zero_Entries_Found</p>
-            </div>
-          ) : (
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className={`${fonts.mono} bg-gray-900 text-white`}>
-                  <th className="p-5 font-bold">Document</th>
-                  <th className="p-5 font-bold">Origin</th>
-                  <th className="p-5 font-bold text-center">Status</th>
-                  <th className="p-5 font-bold">Timestamp</th>
-                  <th className="p-5 font-bold text-right">Utility</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y-2 divide-gray-900">
-                {filteredSubmissions.map((sub) => (
-                  <tr key={sub.id} className="hover:bg-blue-50/30 transition-colors group">
-                    <td className="p-5">
-                      <div className="font-bold text-gray-900 underline decoration-blue-500/30 decoration-2 underline-offset-4 truncate max-w-[200px]">
-                        {sub.file_name}
-                      </div>
-                      <div className="text-[10px] font-mono text-blue-600 mt-1 uppercase">{sub.tracking_number || 'TRACKING PENDING'}</div>
-                      <div className="text-[10px] font-mono text-gray-400 mt-1 uppercase">TYPE: {sub.file_type}</div>
-                    </td>
-                    <td className="p-5">
-                      <div className="font-bold text-gray-700 text-xs truncate max-w-[180px]">
-                        {sub.profiles?.email ?? '—'}
-                      </div>
-                    </td>
-                    <td className="p-5 text-center">
-                      <StatusStamp status={sub.status} />
-                      {(() => {
-                        const timing = getWorkflowTiming(sub);
-                        return (
-                          <div className={`mt-2 inline-flex border px-2 py-1 font-mono text-[9px] uppercase ${workflowTimingClasses(timing.state)}`}>
-                            {timing.label}
-                          </div>
-                        );
-                      })()}
-                    </td>
-                    <td className="p-5">
-                      <div className={`${fonts.mono} text-gray-600`}>
-                        {new Date(sub.created_at).toLocaleDateString()}
-                      </div>
-                      {(() => {
-                        const timing = getWorkflowTiming(sub);
-                        return timing.responsible ? (
-                          <div className="mt-1 font-mono text-[9px] uppercase text-gray-500">
-                            Responsible: {timing.responsible}
-                          </div>
-                        ) : null;
-                      })()}
-                    </td>
-                    <td className="p-5 text-right">
-                      <Link 
-                        href={`/workflow/admin/submissions/${sub.id}`}
-                        className={`${fonts.mono} inline-block bg-white border-2 border-gray-900 px-4 py-1.5 font-bold text-[10px] shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all text-gray-900`}
-                      >
-                        Manage_Entry
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* List */}
+      {loading ? (
+        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Syncing records...
+        </div>
+      ) : filteredSubmissions.length === 0 ? (
+        <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
+          <p className={`${fonts.serif} text-2xl text-warm-text`}>Nothing here</p>
+          <p className="mt-2 text-xs text-muted-text">No submissions match your search or filters.</p>
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="mt-5 inline-flex h-10 items-center rounded-full border border-warm-border px-5 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11"
+            >
+              Clear filters
+            </button>
           )}
         </div>
-      </div>
+      ) : (
+        <div className="space-y-3">
+          {filteredSubmissions.map((sub) => {
+            const timing = getWorkflowTiming(sub);
+
+            return (
+              <article
+                key={sub.id}
+                className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+              >
+                <div className="flex min-w-0 items-center gap-4">
+                  <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
+                    <span className="text-lg leading-4" aria-hidden="true">▤</span>
+                    <span className="mt-1 text-[8px] font-semibold uppercase">
+                      {sub.file_type?.split('/').at(-1)?.slice(0, 3) || 'Doc'}
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="truncate text-sm font-semibold text-warm-text group-hover:text-clay">{sub.file_name}</h3>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
+                      <span>{sub.tracking_number || 'Tracking pending'}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="truncate">From {sub.profiles?.email ?? '—'}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{new Date(sub.created_at).toLocaleDateString()}</span>
+                      {timing.responsible && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>Responsible: {timing.responsible}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+                  <div className="flex flex-col items-start gap-1.5 sm:items-end max-md:self-start">
+                    <StatusStamp status={sub.status} />
+                    <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-medium ${workflowTimingClasses(timing.state)}`}>
+                      {timing.label}
+                    </span>
+                  </div>
+                  <Link
+                    href={`/workflow/admin/submissions/${sub.id}`}
+                    className="inline-flex h-10 items-center gap-2 rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full max-md:justify-center"
+                  >
+                    Manage entry <span aria-hidden="true">→</span>
+                  </Link>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

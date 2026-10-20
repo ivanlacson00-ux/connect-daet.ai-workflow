@@ -1,37 +1,54 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 
+// ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
-  mono: "font-mono uppercase tracking-[0.2em] text-[10px]",
+  serif: 'font-serif',
+};
+
+const NEW_WINDOW_MS = 5 * 60 * 1000;
+
+// Maps a notification event to the status it represents
+const getNotificationStatus = (eventType: string, currentStatus: string) => {
+  switch (eventType) {
+    case 'SUBMITTED':
+      return 'pending';
+    case 'VERIFICATION_PASSED':
+      return 'pending_admin';
+    case 'RETURNED_FOR_CORRECTION':
+      return 'declined_by_approver';
+    case 'FINAL_APPROVAL':
+      return 'approved';
+    case 'FINAL_REJECTION':
+      return 'declined_by_admin';
+    case 'WORKFLOW_COMPLETED':
+      return 'completed';
+    default:
+      return currentStatus;
+  }
+};
+
+const getStatusConfig = (status: string) => {
+  const s = (status || '').toLowerCase();
+  if (s === 'pending' || s === 'pending_approver') return { label: 'Under verification', classes: 'bg-pending-bg text-pending-text' };
+  if (s === 'pending_admin') return { label: 'Pending approval', classes: 'bg-review-bg text-review-text' };
+  if (s === 'declined_by_approver') return { label: 'Returned for correction', classes: 'bg-rejected-bg text-rejected-text' };
+  if (s === 'declined_by_admin') return { label: 'Rejected', classes: 'bg-rejected-bg text-rejected-text' };
+  if (s === 'completed') return { label: 'Completed', classes: 'bg-approved-bg text-approved-text' };
+  if (s.includes('approved')) return { label: 'Approved', classes: 'bg-approved-bg text-approved-text' };
+  if (s.includes('declined')) return { label: 'Declined', classes: 'bg-rejected-bg text-rejected-text' };
+  return { label: s.replaceAll('_', ' ') || 'Unknown', classes: 'bg-sidebar text-muted-text' };
 };
 
 export default function AdminNotificationsPage() {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const getNotificationStatus = (eventType: string, currentStatus: string) => {
-    switch (eventType) {
-      case 'SUBMITTED':
-        return 'pending';
-      case 'VERIFICATION_PASSED':
-        return 'pending_admin';
-      case 'RETURNED_FOR_CORRECTION':
-        return 'declined_by_approver';
-      case 'FINAL_APPROVAL':
-        return 'approved';
-      case 'FINAL_REJECTION':
-        return 'declined_by_admin';
-      case 'WORKFLOW_COMPLETED':
-        return 'completed';
-      default:
-        return currentStatus;
-    }
-  };
-
-  const fetchNotifications = async () => {
+  const fetchNotifications = useCallback(async () => {
     const { data, error } = await supabase
       .from('workflow_notifications')
       .select('*, workflow_submissions(*, profiles:user_id(email))')
@@ -39,8 +56,9 @@ export default function AdminNotificationsPage() {
       .limit(30);
 
     if (error) {
-      console.error("Admin Fetch Error:", error.message);
+      console.error('Admin Fetch Error:', error.message);
     } else {
+      // Keep only the latest notification per submission
       const latestBySubmission = new Map<string, any>();
       (data || []).forEach((notification) => {
         if (!latestBySubmission.has(notification.submission_id)) {
@@ -60,6 +78,7 @@ export default function AdminNotificationsPage() {
         }
       });
       setNotifications(Array.from(latestBySubmission.values()));
+
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         await supabase
@@ -70,21 +89,17 @@ export default function AdminNotificationsPage() {
       }
     }
     setLoading(false);
-  };
+  }, [supabase]);
 
   useEffect(() => {
     fetchNotifications();
 
-    // 2. Realtime Subscription - Listens for ANY change in the table
+    // Realtime: refetch whenever a new notification is inserted
     const channel = supabase
       .channel('admin-global-changes')
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'workflow_notifications',
-        },
+        { event: 'INSERT', schema: 'public', table: 'workflow_notifications' },
         () => fetchNotifications()
       )
       .subscribe();
@@ -92,94 +107,87 @@ export default function AdminNotificationsPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [supabase]);
-
-  const getStatusColor = (status: string) => {
-    const s = status.toLowerCase();
-    if (s.includes('approved')) return 'text-green-600 border-green-600 bg-green-50';
-    if (s.includes('declined')) return 'text-red-600 border-red-600 bg-red-50';
-    if (s.includes('pending')) return 'text-blue-600 border-blue-600 bg-blue-50';
-    return 'text-zinc-400 border-zinc-400 bg-zinc-50';
-  };
-
-  const getStatusLabel = (status: string) => {
-    if (status === 'pending' || status === 'pending_approver') return 'UNDER VERIFICATION';
-    if (status === 'pending_admin') return 'PENDING APPROVAL';
-    if (status === 'declined_by_approver') return 'RETURNED FOR CORRECTION';
-    if (status === 'declined_by_admin') return 'REJECTED';
-    return status.replace(/_/g, ' ').toUpperCase();
-  };
-
-  if (loading) return <div className="p-10 font-mono text-red-600 animate-pulse uppercase tracking-[0.3em]">Loading_Global_Stream...</div>;
+  }, [supabase, fetchNotifications]);
 
   return (
-    <div className="min-h-screen bg-[#fafafa] border-t-[6px] border-red-600 p-8 lg:p-16">
-      <div className="max-w-4xl mx-auto">
-        <header className="mb-12 border-b-4 border-black pb-8">
-          <div>
-            <span className="bg-red-600 text-white text-[10px] font-black px-2 py-1 uppercase tracking-tighter mb-4 inline-block">
-              Global_System_Monitor // Admin_View
-            </span>
-            <h1 className="text-6xl font-serif italic tracking-tighter leading-none text-black">Registry Feed</h1>
-          </div>
-        </header>
-
-        <div className="space-y-6">
-          {notifications.length === 0 ? (
-            <div className="border-2 border-dashed border-zinc-300 p-20 text-center text-zinc-400 font-mono text-xs uppercase tracking-widest">
-              Zero_Global_Activity_Detected
-            </div>
-          ) : (
-            notifications.map((note) => (
-              <div 
-                key={note.id}
-                className="group relative bg-white border-2 border-black p-6 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all"
-              >
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="flex-1">
-                    <p className={`${fonts.mono} text-zinc-400 mb-1 flex items-center gap-2`}>
-                      <span className="text-red-500 font-bold">UID: {note.user_id.split('-')[0]}</span>
-                      <span>//</span>
-                      <span>Ref: {note.id.split('-')[0]}</span>
-                      <span>//</span>
-                      <span>{new Date(note.updated_at).toLocaleDateString()}</span>
-                    </p>
-                    <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-red-600">
-                      {note.notification_title || note.event_type?.replace(/_/g, ' ')}
-                    </p>
-                    <p className="font-mono text-[10px] font-bold tracking-wider text-blue-600">
-                      Tracking: {note.tracking_number || 'Pending assignment'}
-                    </p>
-                    <h3 className="text-xl font-black uppercase tracking-tight text-black">
-                      {note.file_name}
-                    </h3>
-                    <p className="text-xs text-zinc-500 italic mt-1 truncate max-w-md">
-                      Owner: {note.requester_email || note.user_email || "Requester unavailable"} — {note.notification_message || note.description || "No description provided."}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-4">
-                    <div className={`px-4 py-1.5 border-2 font-black text-[10px] uppercase tracking-widest ${getStatusColor(note.notification_status || note.status)}`}>
-                      {getStatusLabel(note.notification_status || note.status)}
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Visual Indicator for New Updates (within last 5 mins) */}
-                {new Date().getTime() - new Date(note.updated_at).getTime() < 300000 && (
-                  <div className="absolute -top-2 -right-2 w-4 h-4 bg-red-600 rounded-full border-2 border-white animate-bounce" />
-                )}
-              </div>
-            ))
-          )}
-        </div>
-
-        <footer className="mt-12 pt-8 border-t border-zinc-200">
-          <p className="font-mono text-[9px] text-zinc-400 text-center uppercase tracking-[0.3em]">
-            Level_04_Authorization // Global_Broadcast_Active
-          </p>
-        </footer>
+    <div className="w-full">
+      {/* Header */}
+      <div className="mb-8 max-md:mb-5">
+        <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-clay" /> Admin workspace · Live
+        </p>
+        <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>Registry feed</h1>
+        <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">
+          Latest activity across all submissions. Showing <span className="text-warm-text">{notifications.length}</span> updates.
+        </p>
       </div>
+
+      {/* Feed */}
+      {loading ? (
+        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Loading activity...
+        </div>
+      ) : notifications.length === 0 ? (
+        <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
+          <p className={`${fonts.serif} text-2xl text-warm-text`}>Nothing here</p>
+          <p className="mt-2 text-xs text-muted-text">No activity has been recorded yet.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {notifications.map((note) => {
+            const status = getStatusConfig(note.notification_status || note.status);
+            const isNew = Date.now() - new Date(note.updated_at).getTime() < NEW_WINDOW_MS;
+
+            return (
+              <article
+                key={note.id}
+                className="flex flex-col gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:px-3.5 max-md:py-3.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-text">
+                    {isNew && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-clay-soft px-2 py-0.5 text-[10px] font-semibold text-clay">
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-clay" /> New
+                      </span>
+                    )}
+                    <span>User {String(note.user_id ?? '').split('-')[0] || '—'}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>Ref {String(note.id).split('-')[0]}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{new Date(note.updated_at).toLocaleDateString()}</span>
+                  </div>
+
+                  <p className="mt-2 text-[11px] font-semibold text-clay">
+                    {note.notification_title || note.event_type?.replaceAll('_', ' ') || 'Update'}
+                  </p>
+                  <h3 className="mt-0.5 truncate text-sm font-semibold text-warm-text">{note.file_name}</h3>
+                  <p className="mt-1 text-[11px] text-muted-text">
+                    {note.tracking_number || 'Tracking pending'}
+                  </p>
+                  <p className="mt-1.5 line-clamp-2 break-words text-xs leading-relaxed text-muted-text">
+                    <span className="text-warm-text">{note.requester_email || note.user_email || 'Requester unavailable'}</span>
+                    {' — '}
+                    {note.notification_message || note.description || 'No description provided.'}
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end max-md:w-full max-md:items-stretch">
+                  <div className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3 py-1.5 text-[11px] font-medium max-md:self-start ${status.classes}`}>
+                    <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
+                    {status.label}
+                  </div>
+                  <Link
+                    href={`/workflow/admin/submissions/${note.id}`}
+                    className="inline-flex h-10 items-center gap-2 rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full max-md:justify-center"
+                  >
+                    View details <span aria-hidden="true">→</span>
+                  </Link>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

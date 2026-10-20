@@ -1,23 +1,31 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
+
+// ─── Styles ──────────────────────────────────────────────────────────────────
+const fonts = {
+  serif: 'font-serif',
+};
+
+const fieldClasses =
+  'h-11 w-full rounded-full border border-warm-border bg-card px-4 text-sm text-warm-text caret-current outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay';
 
 export default function RegisterPage() {
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState(''); // New state
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<{ type: 'error' | 'success', message: string } | null>(null);
+  const [status, setStatus] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
 
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validation: Passwords must match
+    // Validation: passwords must match
     if (password !== confirmPassword) {
       setStatus({ type: 'error', message: 'Passwords do not match.' });
       return;
@@ -33,19 +41,14 @@ export default function RegisterPage() {
         data: {
           full_name: fullName,
           role: 'user',
-        }
-      }
+        },
+      },
     });
 
     if (error) {
       setStatus({ type: 'error', message: error.message });
-      setLoading(false);
     } else {
-      setStatus({
-        type: 'success',
-        message: 'User created successfully.'
-      });
-      setLoading(false);
+      setStatus({ type: 'success', message: 'User created successfully.' });
 
       // Clear form
       setEmail('');
@@ -53,229 +56,133 @@ export default function RegisterPage() {
       setPassword('');
       setConfirmPassword('');
     }
-  };
-
-  const inputStyle = {
-    border: '1px solid #30363d',
-    backgroundColor: '#0d1117',
-    color: '#e6edf3',
-  };
-
-  const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
-    e.currentTarget.style.borderColor = '#1f6feb';
-    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(31,111,235,0.3)';
-  };
-
-  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-    e.currentTarget.style.borderColor = '#30363d';
-    e.currentTarget.style.boxShadow = 'none';
+    setLoading(false);
   };
 
   return (
-    <div
-      className="min-h-screen flex items-center justify-center px-4 py-12"
-      style={{
-        backgroundColor: '#0d1117',
-        fontFamily:
-          '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif',
-        color: '#e6edf3',
-      }}
-    >
-      <div className="w-full max-w-[340px]">
-        {/* Wordmark / product identity */}
-        <div className="flex flex-col items-center mb-6">
-          <div
-            className="w-10 h-10 rounded-md flex items-center justify-center mb-3"
-            style={{ backgroundColor: '#e6edf3' }}
-          >
-            <svg width="20" height="20" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <div className="flex min-h-screen items-center justify-center bg-cream px-4 py-12">
+      <div className="w-full max-w-[380px]">
+        {/* Identity */}
+        <div className="mb-8 flex flex-col items-center text-center max-md:mb-6">
+          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-clay">
+            <svg width="22" height="22" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
               <path
                 d="M1.5 2.5h13v3h-13v-3ZM1.5 7h6v6.5h-6V7ZM9 7h5.5v6.5H9V7Z"
-                stroke="#0d1117"
+                stroke="white"
                 strokeWidth="1.1"
                 strokeLinejoin="round"
               />
             </svg>
           </div>
-          <span className="text-[15px] font-semibold" style={{ color: '#e6edf3' }}>
+          <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>
             CONNECT&#8209;Daet
-          </span>
-          <span className="text-[13px] mt-0.5" style={{ color: '#7d8590' }}>
-            Create your account
-          </span>
+          </h1>
+          <p className="mt-2 text-xs text-muted-text">Create your account</p>
         </div>
 
         {/* Register card */}
-        <div
-          className="rounded-md px-5 py-6"
-          style={{
-            backgroundColor: '#0d1117',
-            border: '1px solid #30363d',
-          }}
-        >
+        <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+          <p className="mb-4 flex items-center gap-2 text-[11px] font-medium text-muted-text">
+            <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Register a new account
+          </p>
+
           <form onSubmit={handleSignUp} className="space-y-4">
             <div>
-              <label
-                htmlFor="fullName"
-                className="block text-[13px] font-semibold mb-1"
-                style={{ color: '#e6edf3' }}
-              >
+              <label htmlFor="fullName" className="mb-1.5 block text-[11px] font-medium text-muted-text">
                 Full name
               </label>
               <input
                 id="fullName"
                 type="text"
+                autoComplete="name"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                className="w-full rounded-md px-3 py-[7px] text-[14px] outline-none transition-shadow"
-                style={inputStyle}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
-                placeholder="Enter Name"
+                className={fieldClasses}
+                placeholder="Enter name"
                 required
               />
             </div>
 
             <div>
-              <label
-                htmlFor="email"
-                className="block text-[13px] font-semibold mb-1"
-                style={{ color: '#e6edf3' }}
-              >
+              <label htmlFor="email" className="mb-1.5 block text-[11px] font-medium text-muted-text">
                 Email address
               </label>
               <input
                 id="email"
                 type="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-md px-3 py-[7px] text-[14px] outline-none transition-shadow"
-                style={inputStyle}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
+                className={fieldClasses}
                 placeholder="name@email.com"
                 required
               />
             </div>
 
             <div>
-              <label
-                htmlFor="password"
-                className="block text-[13px] font-semibold mb-1"
-                style={{ color: '#e6edf3' }}
-              >
+              <label htmlFor="password" className="mb-1.5 block text-[11px] font-medium text-muted-text">
                 Password
               </label>
               <input
                 id="password"
                 type="password"
+                autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-md px-3 py-[7px] text-[14px] outline-none transition-shadow"
-                style={inputStyle}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
+                className={fieldClasses}
                 placeholder="••••••••"
                 required
               />
             </div>
 
             <div>
-              <label
-                htmlFor="confirmPassword"
-                className="block text-[13px] font-semibold mb-1"
-                style={{ color: '#e6edf3' }}
-              >
+              <label htmlFor="confirmPassword" className="mb-1.5 block text-[11px] font-medium text-muted-text">
                 Confirm password
               </label>
               <input
                 id="confirmPassword"
                 type="password"
+                autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full rounded-md px-3 py-[7px] text-[14px] outline-none transition-shadow"
-                style={inputStyle}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
+                className={fieldClasses}
                 placeholder="••••••••"
                 required
               />
             </div>
 
             {status && (
-              <div
-                className="rounded-md px-3 py-2 text-[13px] flex items-start gap-2"
-                style={
+              <p
+                role={status.type === 'error' ? 'alert' : 'status'}
+                className={`rounded-xl border px-4 py-3 text-xs font-medium ${
                   status.type === 'success'
-                    ? {
-                        backgroundColor: 'rgba(63,185,80,0.1)',
-                        border: '1px solid rgba(63,185,80,0.4)',
-                        color: '#3fb950',
-                      }
-                    : {
-                        backgroundColor: 'rgba(248,81,73,0.1)',
-                        border: '1px solid rgba(248,81,73,0.4)',
-                        color: '#f85149',
-                      }
-                }
+                    ? 'border-approved-bg bg-approved-bg/50 text-approved-text'
+                    : 'border-rejected-bg bg-rejected-bg/50 text-rejected-text'
+                }`}
               >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 16 16"
-                  fill="currentColor"
-                  className="mt-[2px] flex-shrink-0"
-                >
-                  {status.type === 'success' ? (
-                    <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
-                  ) : (
-                    <path d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14ZM8 4a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 4Zm0 8a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z" />
-                  )}
-                </svg>
-                <span>{status.message}</span>
-              </div>
+                {status.message}
+              </p>
             )}
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-md py-[7px] text-[14px] font-semibold transition-colors"
-              style={{
-                backgroundColor: loading ? '#2b6b3a' : '#238636',
-                color: '#ffffff',
-                border: '1px solid rgba(240,246,252,0.1)',
-                cursor: loading ? 'default' : 'pointer',
-              }}
-              onMouseEnter={(e) => {
-                if (!loading) e.currentTarget.style.backgroundColor = '#2ea043';
-              }}
-              onMouseLeave={(e) => {
-                if (!loading) e.currentTarget.style.backgroundColor = '#238636';
-              }}
+              className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
             >
-              {loading ? 'Creating account…' : 'Create account'}
+              {loading ? 'Creating account...' : 'Create account'}
             </button>
           </form>
-        </div>
+        </section>
 
-        {/* Login link, outside card GitHub-style */}
-        <div
-          className="mt-4 rounded-md px-5 py-4 text-center text-[13px]"
-          style={{
-            backgroundColor: '#161b22',
-            border: '1px solid #30363d',
-            color: '#e6edf3',
-          }}
-        >
+        {/* Login link */}
+        <div className="mt-3 rounded-2xl border border-dashed border-warm-border bg-sidebar p-4 text-center text-xs text-muted-text">
           Already have an account?{' '}
-          <Link href="/login" className="font-medium" style={{ color: '#4493f8' }}>
+          <Link href="/login" className="font-semibold text-clay transition-colors hover:text-warm-text">
             Log in
           </Link>
         </div>
 
-        <p className="text-center text-[12px] mt-6" style={{ color: '#7d8590' }}>
-          v1.2.0
-        </p>
+        <p className="mt-6 text-center text-[10px] text-muted-text">v1.2.0</p>
       </div>
     </div>
   );
