@@ -1,84 +1,118 @@
-# ISO/IEC 25010 Local Evaluation Checklist
+# CONNECT-Daet System Test and ISO/IEC 25010 Evaluation Checklist
 
-Use the local application:
+Use this checklist for a fresh test pass after deploying the current branch. It covers local and production checks for the user, approver, and administrator workflows.
 
-```text
-http://localhost:3000/login
-```
+## Test information
 
-Use separate test accounts for:
+| Field | Value |
+|---|---|
+| Tester | |
+| Test date | |
+| Application version / commit | |
+| Environment (local / preview / production) | |
+| Browser and version | |
+| Supabase migration status checked | |
 
-- Regular user
-- Approver
-- Administrator
+Use dedicated test accounts and test documents. Do not use real confidential documents or alter production workflow data to simulate overdue records.
 
-Because the local application uses Supabase, use test accounts and test documents only.
-
-Record each test as **Pass**, **Fail**, or **N/A**.
-
----
-
-## 1. Functional Suitability
-
-### User functions
-
-- [x] User can log in and reach the user dashboard.
-- [x] User can upload a valid document.
-- [x] A tracking number is generated in the format `DAET-YYYY-000001`.
-- [x] The upload success message displays the tracking number.
-- [x] User can view their own submissions in File Registry.
-- [x] User can search by tracking number.
-- [x] User can search by filename.
-- [x] User detail page shows status, tracking number, metadata, and receipt.
-- [x] User can print a receipt containing the tracking number.
-- [x] User notifications show the tracking number and workflow stage.
-
-### Approver functions
-
-- [x] Approver can log in.
-- [x] Approver can view the verification queue.
-- [x] Approver can search by tracking number.
-- [x] Approver can verify a document: `pending` -> `pending_admin`.
-- [x] Approver can return a document: `pending` -> `declined_by_approver`.
-- [x] Approver comments are saved and visible in the timeline.
-- [x] Approver can view audit history.
-- [x] Approver notifications show the tracking number and workflow stage.
-
-### Administrator functions
-
-- [x] Administrator can log in.
-- [x] Administrator can view pending approvals.
-- [x] Administrator can approve: `pending_admin` -> `approved`.
-- [x] Administrator can complete: `approved` -> `completed`.
-- [x] Administrator can reject: `pending_admin` -> `declined_by_admin`.
-- [x] Administrator can view audit history.
-- [x] Administrator can open Reports.
-- [x] Administrator can filter reports by date.
-- [x] Administrator can export a CSV report.
-- [x] Exported CSV contains tracking numbers.
-- [x] Administrator can manage user roles.
+For each test, record **Pass**, **Fail**, or **N/A**, and attach evidence or a short note.
 
 ---
 
-## 2. Complete Workflow Test
+## 1. Environment and build
 
-Use a new test document and record its tracking number.
+- [ ] `.env.local` exists locally and is ignored by Git.
+- [ ] No API keys or service-role credentials are committed.
+- [ ] Supabase migrations required for the tested features have been applied.
+- [ ] `npm run build` completes successfully.
+- [ ] `npm run dev` starts successfully for local testing.
+- [ ] Login page loads and Supabase authentication works.
+- [ ] Vercel deployment is Ready (when testing a deployment).
 
-Expected successful path:
+Build evidence / notes:
+
+| Check | Result / evidence |
+|---|---|
+| Production build | |
+| Local server | |
+| Deployment URL and status | |
+
+---
+
+## 2. User workflow
+
+Use a regular user account.
+
+- [ ] User can log in and reach the user dashboard.
+- [ ] User can upload an allowed file and choose a category.
+- [ ] A tracking number is generated in `DAET-YYYY-######` format.
+- [ ] Upload confirmation displays the tracking number.
+- [ ] New submission starts in verification (`pending` or `pending_approver`).
+- [ ] User can see their own document in the registry.
+- [ ] User can search by filename and tracking number.
+- [ ] User can filter by status, category, file type, and submission-date range.
+- [ ] User can open the document preview without an automatic download.
+- [ ] Explicit Download action downloads the file.
+- [ ] User can view current status and workflow history.
+- [ ] User can view and acknowledge notifications.
+- [ ] User can print a receipt showing the correct tracking number and submission details.
+
+Test tracking number: ____________________
+
+---
+
+## 3. Approver workflow
+
+Use an approver account. The system intentionally uses an **unassigned approver team**; no individual assignment is expected.
+
+- [ ] Approver can log in and access the approver workspace.
+- [ ] Approver can find submissions waiting for verification.
+- [ ] Registry search and category, file type, and date filters work.
+- [ ] Timing badge and due-soon/overdue state display for active verification items.
+- [ ] Responsible role is understood as the Approver Team, not a particular assigned person.
+- [ ] Approver can preview authorized documents without automatic download.
+- [ ] Approver can explicitly download an authorized document.
+- [ ] Approver can verify a document, moving it to `pending_admin`.
+- [ ] Approver can return a document for correction with a comment.
+- [ ] Returned status and comment are visible to the submitter.
+- [ ] Approver can view relevant workflow audit history.
+- [ ] Approver receives an in-app notification for a new submission or returned document.
+
+---
+
+## 4. Administrator workflow
+
+Use an administrator account.
+
+- [ ] Administrator can access the administrator workspace.
+- [ ] Administrator can find submissions and use filename, tracking number, requester, status, category, file type, and date filters where available.
+- [ ] Administrator can preview authorized documents without automatic download.
+- [ ] Administrator can explicitly download authorized documents.
+- [ ] Administrator can approve a verified submission (`pending_admin` -> `approved`).
+- [ ] Administrator can reject a pending approval with an explanatory comment.
+- [ ] Administrator can mark an approved submission completed (`approved` -> `completed`).
+- [ ] Status, comments, actor, and timestamps appear in the workflow history.
+- [ ] Administrator receives relevant in-app notifications.
+- [ ] Administrator can archive and restore a record using the intended retention date.
+- [ ] Archive and restore actions appear in the audit history.
+- [ ] Archive Registry search, archived-date filtering, retention display, and restore action work.
+
+---
+
+## 5. End-to-end workflow and audit trail
+
+Create a new test submission and record its tracking number:
 
 ```text
-pending
--> pending_admin
--> approved
--> completed
+Submission -> Verification -> Approval -> Completion
 ```
 
-| Stage | Expected status | Actual status | Result |
+| Action | Expected status | Actual status | Pass / Fail |
 |---|---|---|---|
-| Upload | `pending` |  |  |✅
-| Approver verifies | `pending_admin` |  |  |✅
-| Administrator approves | `approved` |  |  |✅
-| Administrator completes | `completed` |  |  |✅
+| Submit document | `pending` / `pending_approver` | | |
+| Approver verifies | `pending_admin` | | |
+| Administrator approves | `approved` | | |
+| Administrator completes | `completed` | | |
 
 Expected audit events:
 
@@ -89,7 +123,12 @@ FINAL_APPROVAL
 WORKFLOW_COMPLETED
 ```
 
-Query the audit history using the real tracking number:
+- [ ] Each transition has exactly the expected event and actor.
+- [ ] Refreshing the page preserves the final status and history.
+- [ ] A returned-for-correction path can be tested separately.
+- [ ] Invalid role/status transitions are rejected by the database.
+
+Audit query (replace the tracking number):
 
 ```sql
 select
@@ -101,251 +140,293 @@ select
   l.new_status,
   l.comments,
   l.created_at
-from public.workflow_audit_logs l
-join public.workflow_submissions s
-  on s.id = l.submission_id
-where s.tracking_number = 'DAET-2026-000018'
+from public.workflow_audit_logs as l
+join public.workflow_submissions as s on s.id = l.submission_id
+where s.tracking_number = 'DAET-YYYY-000001'
 order by l.created_at asc;
 ```
 
-Replace `YOUR_TRACKING_NUMBER` with a value such as `DAET-2026-000012`.
-
 ---
 
-## 3. Rejection and Correction Tests
+## 6. Stage timestamps, responsibility, and deadlines
 
-### Approver return path
+- [ ] Newly submitted record has `submitted_at`.
+- [ ] Verification sets `verified_at` and starts the administrator stage.
+- [ ] Approval sets `approved_at` and starts the completion stage.
+- [ ] Completion sets `completed_at` and clears the active deadline/responsibility.
+- [ ] Verification stage responsibility is `approver`.
+- [ ] Approval/completion responsibility is `admin`.
+- [ ] Returned/rejected/completed records do not show an active deadline unless product rules specify otherwise.
+- [ ] UI shows `On Time`, `Due Soon`, or `Overdue` correctly.
+- [ ] Administrator report overdue count and stage breakdown match the active records.
 
-```text
-pending
--> declined_by_approver
-```
+Current default deadline policy to verify:
 
-- [x] Approver can return a document.
-- [x] Display shows `RETURNED FOR CORRECTION`.
-- [x] Approver's reason is visible to the user.
-- [x] User notification shows the tracking number.
-- [x] Audit event `RETURNED_FOR_CORRECTION` is recorded.
+| Active stage | Target | Due soon threshold |
+|---|---:|---:|
+| Verification | 2 calendar days | Within 24 hours of due time |
+| Approval | 2 calendar days | Within 24 hours of due time |
+| Completion after approval | 1 calendar day | Within 24 hours of due time |
 
-### Administrator rejection path
-
-```text
-pending
--> pending_admin
--> declined_by_admin
-```
-
-- [x] Administrator can reject a pending approval.
-- [x] Display shows `REJECTED`.
-- [x] Administrator's reason is saved.
-- [x] User can see the rejection.
-- [x] Audit event `FINAL_REJECTION` is recorded.
-
----
-
-## 4. Performance Efficiency
-
-Record each result in seconds.
-
-| Measurement | Result |
-|---|---:|
-| Login page load |  |2 sec
-| Login completion |  |1-2 sec
-| User dashboard load |  |2 sec
-| File Registry load |  |1 sec
-| Approver queue load |  |1 sec
-| Administrator dashboard load |  |1 sec
-| Reports page load |  |1 sec
-| Small document upload |  |1-2 sec
-| Large document upload |  |2-4 sec
-| CSV export |  |1 sec
-
-Suggested interpretation:
-
-- Under 2 seconds: Excellent
-- 2-4 seconds: Acceptable
-- 4-7 seconds: Needs review
-- Over 7 seconds: Performance concern
-
----
-
-## 5. Usability Evaluation
-
-### User task
-
-```text
-Log in -> Upload document -> Find tracking number -> Search File Registry -> Print receipt
-```
-
-### Approver task
-
-```text
-Log in -> Find pending document -> Verify or return document -> Add comment -> Check audit history
-```
-
-### Administrator task
-
-```text
-Log in -> Find pending approval -> Approve -> Mark completed -> Open Reports -> Export CSV
-```
-
-| Role | Task completed? | Time | Errors | User comments |
-|---|---|---:|---|---|
-| User | ✅ |1-2  |none  |  can comment
-| Approver | ✅ | 1-2 | none |can comment  |
-| Administrator | ✅ | 1-2 | none | can comment |
-
-Ask each tester:
-
-1. Was the next action easy to identify?
-2. Was the tracking number easy to find?
-3. Were the status labels understandable?
-4. Were any buttons or pages confusing?
-5. What should be improved?
-
----
-
-## 6. Reliability
-
-- [x] Refresh after upload; submission remains saved.
-- [x] Refresh after approval; updated status remains visible.
-- [x] Refresh after completion; `COMPLETED` remains visible.
-- [x] Reopen Notifications; notifications remain available.
-- [x] Open a detail page directly; correct submission loads.
-- [x] Submit two documents quickly; both receive unique tracking numbers.
-- [x] Search an existing tracking number; correct record appears.
-- [x] Search a nonexistent tracking number; no incorrect record appears.
-- [x] Refresh during loading; page recovers or displays an error.
-- [x] Audit event exists after each workflow transition.
-
-Check duplicate tracking numbers:
+Database spot-check query:
 
 ```sql
 select
   tracking_number,
-  count(*) as total
+  status,
+  submitted_at,
+  verified_at,
+  approved_at,
+  completed_at,
+  current_stage_started_at,
+  current_stage_due_at,
+  current_responsible_role
+from public.workflow_submissions
+order by created_at desc
+limit 20;
+```
+
+Do not change live records to simulate `Due Soon` or `Overdue`. Use a dedicated non-production test record/environment if testing those states.
+
+---
+
+## 7. Search, reports, and exports
+
+- [ ] Search by tracking number returns the correct record.
+- [ ] Search by filename returns the correct record.
+- [ ] Requester search works in administrator views where provided.
+- [ ] Status, category, file type, and date-range filters combine correctly.
+- [ ] Date boundaries include the intended start and end dates.
+- [ ] Reports date filters change the displayed totals and summaries.
+- [ ] Report status totals reconcile with the filtered records.
+- [ ] Total processing duration is plausible for completed records.
+- [ ] Verification duration is calculated from submission to verification.
+- [ ] Approval duration is calculated from verification to approval.
+- [ ] Completion duration is calculated from approval to completion.
+- [ ] Overdue count and overdue-by-stage totals reconcile with active overdue records.
+- [ ] Category volume totals reconcile with the filtered submissions.
+- [ ] Personnel action volume reflects audit actions, not document assignments.
+- [ ] CSV downloads only after the explicit export action.
+- [ ] CSV includes the expected tracking number, filename, status, dates, and audit count.
+- [ ] CSV escaping is correct for commas, quotes, and line breaks in names/comments.
+
+Report notes / discrepancies:
+
+| Metric | Displayed | Independently checked | Result |
+|---|---:|---:|---|
+| Total submissions | | | |
+| Overdue submissions | | | |
+| Average total processing time | | | |
+| Category counts | | | |
+| Personnel action counts | | | |
+
+---
+
+## 8. Notifications and email
+
+### In-app notification history
+
+- [ ] New submission produces in-app notifications for the intended recipients.
+- [ ] Verification, approval, completion, and return events produce the intended notifications.
+- [ ] Notification remains after refresh or sign-in again.
+- [ ] Read/unread state updates and persists.
+- [ ] Realtime notification appears without manually refreshing (when Realtime is enabled).
+- [ ] Notification points to the correct submission and tracking number.
+- [ ] Feed may show the latest event per document while database history remains intact.
+
+### Email prerequisites and delivery
+
+- [ ] `workflow_email_outbox` exists in Supabase.
+- [ ] Outbox trigger exists and creates a job for a new workflow notification.
+- [ ] Vercel has server-only `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and `CRON_SECRET`.
+- [ ] GitHub repository Actions secrets contain `CRON_SECRET` and `VERCEL_APP_URL`.
+- [ ] `CRON_SECRET` in GitHub exactly matches Vercel.
+- [ ] Resend sender is valid for the account; testing sender recipient restrictions are understood.
+- [ ] Manual GitHub Actions dispatch calls the Vercel route successfully.
+- [ ] Successful delivery sets `sent_at`, increments `attempts`, and clears `last_error`.
+- [ ] Failed delivery increments `attempts` and records `last_error`.
+- [ ] No-secret request receives HTTP `401`.
+- [ ] Scheduled workflow runs from the repository default branch.
+- [ ] Email timing meets the project’s expected service level.
+
+Outbox check:
+
+```sql
+select
+  recipient_email,
+  subject,
+  attempts,
+  sent_at,
+  last_error,
+  created_at
+from public.workflow_email_outbox
+order by created_at desc
+limit 20;
+```
+
+Email delivery remains **not production-ready** until sender/domain and actual delivery to intended recipients have been verified.
+
+---
+
+## 9. Private storage and archive security
+
+Use separate user accounts and test-only files.
+
+- [ ] `workflow_uploads` bucket is private.
+- [ ] New upload stores `file_path`; it does not generate a public URL.
+- [ ] User can access their own file.
+- [ ] User cannot access another user’s file by changing the submission ID.
+- [ ] Approver can access workflow documents as permitted by policy.
+- [ ] Administrator can access workflow documents as permitted by policy.
+- [ ] Logged-out user cannot use the protected file endpoint.
+- [ ] Unauthorized user receives a denial/not-found response, not file content.
+- [ ] Authorized preview URL is short-lived and does not expose a permanent public URL.
+- [ ] Image/PDF/CSV previews render inline as supported.
+- [ ] Opening a preview does not automatically download the file.
+- [ ] Explicit Download action still downloads the file.
+- [ ] Archived rows are hidden from non-admin users and approvers.
+- [ ] Administrator can find and restore archived records.
+- [ ] Retention date is treated as metadata; no automatic deletion is assumed unless separately implemented and approved.
+
+Do not paste signed URLs, credentials, or private document URLs into evidence.
+
+---
+
+## 10. Security and authorization
+
+- [ ] Unauthenticated user is redirected to login on protected pages.
+- [ ] Regular user cannot access administrator pages.
+- [ ] Regular user cannot access approver pages.
+- [ ] Approver cannot access administrator-only actions.
+- [ ] User cannot read another user’s submission through the UI or Supabase API.
+- [ ] User cannot change another user’s status.
+- [ ] Approver cannot approve or complete a document.
+- [ ] Administrator can only perform valid transitions.
+- [ ] Invalid direct database/API transition is rejected by workflow rules.
+- [ ] RLS is enabled on workflow tables and policies match the intended roles.
+- [ ] Service-role credential is used server-side only.
+- [ ] `.env.local` is ignored and is not present in the PR/commit.
+- [ ] No secrets or signed URLs appear in browser-visible source, logs, or screenshots.
+
+RLS inspection query:
+
+```sql
+select schemaname, tablename, rowsecurity
+from pg_tables
+where schemaname in ('public', 'storage')
+  and tablename in (
+    'profiles',
+    'workflow_submissions',
+    'workflow_audit_logs',
+    'workflow_notifications',
+    'workflow_email_outbox',
+    'objects'
+  )
+order by schemaname, tablename;
+```
+
+---
+
+## 11. Reliability and compatibility
+
+- [ ] Refresh during a normal page load; the page recovers or reports an error.
+- [ ] Reopen a submission detail page directly; the correct record loads.
+- [ ] Two rapid test uploads receive distinct tracking numbers.
+- [ ] Failed notification/email is visible and can be retried according to the configured process.
+- [ ] Duplicate scheduler invocation does not cause unintended duplicate email delivery.
+- [ ] Test a supported image preview.
+- [ ] Test a supported PDF preview.
+- [ ] Test a CSV preview and explicit download.
+- [ ] Test a file type that is not browser-previewable; behavior is understandable and safe.
+- [ ] Check responsive layout at desktop and mobile widths.
+
+Tracking-number integrity queries:
+
+```sql
+select tracking_number, count(*) as total
 from public.workflow_submissions
 group by tracking_number
 having count(*) > 1;
 ```
 
-Expected result: **0 rows**.
-
-Check missing tracking numbers:
+Expected: **0 rows**.
 
 ```sql
 select count(*) as missing_tracking_numbers
 from public.workflow_submissions
-where tracking_number is null
-   or btrim(tracking_number) = '';
+where tracking_number is null or btrim(tracking_number) = '';
 ```
 
-Expected result: **0**.
+Expected: **0**.
 
 ---
 
-## 7. Security
+## 12. Performance and usability evidence
 
-- [x] User opening `/workflow/admin` is redirected or denied.
-- [x] User opening `/workflow/approver` is redirected or denied.
-- [x] Approver opening an admin page is redirected or denied.
-- [ ] User cannot view another user's submission.
-- [ ] User cannot change another user's status.
-- [x] User cannot mark a document completed.
-- [x] Approver cannot approve a `pending_admin` document.
-- [x] Approver cannot complete a document.
-- [x] Administrator can complete an approved document.
-- [x] Completed document cannot move backward.
-- [x] Rejected document cannot change without resubmission.
-- [ ] Unauthenticated user is redirected to login.
+Record measured times; avoid pre-filling outcomes before testing.
 
-Verify RLS:
+| Page/action | Measurement (seconds) | Result / notes |
+|---|---:|---|
+| Login page load | | |
+| User dashboard | | |
+| User registry and search | | |
+| Approver queue | | |
+| Administrator registry | | |
+| Reports page | | |
+| Small-file upload | | |
+| Large allowed-file upload | | |
+| CSV export | | |
+| Document preview | | |
 
-```sql
-select
-  schemaname,
-  tablename,
-  rowsecurity
-from pg_tables
-where schemaname = 'public'
-  and tablename in (
-    'profiles',
-    'workflow_submissions',
-    'workflow_audit_logs'
-  )
-order by tablename;
-```
+Task completion observations:
 
-Expected result: `true` for all three tables.
+| Role | Task completed? | Time | Errors / confusion | Tester notes |
+|---|---|---:|---|---|
+| User | | | | |
+| Approver | | | | |
+| Administrator | | | | |
 
----
+Ask testers:
 
-## 8. Maintainability
-
-- [x] Tracking-number generation is database-side.
-- [x] Tracking-number format is documented.
-- [x] Migrations are ordered and readable.
-- [x] Workflow transitions are database-enforced.
-- [x] Audit logging is centralized.
-- [x] Status labels are consistent.
-- [x] Production build succeeds.
-- [x] No unintended files are included.
-- [x] Environment variables are not committed.
-
-Run:
-
-```cmd
-npm run build
-```
-
-Expected output includes:
-
-```text
-Compiled successfully
-Finished TypeScript
-```
-
-Record lint separately because the current project has existing lint errors.
+1. Was the next action easy to identify?
+2. Were tracking number and status clear?
+3. Was it clear who/which role should act next?
+4. Did preview and download behave as expected?
+5. What caused confusion or errors?
 
 ---
 
-## 9. Portability
+## 13. ISO/IEC 25010 evaluation summary
 
-### Local environment
-
-- [x] `npm install` completes.
-- [x] `npm run dev` starts.
-- [x] `/login` loads.
-- [x] Supabase connection works.
-- [x] Upload works locally.
-- [x] Reports work locally.
-- [x] `npm run build` succeeds.
-
-### Vercel
-
-Complete after deployment:
-
-- [ ] Deployment succeeds.
-- [ ] Vercel status is Ready.
-- [ ] Production login works.
-- [ ] Production Supabase connection works.
-- [ ] Tracking numbers display.
-- [ ] Workflow transitions work.
-- [ ] Reports load.
-- [ ] CSV export works.
-
----
-
-## Final Evaluation Summary
-
-| Quality characteristic | Pass/Fail | Evidence |
+| Quality characteristic | Pass / Fail / N/A | Evidence reference |
 |---|---|---|
-| Functional suitability |  | Completed workflow and feature checklist |
-| Performance efficiency |  | Timing results |
-| Usability |  | User task results and feedback |
-| Reliability |  | Refresh, duplicate, audit, and recovery tests |
-| Security |  | RLS and invalid-transition tests |
-| Maintainability |  | Build and code-structure review |
-| Portability |  | Local build and later Vercel verification |
+| Functional suitability | | |
+| Performance efficiency | | |
+| Compatibility | | |
+| Usability | | |
+| Reliability | | |
+| Security | | |
+| Maintainability | | |
+| Portability | | |
 
-The ISO/IEC 25010 evaluation can be marked complete when every category has a result and supporting evidence.
+Do not mark the evaluation complete until the relevant tests have been run and evidence has been saved.
+
+## 14. Release readiness
+
+- [ ] Required Supabase migrations are applied in order.
+- [ ] Production environment variables are configured without exposing secrets.
+- [ ] Vercel deployment is Ready.
+- [ ] GitHub Actions scheduler is enabled and has a successful run.
+- [ ] Workflow tested against production or an approved staging environment.
+- [ ] No accidental secrets or local-only files are included in the PR.
+- [ ] Build passes on the branch/PR.
+- [ ] PR description lists migration and environment setup requirements.
+- [ ] Repository owner/reviewer has reviewed and approved the PR.
+- [ ] Deployment has been verified after merge.
+
+### Final result
+
+**Overall:** Pass / Fail / Incomplete
+**Blocking issues:**
+**Evidence location:**
+**Tester/date:**
