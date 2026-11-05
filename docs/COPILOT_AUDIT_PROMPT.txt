@@ -1,0 +1,24 @@
+Read these project documents first:
+- docs/REVISED_WORKFLOW_PLAN.md
+- docs/DATABASE_SECURITY_STATUS.md
+
+Treat REVISED_WORKFLOW_PLAN.md as the source of truth for intended system behavior. Treat DATABASE_SECURITY_STATUS.md as historical handoff context, not proof of the database's current state.
+
+Then inspect the actual repository and compare its implementation with the revised workflow. Check the project structure, authentication and role handling, document submission, department review, approval-rule routing, external digital/offline approval, final review, change-request/version loop, completion statuses and notifications, document messaging/private staff notes, points/rewards, audit history, Supabase RLS, and Storage policies.
+
+For every item, label it:
+- Implemented and verified in code
+- Partially implemented
+- Missing
+- Cannot verify from the repository
+
+Also identify mismatches between the code, database migrations/schema files, and the revised workflow. Do not assume a SQL file has been applied to Supabase. Clearly separate repository evidence from live database facts.
+
+STRICT SAFETY RULES:
+- Do not modify, create, or delete files during this audit.
+- Do not execute SQL, migrations, seeders, or scripts that change data.
+- Do not access or modify the production/main Supabase project.
+- Test-project database state cannot be confirmed from local files alone; state what evidence is missing.
+- Do not invent requirements that are not in the revised workflow plan. Flag unspecified details instead.
+
+Finish with a concise status report and recommend the single most logical next task. Wait for approval before making changes.
