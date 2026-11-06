@@ -38,9 +38,9 @@ const withTimeout = <T,>(promise: PromiseLike<T>, ms: number, label: string): Pr
 
 // ─── Status groups ───────────────────────────────────────────────────────────
 // Add any other status values from your database to these lists
-const PENDING_STATUSES = ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'returned_for_requirements'];
+const PENDING_STATUSES = ['pending', 'pending_approver', 'pending_admin'];
 const COMPLETED_STATUSES = ['approved', 'completed'];
-const REJECTED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'declined_by_office', 'declined_by_mayor', 'rejected'];
+const REJECTED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'rejected'];
 
 // ─── Filters ─────────────────────────────────────────────────────────────────
 type Filter = 'all' | 'pending' | 'completed' | 'rejected';
@@ -75,19 +75,11 @@ function StatusStamp({ status }: { status: string }) {
         return { label: 'Pending', styles: 'bg-pending-bg text-pending-text' };
       case 'pending_admin':
         return { label: 'Under review', styles: 'bg-review-bg text-review-text' };
-      case 'pending_office':
-        return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
-      case 'pending_mayor':
-        return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
-      case 'returned_for_requirements':
-        return { label: 'Additional requirements requested', styles: 'bg-pending-bg text-pending-text' };
       case 'approved':
       case 'completed':
         return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
       case 'declined_by_approver':
       case 'declined_by_admin':
-      case 'declined_by_office':
-      case 'declined_by_mayor':
       case 'rejected':
         return { label: 'Rejected', styles: 'bg-rejected-bg text-rejected-text' };
       default:
@@ -108,6 +100,7 @@ function StatusStamp({ status }: { status: string }) {
 // ─── Individual Card Component ───────────────────────────────────────────────
 function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Submission) => void }) {
   const router = useRouter();
+  const isRejected = matchesFilter(sub.status, 'rejected');
 
   return (
     <article className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
@@ -146,6 +139,15 @@ function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Su
         </button>
       </div>
 
+      {/* Rejection Feedback Panel */}
+      {isRejected && (sub.approver_comments || sub.admin_comments) && (
+        <div className="mt-5 rounded-xl border border-rejected-bg bg-rejected-bg/50 p-5">
+          <div className="mb-2 text-xs font-semibold text-rejected-text">Official feedback</div>
+          <p className="font-serif text-base leading-relaxed text-warm-text">
+            "{sub.admin_comments || sub.approver_comments}"
+          </p>
+        </div>
+      )}
     </article>
   );
 }

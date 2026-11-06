@@ -20,6 +20,8 @@ interface Submission {
   status: string;
   user_id: string;
   submitter_email?: string;
+  approver_comments?: string | null;
+  admin_comments?: string | null;
   created_at: string;
 }
 
@@ -36,7 +38,7 @@ const withTimeout = <T,>(promise: PromiseLike<T>, ms: number, label: string): Pr
 const QUEUE_STATUSES = ['pending', 'pending_approver'];
 // Approving a file passes it to the admin, so 'pending_admin' counts as approved here
 const APPROVED_STATUSES = ['pending_admin', 'approved', 'completed'];
-const DECLINED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'declined_by_office', 'declined_by_mayor', 'rejected'];
+const DECLINED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'rejected'];
 
 // ─── Filters ─────────────────────────────────────────────────────────────────
 type Filter = 'all' | 'queue' | 'approved' | 'declined';
@@ -70,16 +72,9 @@ function StatusStamp({ status }: { status: string }) {
       case 'pending_approver':
         return { label: 'Pending', styles: 'bg-pending-bg text-pending-text' };
       case 'pending_admin':
-        return { label: 'Administrative review', styles: 'bg-review-bg text-review-text' };
-      case 'pending_office':
-        return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
-      case 'pending_mayor':
-        return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
-      case 'returned_for_requirements':
-        return { label: 'Requirements requested', styles: 'bg-pending-bg text-pending-text' };
       case 'approved':
       case 'completed':
-        return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
+        return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
       case 'declined_by_approver':
       case 'declined_by_admin':
       case 'rejected':
@@ -103,6 +98,8 @@ function StatusStamp({ status }: { status: string }) {
 function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Submission) => void }) {
   const router = useRouter();
   const needsReview = matchesFilter(sub.status, 'queue');
+  const isDeclined = matchesFilter(sub.status, 'declined');
+  const feedback = sub.admin_comments || sub.approver_comments;
 
   return (
     <article className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
@@ -151,6 +148,13 @@ function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Su
         </button>
       </div>
 
+      {/* Decline feedback panel */}
+      {isDeclined && feedback && (
+        <div className="rounded-xl border border-rejected-bg bg-rejected-bg/50 p-5 sm:basis-full">
+          <div className="mb-2 text-xs font-semibold text-rejected-text">Decline reason</div>
+          <p className="font-serif text-base leading-relaxed text-warm-text">"{feedback}"</p>
+        </div>
+      )}
     </article>
   );
 }

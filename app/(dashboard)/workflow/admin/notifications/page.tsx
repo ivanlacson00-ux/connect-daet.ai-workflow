@@ -166,6 +166,8 @@ export default function AdminNotificationsPage() {
                   </p>
                   <p className="mt-1.5 line-clamp-2 break-words text-xs leading-relaxed text-muted-text">
                     <span className="text-warm-text">{note.requester_email || note.user_email || 'Requester unavailable'}</span>
+                    {' — '}
+                    {note.notification_message || note.description || 'No description provided.'}
                   </p>
                 </div>
 

@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
-import { getRoleHomePath } from '@/lib/workflow/offices';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -62,19 +61,16 @@ export default function LoginPage() {
       return;
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', refreshed.user.id)
-      .single();
+    const role = refreshed.user.app_metadata?.role;
 
-    if (profileError || !profile) {
-      setError('Could not load your account role. Please try again or contact an administrator.');
-      setLoading(false);
-      return;
+    // Loading stays on while the browser redirects
+    if (role === 'admin') {
+      window.location.href = '/workflow/admin';
+    } else if (role === 'approver') {
+      window.location.href = '/workflow/approver';
+    } else {
+      window.location.href = '/workflow/user';
     }
-
-    window.location.href = getRoleHomePath(profile.role);
   };
 
   return (
