@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 
@@ -17,7 +17,25 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [verified, setVerified] = useState(false);
   const supabase = useMemo(() => createClient(), []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.get('verified') === '1') {
+      setVerified(true);
+      params.delete('verified');
+    }
+
+    if (params.get('verification') === 'failed') {
+      setError('Email confirmation could not be completed. Please request a new confirmation email and try again.');
+      params.delete('verification');
+    }
+
+    const query = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,6 +101,11 @@ export default function LoginPage() {
           </p>
 
           <form onSubmit={handleLogin} className="space-y-4">
+            {verified && (
+              <p role="status" className="rounded-xl border border-approved-bg bg-approved-bg/50 px-4 py-3 text-xs font-medium text-approved-text">
+                Your email is verified. Log in to your account.
+              </p>
+            )}
             <div>
               <label htmlFor="email" className="mb-1.5 block text-[11px] font-medium text-muted-text">
                 Email address
