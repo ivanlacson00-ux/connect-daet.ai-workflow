@@ -180,8 +180,6 @@ export default function NotificationsPage() {
                   {group.items.map((note) => {
                     const content = getNotificationContent(note.status);
                     const isNew = isNewUpdate(note.updated_at);
-                    const isRejected = note.status.includes('declined') || note.status.includes('rejected');
-                    const feedback = isRejected ? (note.admin_comments || note.approver_comments) : null;
 
                     return (
                       <li
@@ -207,15 +205,9 @@ export default function NotificationsPage() {
                               )}
                             </div>
 
-                            {feedback ? (
-                              <p className="mt-2 line-clamp-2 border-l-2 border-rejected-bg pl-3 font-serif text-sm leading-relaxed text-warm-text">
-                                "{feedback}"
-                              </p>
-                            ) : (
-                              <p className="mt-1.5 max-w-xl truncate text-xs text-muted-text">
-                                {note.description || "No description provided."}
-                              </p>
-                            )}
+                            <p className="mt-1.5 max-w-xl truncate text-xs text-muted-text">
+                              {note.description || "No description provided."}
+                            </p>
                           </div>
                         </div>
 

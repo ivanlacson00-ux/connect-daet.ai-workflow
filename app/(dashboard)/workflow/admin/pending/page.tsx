@@ -1,12 +1,10 @@
 'use client';
 
-import { useState } from 'react';
 import { useSubmissions } from '@/hooks/useSubmissions';
+import Link from 'next/link';
 
 export default function PendingPage() {
-  const { submissions, loading, adminApprove, adminDecline } = useSubmissions('pending_admin');
-  const [declineModal, setDeclineModal] = useState<{ id: string } | null>(null);
-  const [declineComment, setDeclineComment] = useState('');
+  const { submissions, loading } = useSubmissions('pending_admin');
 
   const statusColor: Record<string, string> = {
     pending:              'bg-yellow-100 text-yellow-700',
@@ -22,7 +20,7 @@ export default function PendingPage() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-800">My Pending Reviews</h1>
         <p className="text-sm text-gray-500 mt-1">
-          Submissions approved by approver, waiting for your final decision
+          Verify the approver-selected office route or archive the request with a reason.
         </p>
       </div>
 
@@ -42,7 +40,7 @@ export default function PendingPage() {
                 <th className="pb-3">Type</th>
                 <th className="pb-3">Date</th>
                 <th className="pb-3">Status</th>
-                <th className="pb-3">Actions</th>
+                <th className="pb-3">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -67,20 +65,12 @@ export default function PendingPage() {
                     </span>
                   </td>
                   <td className="py-3">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => adminApprove(sub.id)}
-                        className="px-3 py-1 bg-green-500 text-white text-xs rounded-full hover:bg-green-600"
-                      >
-                        Approve
-                      </button>
-                      <button
-                        onClick={() => setDeclineModal({ id: sub.id })}
-                        className="px-3 py-1 bg-red-500 text-white text-xs rounded-full hover:bg-red-600"
-                      >
-                        Decline
-                      </button>
-                    </div>
+                    <Link
+                      href={`/workflow/admin/submissions/${sub.id}`}
+                      className="inline-flex rounded-full bg-orange-500 px-3 py-1 text-xs text-white hover:bg-orange-600"
+                    >
+                      Verify route
+                    </Link>
                   </td>
                 </tr>
               ))}
@@ -89,40 +79,6 @@ export default function PendingPage() {
         )}
       </div>
 
-      {declineModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-semibold mb-2">Decline Submission</h3>
-            <p className="text-sm text-gray-500 mb-4">Please provide a reason for declining.</p>
-            <textarea
-              value={declineComment}
-              onChange={(e) => setDeclineComment(e.target.value)}
-              placeholder="Enter rejection reason..."
-              className="w-full border rounded-lg p-3 text-sm mb-4 h-28 resize-none focus:outline-none focus:ring-2 focus:ring-red-400"
-            />
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => { setDeclineModal(null); setDeclineComment(''); }}
-                className="px-4 py-2 text-sm border rounded-full hover:bg-gray-100"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  if (!declineComment.trim()) return;
-                  await adminDecline(declineModal.id, declineComment);
-                  setDeclineModal(null);
-                  setDeclineComment('');
-                }}
-                disabled={!declineComment.trim()}
-                className="px-4 py-2 text-sm bg-red-500 text-white rounded-full hover:bg-red-600 disabled:opacity-50"
-              >
-                Confirm Decline
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

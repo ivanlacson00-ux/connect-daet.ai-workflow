@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSubmissions } from '@/hooks/useSubmissions';
 import { getWorkflowTiming, workflowTimingClasses } from '@/lib/workflow/timing';
+import { OFFICE_CONFIG } from '@/lib/workflow/offices';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -12,7 +13,7 @@ const fonts = {
 
 type FilterStatus = 'all' | 'pending' | 'approved' | 'declined';
 
-const CATEGORIES = ['General', 'Tourism', 'Events', 'Marketing'];
+const CATEGORIES = [...new Set(Object.values(OFFICE_CONFIG).flatMap((office) => office.categories))];
 
 const STATUS_FILTERS: { value: FilterStatus; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -27,7 +28,7 @@ const matchesStatus = (status: string, filter: FilterStatus) => {
   const s = status.toLowerCase();
   switch (filter) {
     case 'pending':
-      return s === 'pending_admin';
+      return ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'returned_for_requirements'].includes(s);
     case 'approved':
       return s === 'approved' || s === 'completed';
     case 'declined':
@@ -46,7 +47,10 @@ function StatusStamp({ status }: { status: string }) {
     const s = status?.toLowerCase();
 
     // Admin stage logic
-    if (s === 'pending_admin') return { label: 'Pending approval', styles: 'bg-review-bg text-review-text' };
+    if (s === 'pending_admin') return { label: 'Administrative review', styles: 'bg-review-bg text-review-text' };
+    if (s === 'pending_office') return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
+    if (s === 'pending_mayor') return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
+    if (s === 'returned_for_requirements') return { label: 'Returned for requirements', styles: 'bg-pending-bg text-pending-text' };
     if (s === 'completed') return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
     if (s.includes('approved')) return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
     if (s.includes('declined')) return { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' };

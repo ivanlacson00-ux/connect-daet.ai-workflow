@@ -62,8 +62,17 @@ export default function AdminDashboard() {
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
 
   // ─── Stat Cards Data ───────────────────────────────────────────────────────
-  const pendingCount = (adminStats.pendingApprover || 0) + (adminStats.pendingAdmin || 0);
-  const declinedCount = (adminStats.declinedByApprover || 0) + (adminStats.declinedByAdmin || 0);
+  const pendingCount =
+    adminStats.pendingApprover
+    + adminStats.pendingAdmin
+    + adminStats.pendingOffice
+    + adminStats.pendingMayor
+    + adminStats.returnedForRequirements;
+  const declinedCount =
+    adminStats.declinedByApprover
+    + adminStats.declinedByAdmin
+    + adminStats.declinedByOffice
+    + adminStats.declinedByMayor;
 
   const statCards = [
     { label: 'Total users', value: adminStats.totalUsers, hint: 'Registered accounts', icon: '♧', iconStyles: 'bg-clay-soft text-clay' },
