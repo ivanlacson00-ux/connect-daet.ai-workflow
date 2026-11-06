@@ -38,7 +38,6 @@ export default function RegisterPage() {
       email,
       password,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
         data: {
           full_name: fullName,
           role: 'user',
@@ -49,7 +48,7 @@ export default function RegisterPage() {
     if (error) {
       setStatus({ type: 'error', message: error.message });
     } else {
-      setStatus({ type: 'success', message: 'Check your email to confirm your address before logging in.' });
+      setStatus({ type: 'success', message: 'User created successfully.' });
 
       // Clear form
       setEmail('');

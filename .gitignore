@@ -34,9 +34,6 @@ yarn-error.log*
 .env*
 !.env.example
 
-#mcp servers
-.mcp.json
-
 # vercel
 .vercel
 

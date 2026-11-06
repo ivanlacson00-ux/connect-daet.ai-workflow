@@ -3,18 +3,6 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
-import FilePreview from '@/components/FilePreview';
-import {
-  ACCEPT_ATTR,
-  SUPPORTED_TEXT,
-  MAX_FILE_BYTES,
-  formatSize,
-  getExtension,
-  isWebImage,
-  typeLabel,
-  validateUploadFile,
-  type FileCheck,
-} from '@/lib/uploadRules';
 
 // ─── Styles & Fonts (synced with dashboard) ──────────────────────────────────
 const fonts = {
@@ -27,38 +15,15 @@ export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const category = 'General'; // document type picker comes later; the destination is now chosen below
-  const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
-  const [departmentId, setDepartmentId] = useState('');
-  const [loadingDepartments, setLoadingDepartments] = useState(true);
+  const [category, setCategory] = useState('General');
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const [showPreview, setShowPreview] = useState(false);
-  const [fileCheck, setFileCheck] = useState<FileCheck | null>(null);
+  const [textPreview, setTextPreview] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const supabase = useMemo(() => createClient(), []);
-
-  // Load active departments for the destination dropdown
-  useEffect(() => {
-    let cancelled = false;
-    supabase
-      .from('departments')
-      .select('id, name')
-      .eq('is_active', true)
-      .order('name')
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          setMessage({ text: `Could not load departments: ${error.message}`, type: 'error' });
-        } else {
-          setDepartments(data ?? []);
-        }
-        setLoadingDepartments(false);
-      });
-    return () => { cancelled = true; };
-  }, [supabase]);
 
   // Local object URL so the selected file can be previewed before uploading
   const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
@@ -66,7 +31,26 @@ export default function UploadPage() {
     return () => { if (previewUrl) URL.revokeObjectURL(previewUrl); };
   }, [previewUrl]);
 
-  const ext = file ? getExtension(file.name) : '';
+  const fileKind = useMemo(() => {
+    if (!file) return 'none';
+    const type = (file.type || '').toLowerCase();
+    const name = file.name.toLowerCase();
+    if (type.startsWith('image/')) return 'image';
+    if (type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+    if (type.startsWith('video/')) return 'video';
+    if (type.startsWith('audio/')) return 'audio';
+    if (type.startsWith('text/') || /\.(txt|md|csv|json|log)$/.test(name)) return 'text';
+    return 'other';
+  }, [file]);
+
+  // Read text-like files for the preview (capped so huge files don't freeze the page)
+  useEffect(() => {
+    setTextPreview(null);
+    if (!file || fileKind !== 'text') return;
+    let cancelled = false;
+    file.slice(0, 200_000).text().then(t => { if (!cancelled) setTextPreview(t); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [file, fileKind]);
 
   // Close preview with Escape
   useEffect(() => {
@@ -79,39 +63,18 @@ export default function UploadPage() {
   // Close preview if the file is removed
   useEffect(() => { if (!file) setShowPreview(false); }, [file]);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const input = e.target;
-    const selectedFile = input.files?.[0];
-    if (!selectedFile) return;
-
-    const check = await validateUploadFile(selectedFile);
-    input.value = ''; // lets the same file be picked again after a rejection
-
-    if (!check.ok) {
-      setFile(null);
-      setFileCheck(null);
-      setMessage({ text: check.error, type: 'error' });
-      return;
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const selectedFile = e.target.files[0];
+      setFile(selectedFile);
+      if (!title) setTitle(selectedFile.name.split('.')[0]);
+      setMessage(null);
     }
-
-    setFile(selectedFile);
-    setFileCheck(check);
-    if (!title) setTitle(selectedFile.name.split('.')[0]);
-    setMessage(null);
   };
 
   const handleUpload = async () => {
-    if (!file || !title || !departmentId) {
-      setMessage({ text: 'Incomplete Manifest: Title, Department and File required.', type: 'error' });
-      return;
-    }
-
-    // Check the file again right before uploading
-    const check = await validateUploadFile(file);
-    if (!check.ok) {
-      setFile(null);
-      setFileCheck(null);
-      setMessage({ text: check.error, type: 'error' });
+    if (!file || !title) {
+      setMessage({ text: 'Incomplete Manifest: Title and File required.', type: 'error' });
       return;
     }
 
@@ -135,14 +98,14 @@ export default function UploadPage() {
         throw new Error("User profile registry not found. Please contact an admin or re-login.");
       }
 
-      // 3. Upload to Storage (content type comes from the verified extension, not the browser)
-      const fileExt = check.ext;
+      // 3. Upload to Storage
+      const fileExt = file.name.split('.').pop();
       const filePath = `${user.id}/${Date.now()}.${fileExt}`;
 
       const { error: uploadError } = await supabase.storage
         .from('workflow_uploads')
         .upload(filePath, file, {
-          contentType: check.mime,
+          contentType: file.type || undefined,
           cacheControl: '3600',
           upsert: false
         });
@@ -154,21 +117,26 @@ export default function UploadPage() {
         .from('workflow_uploads')
         .getPublicUrl(filePath);
 
-      const fileNameWithExt = title.toLowerCase().endsWith(`.${fileExt}`)
+      const fileNameWithExt = title.toLowerCase().endsWith(`.${fileExt?.toLowerCase()}`)
         ? title
         : `${title}.${fileExt}`;
 
-      // 4. Create the submission through the workflow function
-      const { data: submission, error: dbError } = await supabase.rpc('submit_document', {
-        p_file_url: publicUrl,
-        p_file_path: filePath,
-        p_file_name: fileNameWithExt,
-        p_file_size: file.size,
-        p_file_type: check.mime,
-        p_category: category,
-        p_description: description,
-        p_destination_department_id: departmentId,
-      });
+      // 4. Insert Record into Database
+      const { data: submission, error: dbError } = await supabase
+        .from('workflow_submissions')
+        .insert({
+          user_id: user.id,
+          file_url: publicUrl,
+          file_path: filePath,
+          file_name: fileNameWithExt,
+          file_size: file.size,
+          file_type: file.type,
+          category: category,
+          description: description,
+          status: 'pending'
+        })
+        .select('tracking_number')
+        .single();
 
       if (dbError) throw dbError;
       uploadedFilePath = null;
@@ -191,20 +159,16 @@ export default function UploadPage() {
           console.error('Uploaded file cleanup error:', cleanupError);
         }
       }
-      const text =
-        error instanceof Error
-          ? error.message
-          : typeof error === 'object' && error !== null && 'message' in error
-            ? String((error as { message: unknown }).message)
-            : 'An unexpected upload error occurred.';
-      setMessage({ text, type: 'error' });
+      setMessage({
+        text: error instanceof Error ? error.message : 'An unexpected upload error occurred.',
+        type: 'error',
+      });
       setUploading(false);
     }
   };
 
   const labelClass = "mb-2 block text-xs font-medium text-muted-text";
   const fieldClass = "w-full rounded-xl border border-warm-border bg-card px-4 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay";
-  const canSubmit = !!file && !!fileCheck && fileCheck.ok && !uploading;
 
   return (
     <div className="w-full">
@@ -240,22 +204,19 @@ export default function UploadPage() {
             </section>
 
             <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-              <label className={labelClass}>02. Destination_Department</label>
+              <label className={labelClass}>02. Department</label>
               <select
-                value={departmentId}
-                onChange={(e) => setDepartmentId(e.target.value)}
-                disabled={loadingDepartments}
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
                 className={`${fieldClass} h-12 cursor-pointer max-md:h-11`}
               >
-                <option value="">
-                  {loadingDepartments ? 'Loading departments...' : 'Select a department...'}
-                </option>
-                {departments.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}</option>
-                ))}
+                <option value="General">General</option>
+                <option value="Tourism">Tourism</option>
+                <option value="Events">Events</option>
+                <option value="Marketing">Marketing</option>
               </select>
               <p className="mt-3 text-[11px] leading-relaxed text-muted-text">
-                *This department will review your document first.
+                *Categorizing ensures your file is routed correctly.
               </p>
             </section>
 
@@ -281,13 +242,7 @@ export default function UploadPage() {
                   className={`group relative flex aspect-square cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed p-8 transition-colors max-md:aspect-auto max-md:py-10
                     ${file ? 'border-clay bg-clay-soft' : 'border-warm-border bg-sidebar hover:border-clay'}`}
                 >
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleFileChange}
-                    accept={ACCEPT_ATTR}
-                    className="hidden"
-                  />
+                  <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
                   {!file ? (
                     <>
                       <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-card text-muted-text transition-colors group-hover:text-clay">
@@ -297,7 +252,7 @@ export default function UploadPage() {
                     </>
                   ) : (
                     <div className="animate-in zoom-in-95 flex w-full flex-col items-center text-center duration-300">
-                      {isWebImage(ext) && previewUrl ? (
+                      {fileKind === 'image' && previewUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={previewUrl}
@@ -307,11 +262,11 @@ export default function UploadPage() {
                       ) : (
                         <div className="mx-auto mb-4 flex h-14 w-14 flex-col items-center justify-center rounded-xl bg-card text-muted-text">
                           <span className="text-lg leading-4" aria-hidden="true">▤</span>
-                          <span className="mt-1 text-[8px] font-semibold uppercase">{ext.slice(0, 4) || 'File'}</span>
+                          <span className="mt-1 text-[8px] font-semibold uppercase">{file.type?.split('/').at(-1)?.slice(0, 3) || 'File'}</span>
                         </div>
                       )}
                       <p className="break-all text-xs font-semibold text-warm-text">{file.name}</p>
-                      <p className="mt-1 text-[11px] text-muted-text">{typeLabel(ext)} · {formatSize(file.size)}</p>
+                      <p className="mt-1 text-[11px] text-muted-text">{(file.size / 1024).toFixed(1)} KB</p>
                       <div className="mt-5 flex flex-wrap items-center justify-center gap-2 max-md:w-full max-md:flex-col max-md:items-stretch">
                         <button
                           onClick={(e) => { e.stopPropagation(); setShowPreview(true); }}
@@ -320,7 +275,7 @@ export default function UploadPage() {
                           <span aria-hidden="true">⌕</span> Preview
                         </button>
                         <button
-                          onClick={(e) => { e.stopPropagation(); setFile(null); setFileCheck(null); }}
+                          onClick={(e) => { e.stopPropagation(); setFile(null); }}
                           className="inline-flex h-9 items-center justify-center rounded-full bg-rejected-bg px-4 text-[11px] font-medium text-rejected-text transition-opacity hover:opacity-80 max-md:h-11"
                         >
                           [ Remove ]
@@ -329,16 +284,13 @@ export default function UploadPage() {
                     </div>
                   )}
                 </div>
-                <p className="mt-3 text-[11px] leading-relaxed text-muted-text">
-                  {SUPPORTED_TEXT}. Up to {formatSize(MAX_FILE_BYTES)}.
-                </p>
               </div>
 
               <button
                 onClick={handleUpload}
-                disabled={!canSubmit}
+                disabled={uploading || !file}
                 className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-full px-6 text-xs font-semibold transition-colors
-                  ${!canSubmit ? 'cursor-not-allowed bg-sidebar text-muted-text' : 'bg-clay text-white hover:bg-warm-text'}`}
+                  ${uploading || !file ? 'cursor-not-allowed bg-sidebar text-muted-text' : 'bg-clay text-white hover:bg-warm-text'}`}
               >
                 {uploading ? (
                   <>
@@ -372,19 +324,8 @@ export default function UploadPage() {
             <div className="flex min-w-0 flex-col">
               <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">Document preview</span>
               <h2 className="max-w-[55vw] truncate text-sm font-semibold text-warm-text">{file.name}</h2>
-              <span className="text-[11px] text-muted-text">{typeLabel(ext)} · {formatSize(file.size)}</span>
             </div>
             <div className="flex shrink-0 items-center gap-2 sm:gap-4">
-              {(ext === 'pdf' || isWebImage(ext)) && (
-                <a
-                  href={previewUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-full border border-warm-border px-4 py-2 text-[11px] font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11 max-md:content-center"
-                >
-                  Open
-                </a>
-              )}
               <a
                 href={previewUrl}
                 download={file.name}
@@ -408,13 +349,30 @@ export default function UploadPage() {
 
           <div className="flex flex-1 items-center justify-center overflow-hidden bg-cream p-3 sm:p-8 max-md:bg-card max-md:p-0">
             <div className="relative flex h-full w-full max-w-6xl items-center justify-center overflow-hidden rounded-xl border border-warm-border bg-card shadow-xl max-md:max-w-none max-md:rounded-none max-md:border-0 max-md:shadow-none">
-              <FilePreview
-                file={{
-                  file_name: file.name,
-                  file_url: previewUrl,
-                  file_type: fileCheck && fileCheck.ok ? fileCheck.mime : file.type,
-                }}
-              />
+              {fileKind === 'image' && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={previewUrl} alt={file.name} className="max-h-full max-w-full object-contain" />
+              )}
+              {fileKind === 'pdf' && (
+                <iframe src={previewUrl} title={file.name} className="h-full w-full border-0" />
+              )}
+              {fileKind === 'video' && (
+                <video src={previewUrl} controls className="max-h-full max-w-full" />
+              )}
+              {fileKind === 'audio' && (
+                <audio src={previewUrl} controls className="w-full max-w-md" />
+              )}
+              {fileKind === 'text' && (
+                <pre className="h-full w-full overflow-auto whitespace-pre-wrap break-words p-6 text-left text-xs leading-relaxed text-warm-text">
+                  {textPreview ?? 'Loading preview...'}
+                </pre>
+              )}
+              {fileKind === 'other' && (
+                <div className="px-6 text-center">
+                  <p className={`${fonts.serif} text-2xl text-warm-text`}>No preview available</p>
+                  <p className="mt-2 text-xs text-muted-text">This file type can't be previewed in the browser. You can still download it to check it.</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
