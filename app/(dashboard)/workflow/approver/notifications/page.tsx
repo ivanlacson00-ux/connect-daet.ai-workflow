@@ -9,34 +9,37 @@ const fonts = {
   serif: 'font-serif',
 };
 
-// ─── Event config ────────────────────────────────────────────────────────────
-// Approving a file passes it to the admin, so VERIFICATION_PASSED reads as approved here
 type EventConfig = { label: string; styles: string; needsReview?: boolean };
 
-const getEventConfig = (eventType?: string, fallbackStatus?: string): EventConfig => {
-  switch (eventType) {
-    case 'SUBMITTED':
+const getStatusConfig = (status?: string): EventConfig => {
+  const currentStatus = (status || '').toLowerCase();
+  switch (currentStatus) {
+    case 'pending':
+    case 'pending_approver':
       return { label: 'Needs review', styles: 'bg-pending-bg text-pending-text', needsReview: true };
-    case 'VERIFICATION_PASSED':
-    case 'FINAL_APPROVAL':
-    case 'WORKFLOW_COMPLETED':
+    case 'pending_admin':
+      return { label: 'Approved · awaiting admin', styles: 'bg-approved-bg text-approved-text' };
+    case 'approved':
       return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
-    case 'RETURNED_FOR_CORRECTION':
-    case 'FINAL_REJECTION':
+    case 'completed':
+      return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
+    case 'pending_office':
+      return { label: 'At municipal office', styles: 'bg-review-bg text-review-text' };
+    case 'pending_mayor':
+      return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
+    case 'returned_for_requirements':
+      return { label: 'Requirements requested', styles: 'bg-pending-bg text-pending-text' };
+    case 'declined_by_approver':
+    case 'declined_by_admin':
+    case 'declined_by_office':
+    case 'declined_by_mayor':
+    case 'rejected':
       return { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' };
-    default: {
-      const s = (fallbackStatus || '').toLowerCase();
-      if (['pending', 'pending_approver'].includes(s)) {
-        return { label: 'Needs review', styles: 'bg-pending-bg text-pending-text', needsReview: true };
-      }
-      if (['pending_admin', 'approved', 'completed'].includes(s)) {
-        return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
-      }
-      if (['declined_by_approver', 'declined_by_admin', 'rejected'].includes(s)) {
-        return { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' };
-      }
-      return { label: s.replaceAll('_', ' ') || 'Update', styles: 'bg-sidebar text-muted-text' };
-    }
+    default:
+      return {
+        label: currentStatus.replaceAll('_', ' ') || 'Unknown',
+        styles: 'bg-sidebar text-muted-text',
+      };
   }
 };
 
@@ -105,25 +108,56 @@ export default function ApproverNotificationsPage() {
   }, [supabase]);
 
   useEffect(() => {
-    fetchNotifications();
+    let active = true;
+    let channel: ReturnType<typeof supabase.channel> | undefined;
 
-    // Realtime: refresh when a new notification arrives
-    const channel = supabase
-      .channel('approver-queue-changes')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'workflow_notifications' },
-        () => fetchNotifications()
-      )
-      .subscribe();
+    void fetchNotifications();
+    void supabase.auth.getUser().then(({ data, error }) => {
+      if (error) {
+        console.error('Could not start approver notification updates:', error.message);
+        return;
+      }
+      if (!active || !data.user) return;
+
+      channel = supabase
+        .channel(`approver-notifications-${data.user.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'workflow_notifications',
+            filter: `recipient_id=eq.${data.user.id}`,
+          },
+          () => void fetchNotifications()
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'workflow_submissions',
+          },
+          () => void fetchNotifications()
+        )
+        .subscribe((status, subscribeError) => {
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.error(
+              'Approver notification realtime subscription failed:',
+              subscribeError?.message || status
+            );
+          }
+        });
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      active = false;
+      if (channel) void supabase.removeChannel(channel);
     };
   }, [supabase, fetchNotifications]);
 
   const needsReviewCount = useMemo(
-    () => notifications.filter(n => getEventConfig(n.event_type, n.status).needsReview).length,
+    () => notifications.filter(n => getStatusConfig(n.status).needsReview).length,
     [notifications]
   );
 
@@ -162,7 +196,7 @@ export default function ApproverNotificationsPage() {
       ) : (
         <div className="space-y-3">
           {notifications.map((note) => {
-            const config = getEventConfig(note.event_type, note.status);
+            const config = getStatusConfig(note.status);
             const title = note.notification_title || note.event_type?.replaceAll('_', ' ') || 'Update';
 
             return (
@@ -196,10 +230,6 @@ export default function ApproverNotificationsPage() {
                       {note.file_name || 'Untitled file'}
                     </h3>
 
-                    {note.notification_message && (
-                      <p className="mt-1 line-clamp-2 text-xs text-muted-text">{note.notification_message}</p>
-                    )}
-
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
                       <span className="truncate">From {note.requester_email || note.user_email || 'unknown submitter'}</span>
                       <span aria-hidden="true">·</span>
@@ -225,7 +255,7 @@ export default function ApproverNotificationsPage() {
                     href={`/workflow/approver/file_management/${note.id}`}
                     className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full"
                   >
-                    {config.needsReview ? 'Review file' : 'View entry'} <span aria-hidden="true">→</span>
+                    View document <span aria-hidden="true">→</span>
                   </Link>
                 </div>
               </article>

@@ -21,6 +21,7 @@ export interface Submission {
   completed_at?: string | null;
   current_stage_due_at?: string | null;
   current_responsible_role?: string | null;
+  selected_office_role?: string | null;
   profiles: {
     email: string;
   };

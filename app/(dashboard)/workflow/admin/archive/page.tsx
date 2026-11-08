@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
+import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -22,6 +24,7 @@ type ArchivedSubmission = {
   created_at: string;
   archived_at: string;
   retention_until: string | null;
+  selected_office_role: string | null;
   profiles: { email: string } | null;
 };
 
@@ -58,11 +61,12 @@ export default function ArchiveRegistryPage() {
   const [toDate, setToDate] = useState('');
   const [loading, setLoading] = useState(true);
   const [restoring, setRestoring] = useState<string | null>(null);
+  const routesBySubmission = useRoutePreviews(records);
 
   const fetchArchives = useCallback(async () => {
     const { data, error } = await supabase
       .from('workflow_submissions')
-      .select('id, tracking_number, file_name, file_type, status, category, created_at, archived_at, retention_until, profiles:user_id(email)')
+      .select('id, tracking_number, file_name, file_type, status, category, created_at, archived_at, retention_until, selected_office_role, profiles:user_id(email)')
       .not('archived_at', 'is', null)
       .order('archived_at', { ascending: false });
 
@@ -189,9 +193,9 @@ export default function ArchiveRegistryPage() {
           {filteredRecords.map((record) => (
             <article
               key={record.id}
-              className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+              className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
             >
-              <div className="flex min-w-0 items-center gap-4">
+              <div className="flex min-w-0 items-center gap-4 sm:col-span-7">
                 <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
                   <span className="text-lg leading-4" aria-hidden="true">▤</span>
                   <span className="mt-1 text-[8px] font-semibold uppercase">
@@ -222,7 +226,7 @@ export default function ArchiveRegistryPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+              <div className="flex flex-wrap items-center gap-2 sm:col-span-5 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
                 <div className="max-md:self-start">
                   <StatusStamp status={record.status} />
                 </div>
@@ -233,6 +237,19 @@ export default function ArchiveRegistryPage() {
                 >
                   {restoring === record.id ? 'Restoring...' : 'Restore'}
                 </button>
+              </div>
+              <div className="sm:col-span-12">
+                <WorkflowRoutingPipeline
+                  variant="compact"
+                  submissionStatus={record.status}
+                  submittedAt={record.created_at}
+                  routeSteps={routesBySubmission[record.id]?.steps ?? []}
+                  routeStatus={routesBySubmission[record.id]?.status ?? null}
+                  routeFinalizedAt={routesBySubmission[record.id]?.finalizedAt}
+                  selectedOfficeRole={record.selected_office_role}
+                  auditEvents={[]}
+                  routeLoadFailed={routesBySubmission[record.id]?.loadFailed ?? false}
+                />
               </div>
             </article>
           ))}

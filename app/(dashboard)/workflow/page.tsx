@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { getRoleHomePath } from '@/lib/workflow/offices';
 
 export default function WorkflowLanding() {
   const [loading, setLoading] = useState(true);
@@ -20,23 +21,18 @@ export default function WorkflowLanding() {
       }
 
       // Get user's role from profiles table
-      const { data: profile } = await supabase
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('role')
         .eq('id', user.id)
         .single();
 
-      const role = profile?.role || 'user';
-      
-      // Redirect based on role
-      if (role === 'admin') {
-        window.location.href = '/workflow/admin';
-      } else if (role === 'approver') {
-        window.location.href = '/workflow/approver';
-      } else {
-        window.location.href = '/workflow/user';
+      if (profileError || !profile) {
+        window.location.href = '/login';
+        return;
       }
-      
+
+      window.location.href = getRoleHomePath(profile.role);
       setLoading(false);
     };
 

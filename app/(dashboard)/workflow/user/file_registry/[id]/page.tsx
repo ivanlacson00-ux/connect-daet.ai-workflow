@@ -1,9 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import DocumentMessaging from '@/components/DocumentMessaging';
 import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
+import {
+  getWorkflowFileMimeType,
+  getWorkflowFilesTypeError,
+  WORKFLOW_ATTACHMENT_ACCEPT,
+} from '@/lib/workflow/file-types';
 
 // ─── Styles & Fonts (synced with dashboard) ──────────────────────────────────
 const fonts = {
@@ -22,9 +28,32 @@ interface Submission {
   status: string;
   category: string;
   description: string;
+  intended_recipient?: string | null;
+  selected_office_role?: string | null;
+  office_comments?: string | null;
+  mayor_comments?: string | null;
+  sender_response?: string | null;
   approver_comments: string;
   admin_comments: string;
   rejection_comment: string;
+  created_at: string;
+  completed_at?: string | null;
+}
+
+interface Attachment {
+  id: string;
+  file_name: string;
+  file_path: string;
+  file_type: string | null;
+  file_size: number;
+}
+
+interface AuditLog {
+  id: string;
+  action_type: string;
+  old_status: string | null;
+  new_status: string | null;
+  comments: string | null;
   created_at: string;
 }
 
@@ -32,22 +61,171 @@ export default function UserFileDetail() {
   const { id } = useParams();
   const router = useRouter();
   const [sub, setSub] = useState<Submission | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [senderResponse, setSenderResponse] = useState('');
+  const [responseFiles, setResponseFiles] = useState<File[]>([]);
+  const [savingResponse, setSavingResponse] = useState(false);
+  const [actionError, setActionError] = useState('');
   const [loading, setLoading] = useState(true);
   const supabase = useMemo(() => createClient(), []);
 
-  useEffect(() => {
-    const fetchSubmission = async () => {
-      const { data } = await supabase
+  const fetchSubmission = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
         .from('workflow_submissions')
         .select('*')
         .eq('id', id)
         .single();
 
-      if (data) setSub(data);
+      if (error) console.error('Submission load failed:', error.message);
+      if (data) {
+        setSub(data);
+        setSenderResponse(data.sender_response || '');
+        const [
+          { data: attachmentRows, error: attachmentError },
+          { data: logs, error: logsError },
+        ] = await Promise.all([
+          supabase
+            .from('workflow_submission_attachments')
+            .select('id, file_name, file_path, file_type, file_size')
+            .eq('submission_id', id)
+            .order('created_at', { ascending: true }),
+          supabase
+            .from('workflow_audit_logs')
+            .select('id, action_type, old_status, new_status, comments, created_at')
+            .eq('submission_id', id)
+            .order('created_at', { ascending: true }),
+        ]);
+        if (attachmentError) console.error('Attachment load failed:', attachmentError.message);
+        if (logsError) console.error('Workflow history load failed:', logsError.message);
+        setAttachments(attachmentRows ?? []);
+        setAuditLogs(logs ?? []);
+      }
+    } finally {
       setLoading(false);
-    };
-    fetchSubmission();
+    }
   }, [id, supabase]);
+
+  useEffect(() => {
+    void fetchSubmission();
+  }, [fetchSubmission]);
+
+  const submitRequirementsResponse = async () => {
+    if (!sub || !senderResponse.trim()) {
+      setActionError('Enter a response before resubmitting.');
+      return;
+    }
+    const fileError = getWorkflowFilesTypeError(responseFiles);
+    if (fileError) {
+      setActionError(fileError);
+      return;
+    }
+
+    setSavingResponse(true);
+    setActionError('');
+    const uploadedPaths: string[] = [];
+    const insertedAttachmentIds: string[] = [];
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) throw userError ?? new Error('You must sign in to respond.');
+
+      const newAttachments = [];
+      for (const [index, file] of responseFiles.entries()) {
+        const safeName = file.name.replace(/[^\w.-]/g, '_');
+        const filePath = `${user.id}/${crypto.randomUUID()}-${index}-${safeName}`;
+        const { error: uploadError } = await supabase.storage
+          .from('workflow_uploads')
+          .upload(filePath, file, {
+            contentType: getWorkflowFileMimeType(file.name) || undefined,
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+        uploadedPaths.push(filePath);
+        newAttachments.push({
+          submission_id: sub.id,
+          file_name: file.name,
+          file_path: filePath,
+          file_type: getWorkflowFileMimeType(file.name),
+          file_size: file.size,
+          uploaded_by: user.id,
+        });
+      }
+
+      if (newAttachments.length) {
+        const { data, error: attachmentError } = await supabase
+          .from('workflow_submission_attachments')
+          .insert(newAttachments)
+          .select('id');
+        if (attachmentError) throw attachmentError;
+        insertedAttachmentIds.push(...(data ?? []).map((item) => item.id));
+      }
+
+      const { data: currentRoute, error: routeError } = await supabase
+        .from('workflow_routing_plans')
+        .select('id, status')
+        .eq('submission_id', sub.id)
+        .eq('is_current', true)
+        .maybeSingle();
+      if (routeError) throw routeError;
+
+      let isOfficeRouteRequirements = false;
+      if (currentRoute?.status === 'finalized') {
+        const { data: activeStep, error: stepError } = await supabase
+          .from('workflow_routing_steps')
+          .select('office_role, requirements_requested_at, requirements_resubmitted_at')
+          .eq('routing_plan_id', currentRoute.id)
+          .eq('status', 'in_progress')
+          .not('requirements_requested_at', 'is', null)
+          .maybeSingle();
+        if (stepError) throw stepError;
+        if (!activeStep) {
+          throw new Error('No active office requirements request could be found.');
+        }
+        isOfficeRouteRequirements =
+          !activeStep.requirements_resubmitted_at
+          || new Date(activeStep.requirements_resubmitted_at).getTime()
+            < new Date(activeStep.requirements_requested_at).getTime();
+      }
+
+      if (isOfficeRouteRequirements) {
+        const { error: responseError } = await supabase.rpc('respond_to_workflow_route_requirements', {
+          target_submission_id: sub.id,
+          sender_comments: senderResponse.trim(),
+        });
+        if (responseError) throw responseError;
+      } else {
+        const { error: updateError } = await supabase
+          .from('workflow_submissions')
+          .update({
+            status: 'pending_mayor',
+            sender_response: senderResponse.trim(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', sub.id);
+        if (updateError) throw updateError;
+      }
+
+      await fetchSubmission();
+      setResponseFiles([]);
+    } catch (error) {
+      console.error('Requirements response failed:', error);
+      if (insertedAttachmentIds.length) {
+        const { error } = await supabase
+          .from('workflow_submission_attachments')
+          .delete()
+          .in('id', insertedAttachmentIds);
+        if (error) console.error('Attachment metadata cleanup failed:', error.message);
+      }
+      if (uploadedPaths.length) {
+        const { error } = await supabase.storage.from('workflow_uploads').remove(uploadedPaths);
+        if (error) console.error('Attachment file cleanup failed:', error.message);
+      }
+      setActionError(error instanceof Error ? error.message : 'Could not submit your response.');
+    } finally {
+      setSavingResponse(false);
+    }
+  };
 
   const getStatusStyles = (status: string) => {
     switch (status) {
@@ -56,13 +234,34 @@ export default function UserFileDetail() {
         return { label: 'Pending', classes: 'bg-pending-bg text-pending-text' };
       case 'pending_admin':
         return { label: 'Under review', classes: 'bg-review-bg text-review-text' };
+      case 'pending_office':
+        return { label: 'Municipal office review', classes: 'bg-review-bg text-review-text' };
+      case 'pending_mayor':
+        return { label: "Mayor's final review", classes: 'bg-review-bg text-review-text' };
+      case 'returned_for_requirements':
+        return { label: 'Additional requirements requested', classes: 'bg-pending-bg text-pending-text' };
       case 'approved':
+      case 'completed':
         return { label: 'Approved', classes: 'bg-approved-bg text-approved-text' };
       case 'declined_by_approver':
       case 'declined_by_admin':
+      case 'declined_by_office':
+      case 'declined_by_mayor':
         return { label: 'Rejected', classes: 'bg-rejected-bg text-rejected-text' };
       default:
         return { label: status?.replaceAll('_', ' ') || 'Unknown', classes: 'bg-sidebar text-muted-text' };
+    }
+  };
+
+  const getWorkflowActionLabel = (actionType: string) => {
+    switch (actionType) {
+      case 'ROUTE_PROPOSED': return 'Approver proposed office route';
+      case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Assigned to municipal office';
+      case 'OFFICE_ROUTE_STEP_APPROVED': return 'Municipal office approved';
+      case 'ROUTE_RETURNED_TO_ADMIN': return 'All routed offices approved; returned to Admin';
+      case 'ROUTE_REQUIREMENTS_REQUESTED': return 'Municipal office requested additional requirements';
+      case 'WORKFLOW_COMPLETED': return 'Request completed';
+      default: return actionType.replaceAll('_', ' ').toLowerCase();
     }
   };
 
@@ -89,9 +288,25 @@ export default function UserFileDetail() {
   const statusConfig = getStatusStyles(sub.status);
 
   // Logic: Only show feedback if it's REJECTED or FINAL APPROVED
-  const showFeedback = sub.status === 'approved' || sub.status.includes('declined');
-  const officialNote = sub.admin_comments || sub.rejection_comment || sub.approver_comments;
-  const isApproved = sub.status === 'approved';
+  const showFeedback = sub.status === 'completed' || sub.status === 'approved' || sub.status.includes('declined');
+  const officialNote = sub.mayor_comments || sub.office_comments || sub.admin_comments || sub.rejection_comment || sub.approver_comments;
+  const isApproved = sub.status === 'completed' || sub.status === 'approved';
+  const isReturned = sub.status === 'returned_for_requirements';
+  const requirementsRequest = [...auditLogs]
+    .reverse()
+    .find((log) => log.action_type === 'ROUTE_REQUIREMENTS_REQUESTED');
+
+  const downloadAttachment = async (attachment: Attachment) => {
+    const { data, error } = await supabase.storage
+      .from('workflow_uploads')
+      .createSignedUrl(attachment.file_path, 300);
+    if (error || !data?.signedUrl) {
+      console.error('Could not authorize attachment download:', error?.message);
+      setActionError('Could not open this supporting attachment. Please try again.');
+      return;
+    }
+    await downloadFile(data.signedUrl, attachment.file_name);
+  };
 
   return (
     <div className="w-full">
@@ -144,6 +359,18 @@ export default function UserFileDetail() {
                 "{sub.description || 'No description provided.'}"
               </p>
             </div>
+            <div>
+              <p className="mb-1.5 text-[11px] font-medium text-muted-text">Intended recipient</p>
+              <p className="text-xs leading-relaxed text-warm-text">{sub.intended_recipient || 'Not specified.'}</p>
+            </div>
+            {sub.selected_office_role && (
+              <div>
+                <p className="mb-1.5 text-[11px] font-medium text-muted-text">Assigned municipal office</p>
+                <p className="text-xs font-semibold text-warm-text">
+                  {sub.selected_office_role.replaceAll('_', ' ')}
+                </p>
+              </div>
+            )}
             <div className="flex items-end justify-between gap-4 border-t border-warm-border pt-4">
               <div>
                 <p className="text-[10px] font-medium text-muted-text">Submitted on</p>
@@ -155,6 +382,110 @@ export default function UserFileDetail() {
               </div>
             </div>
           </section>
+
+          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+            <h2 className="mb-3 text-xs font-semibold text-warm-text">Supporting attachments</h2>
+            {attachments.length === 0 ? (
+              <p className="text-[11px] text-muted-text">No supporting attachments.</p>
+            ) : (
+              <ul className="space-y-2">
+                {attachments.map((attachment) => (
+                  <li key={attachment.id} className="flex items-center justify-between gap-3 text-[11px]">
+                    <span className="min-w-0 truncate text-warm-text">{attachment.file_name}</span>
+                    <button
+                      type="button"
+                      onClick={() => void downloadAttachment(attachment)}
+                      className="shrink-0 font-semibold text-clay underline"
+                    >
+                      Download
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <DocumentMessaging
+            key={sub.id}
+            submissionId={sub.id}
+            fileName={sub.file_name}
+            trackingNumber={sub.tracking_number}
+            activity={(
+              <div>
+                <h3 className="mb-4 text-xs font-semibold text-warm-text">Document history</h3>
+                {auditLogs.length === 0 ? (
+                  <p className="text-[11px] text-muted-text">No workflow events recorded yet.</p>
+                ) : (
+                  <ol className="space-y-4 border-l border-warm-border pl-4">
+                    {auditLogs.map((log) => (
+                      <li key={log.id} className="relative">
+                        <span className="absolute -left-[21px] top-1 h-2 w-2 rounded-full bg-clay" />
+                        <p className="text-[11px] font-semibold text-warm-text">
+                          {getWorkflowActionLabel(log.action_type)}
+                        </p>
+                        <p className="mt-1 text-[10px] text-muted-text">{new Date(log.created_at).toLocaleString()}</p>
+                        {log.comments && <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-warm-text">{log.comments}</p>}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            )}
+          />
+
+          {isReturned && (
+            <section className="space-y-3 rounded-2xl border border-pending-bg bg-pending-bg/40 p-5 max-md:p-3.5">
+              <h2 className="text-xs font-semibold text-pending-text">Additional requirements requested</h2>
+              <p className="whitespace-pre-wrap text-xs leading-relaxed text-warm-text">
+                {requirementsRequest?.comments || sub.office_comments || sub.mayor_comments}
+              </p>
+              <label className="block text-[11px] font-medium text-warm-text" htmlFor="sender-response">
+                Your response
+              </label>
+              <textarea
+                id="sender-response"
+                rows={4}
+                value={senderResponse}
+                onChange={(event) => setSenderResponse(event.target.value)}
+                className="w-full rounded-xl border border-warm-border bg-card px-3 py-2 text-xs text-warm-text outline-none focus:border-clay"
+                placeholder="Explain how you addressed the requested requirements."
+              />
+              <label className="block text-[11px] font-medium text-warm-text" htmlFor="response-attachments">
+                Additional supporting files (optional)
+              </label>
+              <input
+                id="response-attachments"
+                type="file"
+                accept={WORKFLOW_ATTACHMENT_ACCEPT}
+                multiple
+                onChange={(event) => {
+                  const selectedFiles = Array.from(event.target.files ?? []);
+                  const fileError = getWorkflowFilesTypeError(selectedFiles);
+                  if (fileError) {
+                    setResponseFiles([]);
+                    setActionError(fileError);
+                    event.target.value = '';
+                    return;
+                  }
+                  setResponseFiles(selectedFiles);
+                  setActionError('');
+                }}
+                className="block w-full text-[11px] text-muted-text file:mr-3 file:rounded-full file:border-0 file:bg-card file:px-3 file:py-2 file:text-[11px] file:font-semibold file:text-clay"
+              />
+              <p className="text-[10px] text-muted-text">
+                PDF, DOC/DOCX, XLS/XLSX, CSV, PPT/PPTX, JPG/JPEG, PNG, or ZIP.
+              </p>
+              {actionError && <p role="alert" className="text-xs text-rejected-text">{actionError}</p>}
+              <button
+                type="button"
+                onClick={() => void submitRequirementsResponse()}
+                disabled={savingResponse || !senderResponse.trim()}
+                className="inline-flex h-10 w-full items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingResponse ? 'Submitting response...' : 'Send response to office'}
+              </button>
+            </section>
+          )}
 
           {/* Official Feedback Section */}
           {showFeedback && officialNote && (
@@ -214,6 +545,7 @@ export default function UserFileDetail() {
           </div>
         </main>
       </div>
+
     </div>
   );
 }

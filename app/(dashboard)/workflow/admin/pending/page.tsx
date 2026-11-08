@@ -1,12 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment } from 'react';
 import { useSubmissions } from '@/hooks/useSubmissions';
+import Link from 'next/link';
+import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
+import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 export default function PendingPage() {
-  const { submissions, loading, adminApprove, adminDecline } = useSubmissions('pending_admin');
-  const [declineModal, setDeclineModal] = useState<{ id: string } | null>(null);
-  const [declineComment, setDeclineComment] = useState('');
+  const { submissions, loading } = useSubmissions('pending_admin');
+  const routesBySubmission = useRoutePreviews(submissions);
 
   const statusColor: Record<string, string> = {
     pending:              'bg-yellow-100 text-yellow-700',
@@ -22,7 +24,7 @@ export default function PendingPage() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-800">My Pending Reviews</h1>
         <p className="text-sm text-gray-500 mt-1">
-          Submissions approved by approver, waiting for your final decision
+          Verify the approver-selected office route or archive the request with a reason.
         </p>
       </div>
 
@@ -42,87 +44,62 @@ export default function PendingPage() {
                 <th className="pb-3">Type</th>
                 <th className="pb-3">Date</th>
                 <th className="pb-3">Status</th>
-                <th className="pb-3">Actions</th>
+                <th className="pb-3">Action</th>
               </tr>
             </thead>
             <tbody>
               {submissions.map((sub) => (
-                <tr key={sub.id} className="border-b last:border-0 hover:bg-gray-50">
-                  <td className="py-3">
-                    <span
-                      onClick={() => window.open(`/api/workflow/files/${sub.id}?redirect=1`, '_blank')}
-                      className="text-blue-600 underline font-medium cursor-pointer"
-                    >
-                      {sub.file_name}
-                    </span>
-                  </td>
-                  <td className="py-3 text-gray-500">{sub.profiles?.email ?? '—'}</td>
-                  <td className="py-3 text-gray-400 uppercase text-xs">{sub.file_type}</td>
-                  <td className="py-3 text-gray-400">
-                    {new Date(sub.created_at).toLocaleDateString()}
-                  </td>
-                  <td className="py-3">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor[sub.status]}`}>
-                      {sub.status === 'pending_admin' ? 'PENDING APPROVAL' : sub.status.replace(/_/g, ' ')}
-                    </span>
-                  </td>
-                  <td className="py-3">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => adminApprove(sub.id)}
-                        className="px-3 py-1 bg-green-500 text-white text-xs rounded-full hover:bg-green-600"
+                <Fragment key={sub.id}>
+                  <tr className="border-b last:border-0 hover:bg-gray-50">
+                    <td className="py-3">
+                      <span
+                        onClick={() => window.open(`/api/workflow/files/${sub.id}?redirect=1`, '_blank')}
+                        className="text-blue-600 underline font-medium cursor-pointer"
                       >
-                        Approve
-                      </button>
-                      <button
-                        onClick={() => setDeclineModal({ id: sub.id })}
-                        className="px-3 py-1 bg-red-500 text-white text-xs rounded-full hover:bg-red-600"
+                        {sub.file_name}
+                      </span>
+                    </td>
+                    <td className="py-3 text-gray-500">{sub.profiles?.email ?? '—'}</td>
+                    <td className="py-3 text-gray-400 uppercase text-xs">{sub.file_type}</td>
+                    <td className="py-3 text-gray-400">
+                      {new Date(sub.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="py-3">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor[sub.status]}`}>
+                        {sub.status === 'pending_admin' ? 'PENDING APPROVAL' : sub.status.replace(/_/g, ' ')}
+                      </span>
+                    </td>
+                    <td className="py-3">
+                      <Link
+                        href={`/workflow/admin/submissions/${sub.id}`}
+                        className="inline-flex rounded-full bg-orange-500 px-3 py-1 text-xs text-white hover:bg-orange-600"
                       >
-                        Decline
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+                        Verify route
+                      </Link>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={6} className="border-b px-3 py-3">
+                      <WorkflowRoutingPipeline
+                        variant="compact"
+                        submissionStatus={sub.status}
+                        submittedAt={sub.created_at}
+                        routeSteps={routesBySubmission[sub.id]?.steps ?? []}
+                        routeStatus={routesBySubmission[sub.id]?.status ?? null}
+                        routeFinalizedAt={routesBySubmission[sub.id]?.finalizedAt}
+                        selectedOfficeRole={sub.selected_office_role}
+                        auditEvents={[]}
+                        routeLoadFailed={routesBySubmission[sub.id]?.loadFailed ?? false}
+                      />
+                    </td>
+                  </tr>
+                </Fragment>
               ))}
             </tbody>
           </table>
         )}
       </div>
 
-      {declineModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-semibold mb-2">Decline Submission</h3>
-            <p className="text-sm text-gray-500 mb-4">Please provide a reason for declining.</p>
-            <textarea
-              value={declineComment}
-              onChange={(e) => setDeclineComment(e.target.value)}
-              placeholder="Enter rejection reason..."
-              className="w-full border rounded-lg p-3 text-sm mb-4 h-28 resize-none focus:outline-none focus:ring-2 focus:ring-red-400"
-            />
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => { setDeclineModal(null); setDeclineComment(''); }}
-                className="px-4 py-2 text-sm border rounded-full hover:bg-gray-100"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  if (!declineComment.trim()) return;
-                  await adminDecline(declineModal.id, declineComment);
-                  setDeclineModal(null);
-                  setDeclineComment('');
-                }}
-                disabled={!declineComment.trim()}
-                className="px-4 py-2 text-sm bg-red-500 text-white rounded-full hover:bg-red-600 disabled:opacity-50"
-              >
-                Confirm Decline
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

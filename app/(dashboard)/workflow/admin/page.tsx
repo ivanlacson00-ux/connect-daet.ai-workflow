@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAdminStats } from '@/hooks/useAdminStats';
 import Link from 'next/link';
+import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
+import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -21,6 +23,7 @@ interface Submission {
   user_id: string;
   submitter_email?: string;
   created_at: string;
+  selected_office_role?: string | null;
 }
 
 // ─── Status Stamp ────────────────────────────────────────────────────────────
@@ -60,10 +63,22 @@ export default function AdminDashboard() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
+  const routesBySubmission = useRoutePreviews(
+    submissions.map((submission) => ({ ...submission, id: String(submission.id) }))
+  );
 
   // ─── Stat Cards Data ───────────────────────────────────────────────────────
-  const pendingCount = (adminStats.pendingApprover || 0) + (adminStats.pendingAdmin || 0);
-  const declinedCount = (adminStats.declinedByApprover || 0) + (adminStats.declinedByAdmin || 0);
+  const pendingCount =
+    adminStats.pendingApprover
+    + adminStats.pendingAdmin
+    + adminStats.pendingOffice
+    + adminStats.pendingMayor
+    + adminStats.returnedForRequirements;
+  const declinedCount =
+    adminStats.declinedByApprover
+    + adminStats.declinedByAdmin
+    + adminStats.declinedByOffice
+    + adminStats.declinedByMayor;
 
   const statCards = [
     { label: 'Total users', value: adminStats.totalUsers, hint: 'Registered accounts', icon: '♧', iconStyles: 'bg-clay-soft text-clay' },
@@ -168,9 +183,9 @@ export default function AdminDashboard() {
           {submissions.map((sub) => (
             <article
               key={sub.id}
-              className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+              className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
             >
-              <div className="flex min-w-0 items-center gap-4">
+              <div className="flex min-w-0 items-center gap-4 sm:col-span-7">
                 <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
                   <span className="text-lg leading-4" aria-hidden="true">▤</span>
                   <span className="mt-1 text-[8px] font-semibold uppercase">
@@ -189,7 +204,7 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+              <div className="flex flex-wrap items-center gap-2 sm:col-span-5 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
                 <div className="max-md:self-start">
                   <StatusStamp status={sub.status} />
                 </div>
@@ -207,8 +222,21 @@ export default function AdminDashboard() {
                   href={`/workflow/admin/submissions/${sub.id}`}
                   className="inline-flex h-10 items-center gap-2 rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full max-md:justify-center"
                 >
-                  Manage <span aria-hidden="true">→</span>
+                  View document <span aria-hidden="true">→</span>
                 </Link>
+              </div>
+              <div className="sm:col-span-12">
+                <WorkflowRoutingPipeline
+                  variant="compact"
+                  submissionStatus={sub.status}
+                  submittedAt={sub.created_at}
+                  routeSteps={routesBySubmission[String(sub.id)]?.steps ?? []}
+                  routeStatus={routesBySubmission[String(sub.id)]?.status ?? null}
+                  routeFinalizedAt={routesBySubmission[String(sub.id)]?.finalizedAt}
+                  selectedOfficeRole={sub.selected_office_role}
+                  auditEvents={[]}
+                  routeLoadFailed={routesBySubmission[String(sub.id)]?.loadFailed ?? false}
+                />
               </div>
             </article>
           ))}

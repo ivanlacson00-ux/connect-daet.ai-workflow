@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { getRoleHomePath, isOfficeRole } from '@/lib/workflow/offices';
 
 export default function WorkflowLayout({
   children,
@@ -91,6 +92,11 @@ export default function WorkflowLayout({
         { href: '/workflow/approver/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread },
       ];
     }
+    if (isOfficeRole(role)) {
+      return [
+        { href: getRoleHomePath(role), label: 'Office Dashboard', icon: '▤' },
+      ];
+    }
     if (role === 'admin') {
       return [
         { href: '/workflow/admin', label: 'Dashboard', icon: '⌬' },
@@ -174,7 +180,9 @@ export default function WorkflowLayout({
 
         <div className="mt-auto border-t border-warm-border px-4 py-4">
           <div className="mb-3 truncate px-3 text-xs text-muted-text">{userEmail || 'Loading account...'}</div>
-          <div className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-clay">{role || 'validating'}</div>
+          <div className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-clay">
+            {isOfficeRole(role) ? role.replaceAll('_', ' ') : role || 'validating'}
+          </div>
           <div>
             <button
               onClick={handleLogout}

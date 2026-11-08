@@ -9,7 +9,13 @@ const fonts = {
   serif: 'font-serif',
 };
 
-type Role = 'user' | 'approver' | 'admin';
+type Role =
+  | 'user'
+  | 'approver'
+  | 'admin'
+  | 'municipal_treasurer'
+  | 'mayor_office'
+  | 'sangguniang_bayan';
 type RoleFilter = 'all' | Role;
 
 interface UserProfile {
@@ -19,22 +25,44 @@ interface UserProfile {
   created_at: string;
 }
 
-const ROLES: Role[] = ['user', 'approver', 'admin'];
+const ROLES: Role[] = [
+  'user',
+  'approver',
+  'municipal_treasurer',
+  'mayor_office',
+  'sangguniang_bayan',
+  'admin',
+];
 
 const FILTERS: { key: RoleFilter; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'admin', label: 'Admin' },
   { key: 'approver', label: 'Approver' },
+  { key: 'municipal_treasurer', label: "Treasurer's Office" },
+  { key: 'mayor_office', label: "Mayor's Office" },
+  { key: 'sangguniang_bayan', label: 'Sangguniang Bayan' },
   { key: 'user', label: 'User' },
 ];
 
 const ROLE_STYLES: Record<string, string> = {
   admin: 'bg-clay-soft text-clay',
   approver: 'bg-review-bg text-review-text',
+  municipal_treasurer: 'bg-approved-bg text-approved-text',
+  mayor_office: 'bg-pending-bg text-pending-text',
+  sangguniang_bayan: 'bg-rejected-bg text-rejected-text',
   user: 'bg-sidebar text-muted-text',
 };
 
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const ROLE_LABELS: Record<Role, string> = {
+  user: 'User',
+  approver: 'Approver',
+  admin: 'Admin',
+  municipal_treasurer: "Municipal Treasurer's Office",
+  mayor_office: "Mayor's Office",
+  sangguniang_bayan: 'Sangguniang Bayan Office',
+};
+
+const capitalize = (s: string) => ROLE_LABELS[s as Role] ?? s.charAt(0).toUpperCase() + s.slice(1);
 
 // ─── Role Badge ──────────────────────────────────────────────────────────────
 function RoleBadge({ role }: { role: string }) {
@@ -53,6 +81,7 @@ export default function UserManagementPage() {
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
   const [updating, setUpdating] = useState<string | null>(null);
+  const [roleUpdateError, setRoleUpdateError] = useState('');
 
   // ─── Data actions ──────────────────────────────────────────────────────────
   const fetchUsers = useCallback(async () => {
@@ -68,13 +97,15 @@ export default function UserManagementPage() {
 
   const updateRole = async (userId: string, newRole: Role) => {
     setUpdating(userId);
-    const { error } = await supabase
-      .from('profiles')
-      .update({ role: newRole })
-      .eq('id', userId);
+    setRoleUpdateError('');
+    const { error } = await supabase.rpc('admin_update_profile_role', {
+      target_user_id: userId,
+      new_role: newRole,
+    });
 
     if (error) {
       console.error('Role update failed:', error.message);
+      setRoleUpdateError(error.message);
     } else {
       setUsers(prev => prev.map(u => (u.id === userId ? { ...u, role: newRole } : u)));
     }
@@ -116,7 +147,15 @@ export default function UserManagementPage() {
 
   // ─── Filtering ─────────────────────────────────────────────────────────────
   const roleCounts = useMemo(() => {
-    const counts: Record<RoleFilter, number> = { all: users.length, admin: 0, approver: 0, user: 0 };
+    const counts: Record<RoleFilter, number> = {
+      all: users.length,
+      admin: 0,
+      approver: 0,
+      user: 0,
+      municipal_treasurer: 0,
+      mayor_office: 0,
+      sangguniang_bayan: 0,
+    };
     users.forEach(u => {
       if (u.role in counts) counts[u.role as Role]++;
     });
@@ -143,6 +182,15 @@ export default function UserManagementPage() {
           Control who can submit, review and administer files. Total users: <span className="text-warm-text">{users.length}</span>
         </p>
       </div>
+
+      {roleUpdateError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text"
+        >
+          Role update failed: {roleUpdateError}
+        </p>
+      )}
 
       {/* Toolbar */}
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
