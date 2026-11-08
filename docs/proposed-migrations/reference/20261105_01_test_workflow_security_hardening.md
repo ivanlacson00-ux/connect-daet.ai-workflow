@@ -1,9 +1,9 @@
 # TEST workflow security hardening proposal
 
-**Status:** Proposal only; not applied to any database.  
+**Status:** Historical proposal snapshot. Its deployment status describes the time it was written and is not evidence of the current database state.  
 **Target:** Supabase TEST project only.  
 **SQL proposal:** [20261105_01_test_workflow_security_hardening.sql](./20261105_01_test_workflow_security_hardening.sql)  
-**Source of expected workflow behavior:** [REVISED_WORKFLOW_PLAN.md](../REVISED_WORKFLOW_PLAN.md)
+**Source of expected workflow behavior:** [REVISED_WORKFLOW_PLAN.md](../../REVISED_WORKFLOW_PLAN.md)
 
 The proposal is based on the TEST database catalog inspection and the current repository. Checked-in SQL files are not treated as proof of deployment. The inspected TEST database had 13 `public` application tables with RLS enabled, one private `workflow_uploads` bucket, and no `supabase_migrations.schema_migrations` history table. The Supabase MCP migration list was empty, so applied migration provenance/order remains unknown.
 

@@ -1,14 +1,14 @@
 # Revised TEST workflow security-hardening proposal
 
-**Status:** Proposal only; not applied to any database.  
+**Status:** Historical proposal snapshot. Its deployment status describes the time it was written and is not evidence of the current database state.
 **Target:** Supabase TEST project only. Production remains untouched.  
 **SQL files:**
-- Preflight: [`preflight/001_security_preflight.sql`](./preflight/001_security_preflight.sql)
-- Migration: [`001_security_hardening.sql`](./001_security_hardening.sql)
-- Post-deployment verification: [`post-deployment/001_security_verification.sql`](./post-deployment/001_security_verification.sql)
-- Supplied combined source retained unchanged: [`reference/20261105_02_test_workflow_security_hardening_revised_combined.sql`](./reference/20261105_02_test_workflow_security_hardening_revised_combined.sql)  
+- Preflight: [`preflight/001_security_preflight.sql`](../preflight/001_security_preflight.sql)
+- Migration: [`001_security_hardening.sql`](../001_security_hardening.sql)
+- Post-deployment verification: [`post-deployment/001_security_verification.sql`](../post-deployment/001_security_verification.sql)
+- Supplied combined source retained unchanged: [`20261105_02_test_workflow_security_hardening_revised.sql`](./20261105_02_test_workflow_security_hardening_revised.sql)
 **Original reference:** [20261105_01_test_workflow_security_hardening.sql](./20261105_01_test_workflow_security_hardening.sql)  
-**Workflow source of truth:** [REVISED_WORKFLOW_PLAN.md](../REVISED_WORKFLOW_PLAN.md)
+**Workflow source of truth:** [REVISED_WORKFLOW_PLAN.md](../../REVISED_WORKFLOW_PLAN.md)
 
 > **Offline approval evidence security and access policies are deferred pending institutional consultation.**
 
@@ -29,7 +29,7 @@ The proposal is separated into three SQL files to reduce the chance of running i
 
 All three SQL files are intentionally outside `supabase/migrations/`. The preflight and post-deployment files contain SELECT statements only. The migration file contains the approved DDL/privilege changes and its transaction boundary; it must not be run until explicitly approved. Production remains untouched.
 
-The `reference/20261105_01_test_workflow_security_hardening.sql` file is the superseded first proposal. It includes the earlier offline-evidence/Storage-policy approach and is retained only for historical comparison. **Do not run it or combine it with the revised migration.** The `reference/20261105_02_test_workflow_security_hardening_revised_combined.sql` file is the supplied combined source snapshot and is also retained for comparison only.
+The `20261105_01_test_workflow_security_hardening.sql` file is the superseded first proposal. It includes the earlier offline-evidence/Storage-policy approach and is retained only for historical comparison. **Do not run it or combine it with the revised migration.** The `20261105_02_test_workflow_security_hardening_revised.sql` file is the supplied combined source snapshot and is also retained for comparison only.
 
 ## Proposed changes
 

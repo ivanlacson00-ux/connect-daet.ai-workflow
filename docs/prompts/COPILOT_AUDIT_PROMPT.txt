@@ -1,8 +1,8 @@
 Read these project documents first:
 - docs/REVISED_WORKFLOW_PLAN.md
-- docs/DATABASE_SECURITY_STATUS.md
+- docs/security/DATABASE_SECURITY_STATUS.md
 
-Treat REVISED_WORKFLOW_PLAN.md as the source of truth for intended system behavior. Treat DATABASE_SECURITY_STATUS.md as historical handoff context, not proof of the database's current state.
+Treat REVISED_WORKFLOW_PLAN.md as the source of truth for intended system behavior. Treat security/DATABASE_SECURITY_STATUS.md as historical handoff context, not proof of the database's current state.
 
 Then inspect the actual repository and compare its implementation with the revised workflow. Check the project structure, authentication and role handling, document submission, department review, approval-rule routing, external digital/offline approval, final review, change-request/version loop, completion statuses and notifications, document messaging/private staff notes, points/rewards, audit history, Supabase RLS, and Storage policies.
 
