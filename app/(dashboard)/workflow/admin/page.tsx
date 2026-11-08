@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import FilePreview from '@/components/FilePreview';
+import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
 import { createClient } from '@/lib/supabase/client';
+import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 type Role =
   | 'user'
@@ -36,6 +38,7 @@ interface Submission {
   purpose: string | null;
   requested_action: string | null;
   intended_recipient: string | null;
+  selected_office_role: string | null;
   created_at: string;
 }
 
@@ -114,7 +117,7 @@ async function fetchAllSubmissions(supabase: ReturnType<typeof createClient>) {
   for (let offset = 0; ; offset += PAGE_SIZE) {
     const { data, error } = await supabase
       .from('workflow_submissions')
-      .select('id, user_id, tracking_number, file_name, file_url, file_path, file_type, file_size, category, status, description, purpose, requested_action, intended_recipient, created_at')
+      .select('id, user_id, tracking_number, file_name, file_url, file_path, file_type, file_size, category, status, description, purpose, requested_action, intended_recipient, selected_office_role, created_at')
       .order('created_at', { ascending: false })
       .range(offset, offset + PAGE_SIZE - 1);
     if (error) throw new Error(`Could not load submitted documents: ${error.message}`);
@@ -132,6 +135,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [previewSubmission, setPreviewSubmission] = useState<Submission | null>(null);
+  const routesBySubmission = useRoutePreviews(submissions);
 
   const fetchMonitoringData = useCallback(async () => {
     setLoading(true);
@@ -269,6 +273,19 @@ export default function AdminDashboard() {
                         Full record
                       </Link>
                     </div>
+                  </div>
+                  <div className="mt-4">
+                    <WorkflowRoutingPipeline
+                      variant="compact"
+                      submissionStatus={submission.status}
+                      submittedAt={submission.created_at}
+                      routeSteps={routesBySubmission[submission.id]?.steps ?? []}
+                      routeStatus={routesBySubmission[submission.id]?.status ?? null}
+                      routeFinalizedAt={routesBySubmission[submission.id]?.finalizedAt}
+                      selectedOfficeRole={submission.selected_office_role}
+                      auditEvents={[]}
+                      routeLoadFailed={routesBySubmission[submission.id]?.loadFailed ?? false}
+                    />
                   </div>
                 </article>
               );

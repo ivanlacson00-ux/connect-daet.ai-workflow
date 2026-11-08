@@ -17,6 +17,7 @@ type Role =
   | 'mayor_office'
   | 'sangguniang_bayan';
 type RoleFilter = 'all' | Role;
+type VerificationStatus = 'pending' | 'verified' | 'unknown';
 
 interface UserProfile {
   id: string;
@@ -24,6 +25,7 @@ interface UserProfile {
   full_name: string | null;
   role: string;
   created_at: string;
+  verificationStatus: VerificationStatus;
 }
 
 const OFFICIAL_ROLES: Role[] = [
@@ -73,6 +75,21 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
+function VerificationBadge({ status }: { status: VerificationStatus }) {
+  const config = status === 'verified'
+    ? { label: 'Verified', styles: 'bg-approved-bg text-approved-text' }
+    : status === 'pending'
+      ? { label: 'Pending verification', styles: 'bg-pending-bg text-pending-text' }
+      : { label: 'Status unavailable', styles: 'bg-sidebar text-muted-text' };
+
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${config.styles}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
+      {config.label}
+    </span>
+  );
+}
+
 export default function UserManagementPage() {
   const supabase = useMemo(() => createClient(), []);
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -109,7 +126,29 @@ export default function UserManagementPage() {
       console.error('User registry fetch failed:', error.message);
       setUsersError('Could not load the user registry. Check your connection and try again.');
     } else {
-      setUsers(data ?? []);
+      const profiles = data ?? [];
+      try {
+        const response = await fetch('/api/admin/accounts', { cache: 'no-store' });
+        const result = await response.json() as {
+          error?: string;
+          verificationStatuses?: Record<string, Exclude<VerificationStatus, 'unknown'>>;
+        };
+        if (!response.ok || !result.verificationStatuses) {
+          throw new Error(result.error || 'Could not load account verification statuses.');
+        }
+
+        setUsers(profiles.map((profile) => ({
+          ...profile,
+          verificationStatus: result.verificationStatuses?.[profile.id] ?? 'unknown',
+        })));
+      } catch (verificationError) {
+        const message = verificationError instanceof Error
+          ? verificationError.message
+          : 'Could not load account verification statuses.';
+        console.error('Account verification status refresh failed:', message);
+        setUsers(profiles.map((profile) => ({ ...profile, verificationStatus: 'unknown' })));
+        setUsersError(message);
+      }
     }
     setLoading(false);
   }, [supabase]);
@@ -185,18 +224,26 @@ export default function UserManagementPage() {
     if (!confirmed) return;
 
     setUpdating(userId);
-    const { error } = await supabase
-      .from('profiles')
-      .delete()
-      .eq('id', userId);
+    try {
+      const response = await fetch('/api/admin/accounts', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const result = await response.json() as { error?: string };
 
-    if (error) {
-      console.error('Delete error:', error.message);
-      alert('Failed to delete user profile.');
-    } else {
-      setUsers(prev => prev.filter(u => u.id !== userId));
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to delete user profile.');
+      }
+
+      setUsers((previousUsers) => previousUsers.filter((registeredUser) => registeredUser.id !== userId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete user profile.';
+      console.error('Delete error:', message);
+      alert(message);
+    } finally {
+      setUpdating(null);
     }
-    setUpdating(null);
   };
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
@@ -522,7 +569,7 @@ export default function UserManagementPage() {
           {filtered.map((user) => (
             <article
               key={user.id}
-              className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+              className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
             >
               <div className="flex min-w-0 items-center gap-4">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-sidebar text-lg font-semibold uppercase text-muted-text" aria-hidden="true">
@@ -542,6 +589,7 @@ export default function UserManagementPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+                <VerificationBadge status={user.verificationStatus} />
                 <div className="max-md:self-start">
                   <span className="mr-2 text-[10px] font-medium text-muted-text">Base role</span>
                   <RoleBadge role={user.role} />

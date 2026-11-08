@@ -9,6 +9,87 @@ const OFFICIAL_ROLES = new Set([
   'sangguniang_bayan',
 ]);
 
+export async function GET(request: NextRequest) {
+  const origin = request.headers.get('origin');
+  if (origin && origin !== new URL(request.url).origin) {
+    return NextResponse.json({ error: 'Request origin is not allowed.' }, { status: 403 });
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey) {
+    console.error('Account verification status is unavailable: Supabase public configuration is missing.');
+    return NextResponse.json({ error: 'Account verification status is not configured.' }, { status: 500 });
+  }
+
+  const authResponse = new NextResponse();
+  const supabase = createServerClient(supabaseUrl, anonKey, {
+    cookies: {
+      getAll: () => request.cookies.getAll(),
+      setAll: (cookiesToSet) => {
+        cookiesToSet.forEach(({ name, value, options }) => authResponse.cookies.set(name, value, options));
+      },
+    },
+  });
+  const withAuthCookies = (response: NextResponse) => {
+    authResponse.cookies.getAll().forEach((cookie) => response.cookies.set(cookie));
+    return response;
+  };
+
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError || !user) {
+    return withAuthCookies(NextResponse.json({ error: 'Sign in as an administrator to view account verification status.' }, { status: 401 }));
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (profileError) {
+    console.error('Could not verify account status access:', profileError.message);
+    return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
+  }
+  if (profile?.role !== 'admin') {
+    return withAuthCookies(NextResponse.json({ error: 'Only administrators can view account verification status.' }, { status: 403 }));
+  }
+
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!serviceRoleKey || /^(replace-with|your[-_ ]|changeme|<)/i.test(serviceRoleKey)) {
+    console.error('Account verification status is unavailable: SUPABASE_SERVICE_ROLE_KEY is missing or still has a placeholder value.');
+    return withAuthCookies(NextResponse.json({
+      error: 'Account verification status is not configured. Set SUPABASE_SERVICE_ROLE_KEY to your Supabase server-side secret key, then restart the app.',
+    }, { status: 500 }));
+  }
+
+  const adminClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const verificationStatuses: Record<string, 'pending' | 'verified'> = {};
+  const perPage = 1000;
+
+  for (let page = 1; ; page += 1) {
+    const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage });
+    if (error) {
+      console.error('Could not load account verification statuses:', error.message);
+      return withAuthCookies(NextResponse.json({ error: 'Could not load account verification statuses. Try again.' }, { status: 500 }));
+    }
+
+    data.users.forEach((authUser) => {
+      verificationStatuses[authUser.id] = authUser.email_confirmed_at
+        ? 'verified'
+        : 'pending';
+    });
+
+    if (data.users.length < perPage) break;
+  }
+
+  return withAuthCookies(NextResponse.json({ verificationStatuses }, {
+    headers: { 'Cache-Control': 'private, no-store' },
+  }));
+}
+
 export async function POST(request: NextRequest) {
   const origin = request.headers.get('origin');
   if (origin && origin !== new URL(request.url).origin) {
@@ -175,4 +256,120 @@ export async function POST(request: NextRequest) {
     message: `Account created for ${email}. Copy the invitation link and send it to the official.`,
     invitationUrl: invitationUrl.toString(),
   }, { status: 201 }));
+}
+
+export async function DELETE(request: NextRequest) {
+  const origin = request.headers.get('origin');
+  if (origin && origin !== new URL(request.url).origin) {
+    return NextResponse.json({ error: 'Request origin is not allowed.' }, { status: 403 });
+  }
+
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return NextResponse.json({ error: 'Expected a JSON request body.' }, { status: 415 });
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!supabaseUrl || !anonKey || !serviceRoleKey || /^(replace-with|your[-_ ]|changeme|<)/i.test(serviceRoleKey)) {
+    console.error('Profile deletion is unavailable: Supabase configuration is missing or invalid.');
+    return NextResponse.json({ error: 'Profile deletion is not configured.' }, { status: 500 });
+  }
+
+  const authResponse = new NextResponse();
+  const supabase = createServerClient(supabaseUrl, anonKey, {
+    cookies: {
+      getAll: () => request.cookies.getAll(),
+      setAll: (cookiesToSet) => {
+        cookiesToSet.forEach(({ name, value, options }) => authResponse.cookies.set(name, value, options));
+      },
+    },
+  });
+  const withAuthCookies = (response: NextResponse) => {
+    authResponse.cookies.getAll().forEach((cookie) => response.cookies.set(cookie));
+    return response;
+  };
+
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError || !user) {
+    return withAuthCookies(NextResponse.json({ error: 'Sign in as an administrator to delete profiles.' }, { status: 401 }));
+  }
+
+  const { data: requesterProfile, error: requesterProfileError } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (requesterProfileError) {
+    console.error('Could not verify profile deletion permission:', requesterProfileError.message);
+    return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
+  }
+  if (requesterProfile?.role !== 'admin') {
+    return withAuthCookies(NextResponse.json({ error: 'Only administrators can delete profiles.' }, { status: 403 }));
+  }
+
+  let body: { userId?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return withAuthCookies(NextResponse.json({ error: 'Request body must be valid JSON.' }, { status: 400 }));
+  }
+
+  const targetUserId = typeof body.userId === 'string' ? body.userId.trim() : '';
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetUserId)) {
+    return withAuthCookies(NextResponse.json({ error: 'A valid account ID is required.' }, { status: 400 }));
+  }
+  if (targetUserId === user.id) {
+    return withAuthCookies(NextResponse.json({ error: 'You cannot delete your own profile.' }, { status: 400 }));
+  }
+
+  const adminClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data: targetProfile, error: targetProfileError } = await adminClient
+    .from('profiles')
+    .select('id, role')
+    .eq('id', targetUserId)
+    .maybeSingle();
+
+  if (targetProfileError) {
+    console.error('Could not look up profile for deletion:', targetProfileError.message);
+    return withAuthCookies(NextResponse.json({ error: 'Could not load the profile to delete.' }, { status: 500 }));
+  }
+  if (!targetProfile) {
+    return withAuthCookies(NextResponse.json({ error: 'The profile no longer exists.' }, { status: 404 }));
+  }
+
+  if (targetProfile.role === 'admin') {
+    const { data: anotherAdmin, error: anotherAdminError } = await adminClient
+      .from('profiles')
+      .select('id')
+      .eq('role', 'admin')
+      .neq('id', targetUserId)
+      .limit(1)
+      .maybeSingle();
+
+    if (anotherAdminError) {
+      console.error('Could not check for another administrator before profile deletion:', anotherAdminError.message);
+      return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator availability.' }, { status: 500 }));
+    }
+    if (!anotherAdmin) {
+      return withAuthCookies(NextResponse.json({ error: 'The last administrator profile cannot be deleted.' }, { status: 409 }));
+    }
+  }
+
+  const { error: deleteError } = await adminClient
+    .from('profiles')
+    .delete()
+    .eq('id', targetUserId);
+
+  if (deleteError) {
+    console.error('Profile deletion failed:', deleteError.message);
+    return withAuthCookies(NextResponse.json({
+      error: 'Could not delete this profile because other records may still depend on it.',
+    }, { status: 409 }));
+  }
+
+  return withAuthCookies(NextResponse.json({ message: 'Profile deleted.' }));
 }

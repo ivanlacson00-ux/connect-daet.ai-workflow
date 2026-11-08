@@ -12,23 +12,51 @@
   --color-card: #ffffff;
   --color-warm-border: #e8e1d6;
   --color-sidebar: #f1eee6;
-  --color-clay: #df7958;
-  --color-clay-soft: #fbefe9;
+  --color-clay: var(--workflow-primary);
+  --color-clay-soft: var(--workflow-primary-soft);
   --color-promo-panel: #f4efe8;
   --color-avatar: #ebe5dc;
-  --color-clay-border: #f0d4c6;
+  --color-clay-border: var(--workflow-primary-border);
   --color-warm-text: #282521;
   --color-muted-text: #827c72;
-  --color-pending-bg: #f8f0df;
-  --color-pending-text: #9b7838;
-  --color-review-bg: #eaf0f1;
-  --color-review-text: #5d747b;
-  --color-approved-bg: #edf2e9;
-  --color-approved-text: #657b58;
-  --color-rejected-bg: #f8e9e5;
-  --color-rejected-text: #b45f50;
+  --color-pending-bg: var(--workflow-warning-bg);
+  --color-pending-text: var(--workflow-warning-text);
+  --color-review-bg: var(--workflow-review-bg);
+  --color-review-text: var(--workflow-review-text);
+  --color-approved-bg: var(--workflow-success-bg);
+  --color-approved-text: var(--workflow-success-text);
+  --color-rejected-bg: var(--workflow-error-bg);
+  --color-rejected-text: var(--workflow-error-text);
   --font-sans: var(--font-inter);
   --font-serif: var(--font-lora);
+}
+
+:root {
+  --workflow-primary: #df7958;
+  --workflow-primary-soft: #fbefe9;
+  --workflow-primary-border: #f0d4c6;
+  --workflow-warning-bg: #f8f0df;
+  --workflow-warning-text: #9b7838;
+  --workflow-review-bg: #eaf0f1;
+  --workflow-review-text: #5d747b;
+  --workflow-success-bg: #edf2e9;
+  --workflow-success-text: #657b58;
+  --workflow-error-bg: #f8e9e5;
+  --workflow-error-text: #b45f50;
+}
+
+.workflow-system {
+  --workflow-primary: #2563eb;
+  --workflow-primary-soft: #eff6ff;
+  --workflow-primary-border: #bfdbfe;
+  --workflow-warning-bg: #fef9c3;
+  --workflow-warning-text: #a16207;
+  --workflow-review-bg: #dbeafe;
+  --workflow-review-text: #1d4ed8;
+  --workflow-success-bg: #dcfce7;
+  --workflow-success-text: #15803d;
+  --workflow-error-bg: #fee2e2;
+  --workflow-error-text: #b91c1c;
 }
 
 body {

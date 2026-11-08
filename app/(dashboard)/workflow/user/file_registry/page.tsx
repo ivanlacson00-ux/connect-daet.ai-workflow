@@ -166,7 +166,7 @@ export default function UserFileRegistry() {
             <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
               <p className={`${fonts.serif} text-2xl text-warm-text`}>Nothing here</p>
               <p className="mt-2 text-xs text-muted-text">
-                No files found for "{searchQuery || activeFilter}"
+                No files found for &quot;{searchQuery || activeFilter}&quot;
               </p>
             </div>
           ) : (
@@ -176,7 +176,7 @@ export default function UserFileRegistry() {
                 return (
                   <article
                     key={file.id}
-                    className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+                    className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
                   >
                     <div className="flex min-w-0 items-center gap-4 sm:col-span-8">
                       <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">

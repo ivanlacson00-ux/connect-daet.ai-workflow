@@ -11,6 +11,24 @@ const fonts = {
 
 const NEW_WINDOW_MS = 5 * 60 * 1000;
 
+interface AdminNotification {
+  id: string;
+  submission_id: string;
+  notification_id: string;
+  user_id: string | null;
+  updated_at: string;
+  event_type?: string | null;
+  notification_title?: string | null;
+  notification_message?: string | null;
+  notification_status?: string | null;
+  status?: string | null;
+  file_name?: string | null;
+  tracking_number?: string | null;
+  requester_email?: string | null;
+  user_email?: string | null;
+  is_new: boolean;
+}
+
 // Maps a notification event to the status it represents
 const getNotificationStatus = (eventType: string, currentStatus: string) => {
   switch (eventType) {
@@ -45,7 +63,7 @@ const getStatusConfig = (status: string) => {
 
 export default function AdminNotificationsPage() {
   const supabase = useMemo(() => createClient(), []);
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<AdminNotification[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchNotifications = useCallback(async () => {
@@ -59,12 +77,13 @@ export default function AdminNotificationsPage() {
       console.error('Admin Fetch Error:', error.message);
     } else {
       // Keep only the latest notification per submission
-      const latestBySubmission = new Map<string, any>();
+      const latestBySubmission = new Map<string, AdminNotification>();
       (data || []).forEach((notification) => {
         if (!latestBySubmission.has(notification.submission_id)) {
           latestBySubmission.set(notification.submission_id, {
             ...notification.workflow_submissions,
             id: notification.submission_id,
+            submission_id: notification.submission_id,
             notification_id: notification.id,
             updated_at: notification.created_at,
             notification_title: notification.title,
@@ -74,6 +93,7 @@ export default function AdminNotificationsPage() {
               notification.event_type,
               notification.workflow_submissions?.status
             ),
+            is_new: Date.now() - new Date(notification.created_at).getTime() < NEW_WINDOW_MS,
           });
         }
       });
@@ -92,7 +112,10 @@ export default function AdminNotificationsPage() {
   }, [supabase]);
 
   useEffect(() => {
-    fetchNotifications();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void fetchNotifications();
+    });
 
     // Realtime: refetch whenever a new notification is inserted
     const channel = supabase
@@ -105,6 +128,7 @@ export default function AdminNotificationsPage() {
       .subscribe();
 
     return () => {
+      active = false;
       supabase.removeChannel(channel);
     };
   }, [supabase, fetchNotifications]);
@@ -135,17 +159,16 @@ export default function AdminNotificationsPage() {
       ) : (
         <div className="space-y-3">
           {notifications.map((note) => {
-            const status = getStatusConfig(note.notification_status || note.status);
-            const isNew = Date.now() - new Date(note.updated_at).getTime() < NEW_WINDOW_MS;
+            const status = getStatusConfig(note.notification_status || note.status || '');
 
             return (
               <article
                 key={note.id}
-                className="flex flex-col gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:px-3.5 max-md:py-3.5"
+                className="flex flex-col gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:flex-row sm:items-center sm:justify-between max-md:px-3.5 max-md:py-3.5"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-text">
-                    {isNew && (
+                    {note.is_new && (
                       <span className="inline-flex items-center gap-1.5 rounded-full bg-clay-soft px-2 py-0.5 text-[10px] font-semibold text-clay">
                         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-clay" /> New
                       </span>

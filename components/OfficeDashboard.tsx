@@ -71,9 +71,6 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
   const [error, setError] = useState('');
 
   const fetchSubmissions = useCallback(async () => {
-    setLoading(true);
-    setError('');
-
     const { data: plans, error: plansError } = await supabase
       .from('workflow_routing_plans')
       .select('id, submission_id, version')
@@ -87,6 +84,7 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
       setLoading(false);
       return;
     }
+    setError('');
 
     const planById = new Map((plans ?? []).map((plan) => [plan.id, plan]));
     const planIds = (plans ?? []).map((plan) => plan.id);
@@ -200,7 +198,13 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
   }, [role, supabase]);
 
   useEffect(() => {
-    void fetchSubmissions();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void fetchSubmissions();
+    });
+    return () => {
+      active = false;
+    };
   }, [fetchSubmissions]);
 
   useEffect(() => {
