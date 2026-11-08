@@ -28,6 +28,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
   if (userError || !user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+  if (!user.email_confirmed_at) {
+    return NextResponse.json({ error: 'Email confirmation required' }, { status: 403 });
+  }
 
   const { id } = await context.params;
   const { data: submission, error: submissionError } = await supabase

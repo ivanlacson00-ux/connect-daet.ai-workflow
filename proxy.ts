@@ -39,6 +39,12 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(new URL('/login', req.url))
   }
 
+  if (!user.email_confirmed_at) {
+    const loginUrl = new URL('/login', req.url)
+    loginUrl.searchParams.set('verification', 'required')
+    return NextResponse.redirect(loginUrl)
+  }
+
   const { data: profile } = await supabase
     .from('profiles')
     .select('role')

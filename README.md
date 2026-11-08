@@ -94,3 +94,44 @@ After the preceding workflow migrations, apply
 conversations, authorized message attachments, read receipts, and message
 notifications. Message email notifications use the existing email outbox and
 scheduled email processor.
+Apply `20261108170000_harden_workflow_email_delivery.sql` afterward to enable
+leased email-job claiming, bounded retries, attempt history, provider delivery
+events, and administrator inspection/retry access. Configure
+`RESEND_WEBHOOK_SECRET` in the server environment and register
+`https://<your-app-domain>/api/webhooks/resend` in Resend for the
+`email.delivered`, `email.bounced`, `email.complained`, `email.failed`, and
+`email.suppressed` events. The scheduled processor uses the existing
+`CRON_SECRET` and `VERCEL_APP_URL` GitHub Actions secrets. Set `APP_BASE_URL`
+to the canonical application origin in the server environment for secure
+document links in notification emails. Provider API acceptance is recorded as
+`accepted`; only a verified webhook records delivery.
+Apply `20261108180000_add_workflow_email_templates.sql` afterward to add
+branded HTML/text notification emails, document references, recipient
+greetings, and role-appropriate links. Existing workflow notifications,
+including message notifications, are queued automatically; email message
+notices link to the conversation without including private message contents.
+
+For account verification, enable email confirmations in Supabase
+Authentication settings, set the project Site URL to the production app origin,
+and allow the callback URLs `http://localhost:3000/auth/callback` and
+`https://<your-app-domain>/auth/callback` (plus any additional deployed
+environments). Registration and resend-confirmation links use this callback.
+Supabase Auth remains the source of truth for verification; the application
+blocks unconfirmed accounts from workflow pages and the protected file API.
+Password recovery uses the same `/auth/callback` allowlist and then returns to
+`/reset-password`; configure Supabase's recovery email template to use its
+standard secure recovery link. Recovery requests are issued through the
+server-side `/api/auth/password/request` handler and callback exchange before
+the password-change endpoint accepts an update.
+
+The Admin workspace's Email Monitoring page reads queue status and processing
+attempts through administrator-only database policies and can retry eligible
+failed email jobs. It requires the email-delivery hardening migration to be
+applied; it does not display email bodies.
+
+## Local checks
+
+Run `npm test` (Node.js 22.6 or newer) for the unit tests covering password
+validation and safe notification-email rendering. Run `npm run build` for the
+production build and TypeScript check. Integration checks that contact Supabase
+or Resend should use a dedicated test project and recipient.

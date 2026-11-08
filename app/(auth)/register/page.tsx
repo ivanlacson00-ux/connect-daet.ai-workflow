@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
+import { getPasswordValidationError } from '@/lib/auth/password';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -25,7 +26,19 @@ export default function RegisterPage() {
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validation: passwords must match
+    const trimmedName = fullName.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!trimmedName) {
+      setStatus({ type: 'error', message: 'Enter your full name.' });
+      return;
+    }
+
+    const passwordError = getPasswordValidationError(password);
+    if (passwordError) {
+      setStatus({ type: 'error', message: passwordError });
+      return;
+    }
+
     if (password !== confirmPassword) {
       setStatus({ type: 'error', message: 'Passwords do not match.' });
       return;
@@ -35,12 +48,12 @@ export default function RegisterPage() {
     setStatus(null);
 
     const { error } = await supabase.auth.signUp({
-      email,
+      email: normalizedEmail,
       password,
       options: {
         emailRedirectTo: `${window.location.origin}/auth/callback`,
         data: {
-          full_name: fullName,
+          full_name: trimmedName,
           role: 'user',
         },
       },
@@ -132,6 +145,7 @@ export default function RegisterPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 className={fieldClasses}
                 placeholder="••••••••"
+                minLength={8}
                 required
               />
             </div>
@@ -148,6 +162,7 @@ export default function RegisterPage() {
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 className={fieldClasses}
                 placeholder="••••••••"
+                minLength={8}
                 required
               />
             </div>
