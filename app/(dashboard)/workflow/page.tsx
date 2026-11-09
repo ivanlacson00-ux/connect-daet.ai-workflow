@@ -1,12 +1,12 @@
 // app/(dashboard)/workflow/page.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { getRoleHomePath } from '@/lib/workflow/offices';
 
 export default function WorkflowLanding() {
-  const [loading, setLoading] = useState(true);
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
     const checkRoleAndRedirect = async () => {
@@ -20,32 +20,26 @@ export default function WorkflowLanding() {
       }
 
       // Get user's role from profiles table
-      const { data: profile } = await supabase
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('role')
         .eq('id', user.id)
         .single();
 
-      const role = profile?.role || 'user';
-      
-      // Redirect based on role
-      if (role === 'admin') {
-        window.location.href = '/workflow/admin';
-      } else if (role === 'approver') {
-        window.location.href = '/workflow/approver';
-      } else {
-        window.location.href = '/workflow/user';
+      if (profileError || !profile) {
+        window.location.href = '/login';
+        return;
       }
-      
-      setLoading(false);
+
+      window.location.href = getRoleHomePath(profile.role);
     };
 
     checkRoleAndRedirect();
-  }, []);
+  }, [supabase]);
 
   return (
     <div className="flex justify-center items-center h-64">
-      <div className="text-gray-500">Redirecting to your dashboard...</div>
+      <div className="text-muted-text">Redirecting to your dashboard...</div>
     </div>
   );
 }

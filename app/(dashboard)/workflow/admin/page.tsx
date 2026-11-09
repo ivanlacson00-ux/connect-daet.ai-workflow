@@ -1,244 +1,361 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
-import { createClient } from '@/lib/supabase/client';
-import { useAdminStats } from '@/hooks/useAdminStats';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import FilePreview from '@/components/FilePreview';
+import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
+import { createClient } from '@/lib/supabase/client';
+import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
-const fonts = {
-  serif: "font-serif",
-  mono: "font-sans text-xs",
-};
+type Role =
+  | 'user'
+  | 'approver'
+  | 'admin'
+  | 'municipal_treasurer'
+  | 'mayor_office'
+  | 'sangguniang_bayan';
 
-interface Submission {
-  id: string | number;
-  tracking_number: string;
-  file_name: string;
-  file_url: string;
-  file_type: string;
-  status: string;
-  user_id: string;
-  submitter_email?: string;
+interface Profile {
+  id: string;
+  email: string;
+  full_name: string | null;
+  role: Role;
   created_at: string;
 }
 
-// ─── Status Stamp ────────────────────────────────────────────────────────────
+interface Submission {
+  id: string;
+  user_id: string;
+  tracking_number: string | null;
+  file_name: string;
+  file_url: string;
+  file_path: string | null;
+  file_type: string | null;
+  file_size: number | null;
+  category: string | null;
+  status: string;
+  description: string | null;
+  purpose: string | null;
+  requested_action: string | null;
+  intended_recipient: string | null;
+  selected_office_role: string | null;
+  created_at: string;
+}
+
+const PAGE_SIZE = 500;
+
+const ROLE_GROUPS: { role: Role; label: string }[] = [
+  { role: 'user', label: 'Submitters' },
+  { role: 'approver', label: 'Approvers' },
+  { role: 'municipal_treasurer', label: "Municipal Treasurer's Office" },
+  { role: 'mayor_office', label: "Mayor's Office" },
+  { role: 'sangguniang_bayan', label: 'Sangguniang Bayan Office' },
+  { role: 'admin', label: 'Administrators' },
+];
+
+const ROLE_STYLES: Record<Role, string> = {
+  user: 'bg-sidebar text-muted-text',
+  approver: 'bg-review-bg text-review-text',
+  municipal_treasurer: 'bg-approved-bg text-approved-text',
+  mayor_office: 'bg-pending-bg text-pending-text',
+  sangguniang_bayan: 'bg-rejected-bg text-rejected-text',
+  admin: 'bg-clay-soft text-clay',
+};
+
 function StatusStamp({ status }: { status: string }) {
-  const getDisplayConfig = () => {
-    const s = status?.toLowerCase();
-
-    if (s === 'pending_admin') {
-      return { label: 'Pending approval', styles: 'bg-review-bg text-review-text' };
-    }
-    if (s.includes('approved')) {
-      return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
-    }
-    if (s === 'completed') {
-      return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
-    }
-    if (s.includes('declined')) {
-      return { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' };
-    }
-
-    return { label: 'Under verification', styles: 'bg-pending-bg text-pending-text' };
-  };
-
-  const config = getDisplayConfig();
+  const value = status.toLowerCase();
+  const config = value.includes('declined') || value === 'rejected'
+    ? { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' }
+    : value === 'completed'
+      ? { label: 'Completed', styles: 'bg-approved-bg text-approved-text' }
+      : value.includes('approved')
+        ? { label: 'Approved', styles: 'bg-approved-bg text-approved-text' }
+        : value === 'returned_for_requirements'
+          ? { label: 'Returned for requirements', styles: 'bg-pending-bg text-pending-text' }
+          : value.startsWith('pending')
+            ? { label: value.replaceAll('_', ' '), styles: 'bg-review-bg text-review-text' }
+            : { label: value.replaceAll('_', ' ') || 'Unknown', styles: 'bg-sidebar text-muted-text' };
 
   return (
-    <div className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3 py-1.5 text-[11px] font-medium ${config.styles}`}>
+    <span className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3 py-1.5 text-[11px] font-medium capitalize ${config.styles}`}>
       <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
       {config.label}
-    </div>
+    </span>
   );
+}
+
+function RoleBadge({ role }: { role: Role }) {
+  const label = ROLE_GROUPS.find((group) => group.role === role)?.label ?? role;
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${ROLE_STYLES[role]}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
+      {label}
+    </span>
+  );
+}
+
+async function fetchAllProfiles(supabase: ReturnType<typeof createClient>) {
+  const profiles: Profile[] = [];
+
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, email, full_name, role, created_at')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (error) throw new Error(`Could not load user accounts: ${error.message}`);
+
+    const page = (data ?? []) as Profile[];
+    profiles.push(...page);
+    if (page.length < PAGE_SIZE) return profiles;
+  }
+}
+
+async function fetchAllSubmissions(supabase: ReturnType<typeof createClient>) {
+  const submissions: Submission[] = [];
+
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('workflow_submissions')
+      .select('id, user_id, tracking_number, file_name, file_url, file_path, file_type, file_size, category, status, description, purpose, requested_action, intended_recipient, selected_office_role, created_at')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (error) throw new Error(`Could not load submitted documents: ${error.message}`);
+
+    const page = (data ?? []) as Submission[];
+    submissions.push(...page);
+    if (page.length < PAGE_SIZE) return submissions;
+  }
 }
 
 export default function AdminDashboard() {
   const supabase = useMemo(() => createClient(), []);
-  const { stats: adminStats } = useAdminStats();
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
-  const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const [previewSubmission, setPreviewSubmission] = useState<Submission | null>(null);
+  const routesBySubmission = useRoutePreviews(submissions);
 
-  // ─── Stat Cards Data ───────────────────────────────────────────────────────
-  const pendingCount = (adminStats.pendingApprover || 0) + (adminStats.pendingAdmin || 0);
-  const declinedCount = (adminStats.declinedByApprover || 0) + (adminStats.declinedByAdmin || 0);
-
-  const statCards = [
-    { label: 'Total users', value: adminStats.totalUsers, hint: 'Registered accounts', icon: '♧', iconStyles: 'bg-clay-soft text-clay' },
-    { label: 'Pending', value: pendingCount, hint: 'Waiting on a review', icon: '▤', iconStyles: 'bg-pending-bg text-pending-text' },
-    { label: 'Approved', value: adminStats.approved, hint: 'Reviewed and approved', icon: '✓', iconStyles: 'bg-approved-bg text-approved-text' },
-    { label: 'Declined', value: declinedCount, hint: 'Returned to submitters', icon: '✕', iconStyles: 'bg-rejected-bg text-rejected-text' },
-  ];
-
-  // ─── Data Fetching ──────────────────────────────────────────────────────────
-  const fetchRecentSubmissions = useCallback(async () => {
+  const fetchMonitoringData = useCallback(async () => {
     setLoading(true);
-    const { data: subs, error: subError } = await supabase
-      .from("workflow_submissions")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(10);
-
-    if (subError) {
+    setLoadError('');
+    try {
+      const [nextProfiles, nextSubmissions] = await Promise.all([
+        fetchAllProfiles(supabase),
+        fetchAllSubmissions(supabase),
+      ]);
+      setProfiles(nextProfiles);
+      setSubmissions(nextSubmissions);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not load monitoring data.';
+      console.error('Admin monitoring refresh failed:', message);
+      setLoadError(message);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { data: profs } = await supabase.from("profiles").select("id, email");
-
-    const mergedData = subs.map((sub: any) => {
-      const userProfile = profs?.find(p => p.id === sub.user_id);
-      return {
-        ...sub,
-        submitter_email: userProfile ? userProfile.email : "Unknown Sender"
-      };
-    });
-
-    setSubmissions(mergedData);
-    setLoading(false);
   }, [supabase]);
 
-  useEffect(() => { fetchRecentSubmissions(); }, [fetchRecentSubmissions]);
+  useEffect(() => {
+    void fetchMonitoringData();
+    const profilesChannel = supabase
+      .channel('admin-monitoring-profiles')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, fetchMonitoringData)
+      .subscribe();
+    const submissionsChannel = supabase
+      .channel('admin-monitoring-submissions')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'workflow_submissions' }, fetchMonitoringData)
+      .subscribe();
 
-  const handleDownload = async (url: string, filename: string) => {
-    try {
-      const response = await fetch(url);
-      const blob = await response.blob();
-      const link = document.body.appendChild(document.createElement('a'));
-      link.href = window.URL.createObjectURL(blob);
-      link.download = filename;
-      link.click();
-      link.remove();
-    } catch (e) { console.error("Download error", e); }
-  };
+    return () => {
+      void supabase.removeChannel(profilesChannel);
+      void supabase.removeChannel(submissionsChannel);
+    };
+  }, [fetchMonitoringData, supabase]);
 
-  const isImage = (fileName: string) => /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(fileName);
+  const profilesById = useMemo(
+    () => new Map(profiles.map((profile) => [profile.id, profile])),
+    [profiles]
+  );
+  const pendingCount = submissions.filter((submission) =>
+    ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'returned_for_requirements']
+      .includes(submission.status.toLowerCase())
+  ).length;
+  const completedCount = submissions.filter((submission) => submission.status.toLowerCase() === 'completed').length;
+  const statCards = [
+    { label: 'Accounts monitored', value: profiles.length, hint: 'All registered roles', icon: '♧', styles: 'bg-clay-soft text-clay' },
+    { label: 'Submitted documents', value: submissions.length, hint: 'Across the system', icon: '▤', styles: 'bg-review-bg text-review-text' },
+    { label: 'In progress', value: pendingCount, hint: 'Awaiting a workflow step', icon: '◷', styles: 'bg-pending-bg text-pending-text' },
+    { label: 'Completed', value: completedCount, hint: 'Finished workflow requests', icon: '✓', styles: 'bg-approved-bg text-approved-text' },
+  ];
 
   return (
     <div className="w-full">
-      {/* Header Section */}
-      <div className="mb-8 max-md:mb-5">
+      <header className="mb-8 max-md:mb-5">
         <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
           <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Admin workspace
         </p>
-        <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>Admin hub</h1>
-        <p className="mt-2 flex items-center gap-2 text-xs text-muted-text max-md:mt-1.5">
-          <span className="h-1.5 w-1.5 rounded-full bg-approved-text" /> System status: online
-        </p>
-      </div>
+        <h1 className="font-serif text-[32px] leading-tight text-warm-text max-md:text-[26px]">System monitoring</h1>
+        <p className="mt-2 text-xs text-muted-text">Monitor accounts by role and track every submitted document.</p>
+      </header>
 
-      {/* Stat Cards */}
-      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4 max-md:mb-6 max-md:gap-3">
-        {statCards.map((card) => (
-          <div key={card.label} className="min-h-39.5 rounded-2xl border border-warm-border bg-card p-5 max-md:min-h-0 max-md:p-3.5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-medium text-muted-text">{card.label}</h2>
-              <span className={`flex h-9 w-9 items-center justify-center rounded-xl text-base ${card.iconStyles}`} aria-hidden="true">
-                {card.icon}
-              </span>
-            </div>
-            <p className={`${fonts.serif} mt-3 text-[34px] leading-none text-warm-text max-md:mt-2 max-md:text-[27px]`}>{card.value}</p>
-            <p className="mt-3 text-[11px] text-muted-text max-md:mt-1.5">{card.hint}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Recent Submissions */}
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h2 className="text-sm font-semibold text-warm-text">Recent submissions</h2>
-          <span className="rounded-md bg-sidebar px-2 py-1 text-[10px] font-medium text-muted-text">{submissions.length}</span>
-        </div>
-        <span className="text-[11px] text-muted-text max-md:hidden">Latest 10 entries</span>
-      </div>
-
-      {loading ? (
-        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Syncing records...
-        </div>
-      ) : submissions.length === 0 ? (
-        <div className="rounded-2xl border border-warm-border bg-card py-20 text-center">
-          <p className={`${fonts.serif} text-2xl text-warm-text`}>No submissions yet</p>
-          <p className="mt-2 text-xs text-muted-text">New submissions will appear here.</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {submissions.map((sub) => (
-            <article
-              key={sub.id}
-              className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
-            >
-              <div className="flex min-w-0 items-center gap-4">
-                <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
-                  <span className="text-lg leading-4" aria-hidden="true">▤</span>
-                  <span className="mt-1 text-[8px] font-semibold uppercase">
-                    {sub.file_type?.split('/').at(-1)?.slice(0, 3) || 'Doc'}
-                  </span>
-                </div>
-                <div className="min-w-0">
-                  <h3 className="truncate text-sm font-semibold text-warm-text group-hover:text-clay">{sub.file_name}</h3>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
-                    <span>{sub.tracking_number || 'Tracking pending'}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="truncate">From {sub.submitter_email}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{new Date(sub.created_at).toLocaleDateString()}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
-                <div className="max-md:self-start">
-                  <StatusStamp status={sub.status} />
-                </div>
-                <button
-                  onClick={() => setPreviewFile({ url: `/api/workflow/files/${sub.id}?redirect=1`, name: sub.file_name })}
-                  className="inline-flex h-10 items-center gap-2 rounded-full border border-warm-border px-4 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11 max-md:w-full max-md:justify-center"
-                  aria-label={`Preview ${sub.file_name}`}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
-                  </svg>
-                  Preview
-                </button>
-                <Link
-                  href={`/workflow/admin/submissions/${sub.id}`}
-                  className="inline-flex h-10 items-center gap-2 rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full max-md:justify-center"
-                >
-                  Manage <span aria-hidden="true">→</span>
-                </Link>
-              </div>
-            </article>
-          ))}
+      {loadError && (
+        <div role="alert" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs text-rejected-text">
+          <span>{loadError}</span>
+          <button type="button" onClick={() => void fetchMonitoringData()} className="font-semibold underline">Retry</button>
         </div>
       )}
 
-      {/* Preview Modal */}
-      {previewFile && (
-        <div className="fixed inset-0 z-100 flex flex-col bg-warm-text/75 backdrop-blur-sm animate-in fade-in duration-300 max-md:bg-card max-md:backdrop-blur-none">
-          <div className="flex min-h-16 items-center justify-between border-b border-warm-border bg-card px-4 py-3 sm:px-8">
-            <div className="flex min-w-0 flex-col">
-              <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">Document preview</span>
-              <h2 className="max-w-[55vw] truncate text-sm font-semibold text-warm-text">{previewFile.name}</h2>
+      <section aria-label="System totals" className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 max-md:mb-6 max-md:gap-3">
+        {statCards.map((card) => (
+          <article key={card.label} className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-medium text-muted-text">{card.label}</h2>
+              <span className={`flex h-9 w-9 items-center justify-center rounded-xl text-base ${card.styles}`} aria-hidden="true">{card.icon}</span>
             </div>
-            <button
-              onClick={() => setPreviewFile(null)}
-              aria-label="Close preview"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-text transition-colors hover:bg-sidebar hover:text-warm-text max-md:h-11 max-md:w-11"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M18 6L6 18M6 6l12 12" /></svg>
-            </button>
-          </div>
+            <p className="mt-3 font-serif text-[34px] leading-none text-warm-text max-md:mt-2 max-md:text-[27px]">{loading ? '—' : card.value}</p>
+            <p className="mt-3 text-[11px] text-muted-text max-md:mt-1.5">{card.hint}</p>
+          </article>
+        ))}
+      </section>
 
-          <div className="flex flex-1 items-center justify-center overflow-hidden bg-cream p-3 sm:p-8 max-md:bg-card max-md:p-0">
-            <div className="relative flex h-full w-full max-w-6xl items-center justify-center overflow-hidden rounded-xl border border-warm-border bg-card shadow-xl max-md:max-w-none max-md:rounded-none max-md:border-0 max-md:shadow-none">
-              {isImage(previewFile.name) ? (
-                <img src={previewFile.url} alt="Preview" className="max-h-full max-w-full object-contain p-4 animate-in zoom-in-95" />
-              ) : (
-                <iframe className="h-full w-full border-none bg-white" src={previewFile.url} />
-              )}
+      <section>
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-warm-text">Submitted documents</h2>
+            <p className="mt-1 text-[11px] text-muted-text">Preview the file and review the submitter’s description and request details.</p>
+          </div>
+          <Link href="/workflow/admin/submissions" className="text-xs font-semibold text-clay underline underline-offset-4">
+            Open full file registry
+          </Link>
+        </div>
+
+        {loading && submissions.length === 0 ? (
+          <div className="rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">Loading submitted documents...</div>
+        ) : submissions.length === 0 ? (
+          <div className="rounded-2xl border border-warm-border bg-card py-14 text-center">
+            <p className="font-serif text-2xl text-warm-text">No submissions yet</p>
+            <p className="mt-2 text-xs text-muted-text">New user documents will appear here.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {submissions.map((submission) => {
+              const profile = profilesById.get(submission.user_id);
+              return (
+                <article key={submission.id} className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="truncate text-sm font-semibold text-warm-text">{submission.file_name}</h3>
+                      <p className="mt-1 text-[11px] text-muted-text">
+                        {submission.tracking_number || 'Tracking pending'} · {profile?.full_name || profile?.email || 'Unknown submitter'} · {new Date(submission.created_at).toLocaleDateString()}
+                      </p>
+                      <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-relaxed text-warm-text">
+                        {submission.description || 'No description provided.'}
+                      </p>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        {profile && <RoleBadge role={profile.role} />}
+                        <StatusStamp status={submission.status} />
+                        {submission.category && <span className="text-[11px] text-muted-text">{submission.category}</span>}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 gap-2 max-sm:w-full max-sm:flex-col">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewSubmission(submission)}
+                        className="inline-flex h-10 items-center justify-center rounded-full border border-warm-border px-4 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar max-sm:w-full"
+                      >
+                        Preview file
+                      </button>
+                      <Link
+                        href={`/workflow/admin/submissions/${submission.id}`}
+                        className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-sm:w-full"
+                      >
+                        Full record
+                      </Link>
+                    </div>
+                  </div>
+                  <div className="mt-4">
+                    <WorkflowRoutingPipeline
+                      variant="compact"
+                      submissionStatus={submission.status}
+                      submittedAt={submission.created_at}
+                      routeSteps={routesBySubmission[submission.id]?.steps ?? []}
+                      routeStatus={routesBySubmission[submission.id]?.status ?? null}
+                      routeFinalizedAt={routesBySubmission[submission.id]?.finalizedAt}
+                      selectedOfficeRole={submission.selected_office_role}
+                      auditEvents={[]}
+                      routeLoadFailed={routesBySubmission[submission.id]?.loadFailed ?? false}
+                    />
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {previewSubmission && (
+        <div
+          className="fixed inset-0 z-100 flex items-center justify-center bg-warm-text/75 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="submission-preview-title"
+        >
+          <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-warm-border bg-card shadow-xl">
+            <header className="flex items-center justify-between gap-4 border-b border-warm-border px-5 py-4">
+              <div className="min-w-0">
+                <h2 id="submission-preview-title" className="truncate text-sm font-semibold text-warm-text">{previewSubmission.file_name}</h2>
+                <p className="mt-1 text-[11px] text-muted-text">
+                  {profilesById.get(previewSubmission.user_id)?.email || 'Unknown submitter'} · {previewSubmission.tracking_number || 'Tracking pending'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewSubmission(null)}
+                aria-label="Close document preview"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-lg text-muted-text hover:bg-sidebar"
+              >
+                ×
+              </button>
+            </header>
+            <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+              <div className="min-h-80 rounded-xl border border-warm-border bg-white p-3">
+                <FilePreview file={previewSubmission} />
+              </div>
+              <aside className="space-y-4 text-xs">
+                <div>
+                  <p className="mb-1 text-[11px] font-medium text-muted-text">Status</p>
+                  <StatusStamp status={previewSubmission.status} />
+                </div>
+                <div>
+                  <p className="mb-1 text-[11px] font-medium text-muted-text">Description</p>
+                  <p className="whitespace-pre-wrap break-words leading-relaxed text-warm-text">{previewSubmission.description || 'No description provided.'}</p>
+                </div>
+                {previewSubmission.purpose && (
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium text-muted-text">Purpose</p>
+                    <p className="whitespace-pre-wrap break-words leading-relaxed text-warm-text">{previewSubmission.purpose}</p>
+                  </div>
+                )}
+                {previewSubmission.requested_action && (
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium text-muted-text">Requested action</p>
+                    <p className="whitespace-pre-wrap break-words leading-relaxed text-warm-text">{previewSubmission.requested_action}</p>
+                  </div>
+                )}
+                {previewSubmission.intended_recipient && (
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium text-muted-text">Intended recipient</p>
+                    <p className="whitespace-pre-wrap break-words leading-relaxed text-warm-text">{previewSubmission.intended_recipient}</p>
+                  </div>
+                )}
+                <Link
+                  href={`/workflow/admin/submissions/${previewSubmission.id}`}
+                  className="inline-flex h-10 w-full items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white"
+                >
+                  Open full record
+                </Link>
+              </aside>
             </div>
           </div>
         </div>

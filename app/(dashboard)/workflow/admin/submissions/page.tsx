@@ -2,8 +2,11 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
 import { useSubmissions } from '@/hooks/useSubmissions';
 import { getWorkflowTiming, workflowTimingClasses } from '@/lib/workflow/timing';
+import { OFFICE_CONFIG } from '@/lib/workflow/offices';
+import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -12,7 +15,7 @@ const fonts = {
 
 type FilterStatus = 'all' | 'pending' | 'approved' | 'declined';
 
-const CATEGORIES = ['General', 'Tourism', 'Events', 'Marketing'];
+const CATEGORIES = [...new Set(Object.values(OFFICE_CONFIG).flatMap((office) => office.categories))];
 
 const STATUS_FILTERS: { value: FilterStatus; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -27,7 +30,7 @@ const matchesStatus = (status: string, filter: FilterStatus) => {
   const s = status.toLowerCase();
   switch (filter) {
     case 'pending':
-      return s === 'pending_admin';
+      return ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'returned_for_requirements'].includes(s);
     case 'approved':
       return s === 'approved' || s === 'completed';
     case 'declined':
@@ -46,7 +49,10 @@ function StatusStamp({ status }: { status: string }) {
     const s = status?.toLowerCase();
 
     // Admin stage logic
-    if (s === 'pending_admin') return { label: 'Pending approval', styles: 'bg-review-bg text-review-text' };
+    if (s === 'pending_admin') return { label: 'Administrative review', styles: 'bg-review-bg text-review-text' };
+    if (s === 'pending_office') return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
+    if (s === 'pending_mayor') return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
+    if (s === 'returned_for_requirements') return { label: 'Returned for requirements', styles: 'bg-pending-bg text-pending-text' };
     if (s === 'completed') return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
     if (s.includes('approved')) return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
     if (s.includes('declined')) return { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' };
@@ -73,6 +79,7 @@ export default function SubmissionsPage() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const { submissions, loading } = useSubmissions();
+  const routesBySubmission = useRoutePreviews(submissions);
 
   const fileTypes = useMemo(
     () => [...new Set(submissions.map((s) => s.file_type).filter(Boolean))],
@@ -227,9 +234,9 @@ export default function SubmissionsPage() {
             return (
               <article
                 key={sub.id}
-                className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+                className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
               >
-                <div className="flex min-w-0 items-center gap-4">
+                <div className="flex min-w-0 items-center gap-4 sm:col-span-7">
                   <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
                     <span className="text-lg leading-4" aria-hidden="true">▤</span>
                     <span className="mt-1 text-[8px] font-semibold uppercase">
@@ -254,7 +261,7 @@ export default function SubmissionsPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+                <div className="flex flex-wrap items-center gap-2 sm:col-span-5 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
                   <div className="flex flex-col items-start gap-1.5 sm:items-end max-md:self-start">
                     <StatusStamp status={sub.status} />
                     <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-medium ${workflowTimingClasses(timing.state)}`}>
@@ -265,8 +272,21 @@ export default function SubmissionsPage() {
                     href={`/workflow/admin/submissions/${sub.id}`}
                     className="inline-flex h-10 items-center gap-2 rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full max-md:justify-center"
                   >
-                    Manage entry <span aria-hidden="true">→</span>
+                    View document <span aria-hidden="true">→</span>
                   </Link>
+                </div>
+                <div className="sm:col-span-12">
+                  <WorkflowRoutingPipeline
+                    variant="compact"
+                    submissionStatus={sub.status}
+                    submittedAt={sub.created_at}
+                    routeSteps={routesBySubmission[sub.id]?.steps ?? []}
+                    routeStatus={routesBySubmission[sub.id]?.status ?? null}
+                    routeFinalizedAt={routesBySubmission[sub.id]?.finalizedAt}
+                    selectedOfficeRole={sub.selected_office_role}
+                    auditEvents={[]}
+                    routeLoadFailed={routesBySubmission[sub.id]?.loadFailed ?? false}
+                  />
                 </div>
               </article>
             );

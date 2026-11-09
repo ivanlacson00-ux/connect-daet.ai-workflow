@@ -14,7 +14,7 @@ concurrency:
 jobs:
   process-email-outbox:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
       - name: Process queued emails
         env:
@@ -26,6 +26,6 @@ jobs:
             exit 1
           fi
 
-          curl --fail --silent --show-error \
+          curl --fail --silent --show-error --max-time 240 \
             --header "Authorization: Bearer ${CRON_SECRET}" \
             "${VERCEL_APP_URL%/}/api/notifications/email"

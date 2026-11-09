@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
+import { getRoleHomePath } from '@/lib/workflow/offices';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -18,18 +19,29 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [verified, setVerified] = useState(false);
+  const [canResendConfirmation, setCanResendConfirmation] = useState(false);
+  const [resendingConfirmation, setResendingConfirmation] = useState(false);
+  const [confirmationMessage, setConfirmationMessage] = useState('');
   const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
 
     if (params.get('verified') === '1') {
+      // Capture the one-time callback message before removing its query parameter.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setVerified(true);
       params.delete('verified');
     }
 
     if (params.get('verification') === 'failed') {
+      // Capture the one-time callback message before removing its query parameter.
       setError('Email confirmation could not be completed. Please request a new confirmation email and try again.');
+      params.delete('verification');
+    }
+
+    if (params.get('verification') === 'required') {
+      setError('Confirm your email address before accessing your account.');
       params.delete('verification');
     }
 
@@ -41,14 +53,21 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError('');
+    setCanResendConfirmation(false);
+    setConfirmationMessage('');
 
     const { error: signInError } = await supabase.auth.signInWithPassword({
-      email,
+      email: email.trim().toLowerCase(),
       password,
     });
 
     if (signInError) {
-      setError(signInError.message);
+      setError(
+        signInError.code === 'email_not_confirmed'
+          ? 'Confirm your email address before signing in.'
+          : signInError.message
+      );
+      setCanResendConfirmation(signInError.code === 'email_not_confirmed');
       setLoading(false);
       return;
     }
@@ -61,20 +80,50 @@ export default function LoginPage() {
       return;
     }
 
-    const role = refreshed.user.app_metadata?.role;
+    const { data: role, error: profileError } = await supabase.rpc(
+      'ensure_current_user_profile'
+    );
 
-    // Loading stays on while the browser redirects
-    if (role === 'admin') {
-      window.location.href = '/workflow/admin';
-    } else if (role === 'approver') {
-      window.location.href = '/workflow/approver';
-    } else {
-      window.location.href = '/workflow/user';
+    if (profileError || typeof role !== 'string') {
+      await supabase.auth.signOut();
+      setError(
+        'We could not set up your account profile. Please try again; if the problem continues, contact an administrator to check the database migration and your account role.'
+      );
+      setLoading(false);
+      return;
     }
+
+    window.location.href = getRoleHomePath(role);
+  };
+
+  const handleResendConfirmation = async () => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      setError('Enter your email address first.');
+      return;
+    }
+
+    setResendingConfirmation(true);
+    setConfirmationMessage('');
+    setError('');
+    const { error: resendError } = await supabase.auth.resend({
+      type: 'signup',
+      email: normalizedEmail,
+      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+    });
+    if (resendError) {
+      setError('We could not send a confirmation email right now. Please try again later.');
+    } else {
+      setConfirmationMessage(
+        'If this address has an unverified account, a new confirmation email will be sent.'
+      );
+      setCanResendConfirmation(false);
+    }
+    setResendingConfirmation(false);
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-cream px-4 py-12">
+    <div className="workflow-system flex min-h-screen items-center justify-center bg-cream px-4 py-12">
       <div className="w-full max-w-[380px]">
         {/* Identity */}
         <div className="mb-8 flex flex-col items-center text-center max-md:mb-6">
@@ -136,6 +185,22 @@ export default function LoginPage() {
               />
             </div>
 
+            {canResendConfirmation && (
+              <button
+                type="button"
+                onClick={handleResendConfirmation}
+                disabled={resendingConfirmation}
+                className="text-xs font-semibold text-clay underline underline-offset-2 disabled:opacity-50"
+              >
+                {resendingConfirmation ? 'Sending confirmation...' : 'Resend confirmation email'}
+              </button>
+            )}
+            {confirmationMessage && (
+              <p role="status" className="rounded-xl border border-approved-bg bg-approved-bg/50 px-4 py-3 text-xs font-medium text-approved-text">
+                {confirmationMessage}
+              </p>
+            )}
+
             {error && (
               <p role="alert" className="rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">
                 {error}
@@ -159,6 +224,11 @@ export default function LoginPage() {
             Create an account
           </Link>
         </div>
+        <p className="mt-4 text-center text-xs text-muted-text">
+          <Link href="/forgot-password" className="font-semibold text-clay transition-colors hover:text-warm-text">
+            Forgot your password?
+          </Link>
+        </p>
 
         <p className="mt-6 text-center text-[10px] text-muted-text">v1.0.4</p>
       </div>

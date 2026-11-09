@@ -2,7 +2,9 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
 import { useSubmissions } from '@/hooks/useSubmissions';
+import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 const fonts = {
   serif: 'font-serif',
@@ -60,6 +62,7 @@ function StatusStamp({ status }: { status: string }) {
 export default function ApproverSubmissionsPage() {
   const [filter, setFilter] = useState<FilterStatus>('all');
   const { submissions, loading } = useSubmissions();
+  const routesBySubmission = useRoutePreviews(submissions);
 
   const filterCounts = useMemo(() => {
     const counts: Record<FilterStatus, number> = { all: submissions.length, pending: 0, approved: 0, declined: 0 };
@@ -84,7 +87,7 @@ export default function ApproverSubmissionsPage() {
           <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Approver workspace
         </p>
         <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>File registry</h1>
-        <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">Every submission, including ones you've already reviewed.</p>
+        <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">Every submission, including ones you&apos;ve already reviewed.</p>
       </div>
 
       {/* List header */}
@@ -147,15 +150,14 @@ export default function ApproverSubmissionsPage() {
             </div>
           ) : (
             filteredSubmissions.map(sub => {
-              const needsReview = matchesFilter(sub.status, 'pending');
               const ext = sub.file_name?.split('.').at(-1)?.slice(0, 3);
 
               return (
                 <article
                   key={sub.id}
-                  className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+                  className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
                 >
-                  <div className="flex min-w-0 items-center gap-4">
+                  <div className="flex min-w-0 items-center gap-4 sm:col-span-7">
                     <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
                       <span className="text-lg leading-4" aria-hidden="true">▤</span>
                       <span className="mt-1 text-[8px] font-semibold uppercase">{ext || 'File'}</span>
@@ -174,7 +176,7 @@ export default function ApproverSubmissionsPage() {
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+                  <div className="flex flex-wrap items-center gap-2 sm:col-span-5 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
                     <div className="max-md:self-start">
                       <StatusStamp status={sub.status} />
                     </div>
@@ -182,8 +184,21 @@ export default function ApproverSubmissionsPage() {
                       href={`/workflow/approver/file_management/${sub.id}`}
                       className="inline-flex h-10 items-center gap-2 rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full max-md:justify-center"
                     >
-                      {needsReview ? 'Review file' : 'View entry'} <span aria-hidden="true">→</span>
+                      View document <span aria-hidden="true">→</span>
                     </Link>
+                  </div>
+                  <div className="sm:col-span-12">
+                    <WorkflowRoutingPipeline
+                      variant="compact"
+                      submissionStatus={sub.status}
+                      submittedAt={sub.created_at}
+                      routeSteps={routesBySubmission[sub.id]?.steps ?? []}
+                      routeStatus={routesBySubmission[sub.id]?.status ?? null}
+                      routeFinalizedAt={routesBySubmission[sub.id]?.finalizedAt}
+                      selectedOfficeRole={sub.selected_office_role}
+                      auditEvents={[]}
+                      routeLoadFailed={routesBySubmission[sub.id]?.loadFailed ?? false}
+                    />
                   </div>
                 </article>
               );

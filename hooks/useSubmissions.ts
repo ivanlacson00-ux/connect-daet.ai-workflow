@@ -1,7 +1,7 @@
 // src/hooks/useSubmissions.ts
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
 export interface Submission {
@@ -21,19 +21,18 @@ export interface Submission {
   completed_at?: string | null;
   current_stage_due_at?: string | null;
   current_responsible_role?: string | null;
+  selected_office_role?: string | null;
   profiles: {
     email: string;
   };
 }
 
 export function useSubmissions(statusFilter?: string) {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchSubmissions = async () => {
-    setLoading(true);
-
+  const fetchSubmissions = useCallback(async () => {
     let query = supabase
       .from('workflow_submissions')
       .select(`
@@ -54,7 +53,7 @@ export function useSubmissions(statusFilter?: string) {
 
     setSubmissions(data ?? []);
     setLoading(false);
-  };
+  }, [statusFilter, supabase]);
 
   // ✅ Admin: Final Approve
   const adminApprove = async (id: string) => {
@@ -92,7 +91,10 @@ export function useSubmissions(statusFilter?: string) {
   };
 
   useEffect(() => {
-    fetchSubmissions();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void fetchSubmissions();
+    });
 
     const channel = supabase
       .channel('realtime-admin-submissions')
@@ -103,8 +105,11 @@ export function useSubmissions(statusFilter?: string) {
       }, fetchSubmissions)
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [statusFilter]);
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [fetchSubmissions, supabase]);
 
   return { submissions, loading, adminApprove, adminDecline };
 }
