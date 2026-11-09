@@ -21,12 +21,16 @@ export default function ForgotPasswordPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim().toLowerCase() }),
       });
+      if (response.status === 404) {
+        setStatus({ type: 'error', message: "This email doesn't exist." });
+        return;
+      }
       if (!response.ok) {
         throw new Error('Password recovery request failed.');
       }
       setStatus({
         type: 'success',
-        message: 'If an account exists for that address, a password reset email will be sent.',
+        message: 'Password reset email sent. Check your inbox.',
       });
     } catch {
       setStatus({

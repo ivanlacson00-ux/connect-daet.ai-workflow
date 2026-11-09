@@ -80,19 +80,20 @@ export default function LoginPage() {
       return;
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', refreshed.user.id)
-      .single();
+    const { data: role, error: profileError } = await supabase.rpc(
+      'ensure_current_user_profile'
+    );
 
-    if (profileError || !profile) {
-      setError('Could not load your account role. Please try again or contact an administrator.');
+    if (profileError || typeof role !== 'string') {
+      await supabase.auth.signOut();
+      setError(
+        'We could not set up your account profile. Please try again; if the problem continues, contact an administrator to check the database migration and your account role.'
+      );
       setLoading(false);
       return;
     }
 
-    window.location.href = getRoleHomePath(profile.role);
+    window.location.href = getRoleHomePath(role);
   };
 
   const handleResendConfirmation = async () => {

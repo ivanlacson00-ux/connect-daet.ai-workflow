@@ -124,9 +124,12 @@ address on the phone; `localhost` always refers to the device opening the link.
 
 For account verification, enable email confirmations in Supabase
 Authentication settings, set the project Site URL to the production app origin,
-and allow the callback URLs `http://localhost:3000/auth/callback` and
-`https://<your-app-domain>/auth/callback` (plus any additional deployed
-environments). Registration and resend-confirmation links use this callback.
+and allow the callback URLs `http://localhost:3000/auth/callback`,
+`http://<computer-lan-ip>:3000/auth/callback` when testing from another device,
+and `https://<your-app-domain>/auth/callback` (plus any additional deployed
+environments). Set `NEXT_PUBLIC_APP_URL` to the same origin used by the browser;
+Supabase must allow its `/auth/callback` redirect. Registration and
+resend-confirmation links use this callback.
 Supabase Auth remains the source of truth for verification; the application
 blocks unconfirmed accounts from workflow pages and the protected file API.
 Password recovery uses the same `/auth/callback` allowlist and then returns to
