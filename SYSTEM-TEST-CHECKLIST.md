@@ -242,6 +242,38 @@ the middle of a multi-office route.
 - [ ] For each scenario, verify status, current active step, audit history,
       notification recipients, and attachment access.
 
+## 13. QR document retrieval and release
+
+Run this scenario with a completed test request and the municipal office
+assigned to its final approved route step.
+
+- [ ] Confirm a submitter cannot generate a QR code for another user's request
+      or before the request is approved and completed.
+- [ ] Generate a QR code from the submitter's request details; confirm it
+      contains no request details or personal information.
+- [ ] Reload the details page and confirm the same valid QR code is reused.
+- [ ] Download the QR PNG and print it; confirm the reference number and
+      claiming instruction are legible.
+- [ ] Open **Scan QR Code** as the assigned office and scan using a device
+      camera; verify the request, requester, status, office, and current
+      storage location are displayed.
+- [ ] Confirm another office and non-office roles cannot retrieve the request
+      through the scanner or retrieval RPC.
+- [ ] Update department/section, room, cabinet, shelf, drawer, and folder/box;
+      scan again and verify the saved location, receiving date, officer, and
+      latest update.
+- [ ] Confirm the officer must acknowledge in-person identity and authorization
+      verification before recording a handover.
+- [ ] Confirm release records its timestamp and officer, changes the retrieval
+      state to Released without breaking the existing workflow status, and
+      prevents a second release.
+- [ ] Confirm the submitter receives an in-app release notification and, when
+      email delivery is configured, an email notification.
+- [ ] Confirm scans, location changes, and release are present in the request
+      audit history.
+- [ ] Confirm an expired QR code is rejected and the submitter can generate a
+      replacement for an eligible, unreleased request.
+
 ## Results log
 
 | Test/section | Result (Pass/Fail/N/A) | Tracking number or account role | Notes / issue reference |
@@ -255,6 +287,7 @@ the middle of a multi-office route.
 | User management |  |  |  |
 | Archive and retention |  |  |  |
 | Notifications and email |  |  |  |
+| QR retrieval and release |  |  |  |
 | Files and privacy |  |  |  |
 | User experience and errors |  |  |  |
 | End-to-end scenarios |  |  |  |

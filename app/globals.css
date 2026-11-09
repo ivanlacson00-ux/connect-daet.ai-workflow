@@ -36,3 +36,22 @@ body {
   color: var(--foreground);
   font-family: var(--font-inter), sans-serif;
 }
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .retrieval-qr-print,
+  .retrieval-qr-print * {
+    visibility: visible !important;
+  }
+
+  .retrieval-qr-print {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    border: 0;
+    color: #000;
+  }
+}

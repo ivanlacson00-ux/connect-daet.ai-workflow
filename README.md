@@ -110,6 +110,10 @@ branded HTML/text notification emails, document references, recipient
 greetings, and role-appropriate links. Existing workflow notifications,
 including message notifications, are queued automatically; email message
 notices link to the conversation without including private message contents.
+Set `NEXT_PUBLIC_APP_URL` to the canonical application origin used to build
+retrieval QR links. For local testing from a phone, use a LAN-reachable address
+such as `http://<computer-lan-ip>:3000` and open the application through that
+address on the phone; `localhost` always refers to the device opening the link.
 
 For account verification, enable email confirmations in Supabase
 Authentication settings, set the project Site URL to the production app origin,
