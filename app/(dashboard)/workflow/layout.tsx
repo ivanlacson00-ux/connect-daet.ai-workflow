@@ -94,6 +94,7 @@ export default function WorkflowLayout({
     if (isOfficeRole(role)) {
       return [
         { href: getRoleHomePath(role), label: 'Office Dashboard', icon: '▤' },
+        { href: '/workflow/retrieval', label: 'Scan QR Code', icon: '⌗' },
       ];
     }
     if (role === 'admin') {
@@ -103,7 +104,8 @@ export default function WorkflowLayout({
         { href: '/workflow/admin/submissions', label: 'File Submissions', icon: '▤' },
         { href: '/workflow/admin/archive', label: 'Archive Registry', icon: '▥' },
         { href: '/workflow/admin/reports', label: 'Reports', icon: '▥' },
-        { href: '/workflow/admin/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
+        { href: '/workflow/admin/email-monitoring', label: 'Email Monitoring', icon: '✉' },
+        { href: '/workflow/admin/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread },
       ];
     }
     return [];

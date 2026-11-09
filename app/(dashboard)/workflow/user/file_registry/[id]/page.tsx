@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import QRCode from 'qrcode';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
 import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
@@ -57,6 +58,12 @@ interface AuditLog {
   created_at: string;
 }
 
+interface RetrievalQr {
+  retrieval_token: string;
+  expires_at: string;
+  retrieval_status: string;
+}
+
 export default function UserFileDetail() {
   const { id } = useParams();
   const router = useRouter();
@@ -67,10 +74,20 @@ export default function UserFileDetail() {
   const [responseFiles, setResponseFiles] = useState<File[]>([]);
   const [savingResponse, setSavingResponse] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [retrievalQr, setRetrievalQr] = useState<RetrievalQr | null>(null);
+  const [qrImage, setQrImage] = useState('');
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrError, setQrError] = useState('');
+  const [qrOriginWarning, setQrOriginWarning] = useState('');
   const [loading, setLoading] = useState(true);
   const supabase = useMemo(() => createClient(), []);
 
   const fetchSubmission = useCallback(async () => {
+    setLoading(true);
+    setSub(null);
+    setRetrievalQr(null);
+    setQrImage('');
+    setQrError('');
     try {
       const { data, error } = await supabase
         .from('workflow_submissions')
@@ -82,6 +99,23 @@ export default function UserFileDetail() {
       if (data) {
         setSub(data);
         setSenderResponse(data.sender_response || '');
+        if (data.status === 'completed' || data.status === 'approved') {
+          const { data: qrData, error: qrLoadError } = await supabase.rpc(
+            'get_workflow_retrieval_qr',
+            { target_submission_id: id }
+          );
+          if (qrLoadError) {
+            console.error('Retrieval QR load failed:', qrLoadError.message);
+            setQrError('Could not load this request’s retrieval QR code. Please refresh and try again.');
+          } else {
+            const existingQr = Array.isArray(qrData) ? qrData[0] : qrData;
+            setRetrievalQr(existingQr ?? null);
+            setQrError('');
+          }
+        } else {
+          setRetrievalQr(null);
+          setQrError('');
+        }
         const [
           { data: attachmentRows, error: attachmentError },
           { data: logs, error: logsError },
@@ -110,6 +144,87 @@ export default function UserFileDetail() {
   useEffect(() => {
     void fetchSubmission();
   }, [fetchSubmission]);
+
+  useEffect(() => {
+    let active = true;
+    if (!retrievalQr || retrievalQr.retrieval_status !== 'active') {
+      setQrImage('');
+      return;
+    }
+
+    const appOrigin = process.env.NEXT_PUBLIC_APP_URL?.trim() || window.location.origin;
+    let retrievalUrl: URL;
+    try {
+      retrievalUrl = new URL('/workflow/retrieval', appOrigin);
+      if (!['http:', 'https:'].includes(retrievalUrl.protocol)) {
+        throw new Error('The application URL must use HTTP or HTTPS.');
+      }
+    } catch (error) {
+      console.error('Retrieval QR application URL is invalid:', error);
+      if (active) setQrError('The QR code could not be generated because the application URL is invalid. Configure NEXT_PUBLIC_APP_URL.');
+      return () => {
+        active = false;
+      };
+    }
+
+    const hostname = retrievalUrl.hostname.toLowerCase();
+    const isLocalHost = hostname === 'localhost'
+      || hostname === '127.0.0.1'
+      || hostname === '0.0.0.0'
+      || hostname === '::1';
+    if (active) {
+      setQrOriginWarning(isLocalHost
+        ? 'This QR points to localhost and will only open on this computer. Set NEXT_PUBLIC_APP_URL to an address officers can reach, then refresh this page.'
+        : '');
+    }
+    retrievalUrl.hash = new URLSearchParams({ token: retrievalQr.retrieval_token }).toString();
+
+    QRCode.toDataURL(retrievalUrl.toString(), {
+      errorCorrectionLevel: 'M',
+      margin: 4,
+      width: 420,
+    }).then((dataUrl) => {
+      if (active) setQrImage(dataUrl);
+    }).catch((error: unknown) => {
+      console.error('Retrieval QR rendering failed:', error);
+      if (active) setQrError('Could not render the QR code. Please try again.');
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [retrievalQr]);
+
+  const generateRetrievalQr = async () => {
+    if (!sub) return;
+    setQrLoading(true);
+    setQrError('');
+    try {
+      const { data, error } = await supabase.rpc('create_workflow_retrieval_qr', {
+        target_submission_id: sub.id,
+      });
+      if (error) throw error;
+
+      const createdQr = Array.isArray(data) ? data[0] : data;
+      if (!createdQr?.retrieval_token || !createdQr?.expires_at) {
+        throw new Error('The system did not return a valid retrieval QR code.');
+      }
+      setRetrievalQr(createdQr);
+    } catch (error) {
+      console.error('Retrieval QR generation failed:', error);
+      setQrError(error instanceof Error ? error.message : 'Could not generate the QR code. Please try again.');
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  const downloadRetrievalQr = () => {
+    if (!qrImage || !sub) return;
+    const link = document.createElement('a');
+    link.href = qrImage;
+    link.download = `${sub.tracking_number || 'request'}-retrieval-qr.png`;
+    link.click();
+  };
 
   const submitRequirementsResponse = async () => {
     if (!sub || !senderResponse.trim()) {
@@ -261,6 +376,9 @@ export default function UserFileDetail() {
       case 'ROUTE_RETURNED_TO_ADMIN': return 'All routed offices approved; returned to Admin';
       case 'ROUTE_REQUIREMENTS_REQUESTED': return 'Municipal office requested additional requirements';
       case 'WORKFLOW_COMPLETED': return 'Request completed';
+      case 'RETRIEVAL_QR_SCANNED': return 'Retrieval QR code scanned';
+      case 'RETRIEVAL_LOCATION_UPDATED': return 'Physical storage location updated';
+      case 'DOCUMENT_RELEASED': return 'Document released to requester';
       default: return actionType.replaceAll('_', ' ').toLowerCase();
     }
   };
@@ -345,6 +463,79 @@ export default function UserFileDetail() {
               <p><span className="text-gray-400">Status:</span> {statusConfig.label}</p>
               <p><span className="text-gray-400">Submitted:</span> {new Date(sub.created_at).toLocaleString()}</p>
             </div>
+          </section>
+
+          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+            <h2 className="mb-1 text-sm font-semibold text-warm-text">Document retrieval QR code</h2>
+            <p className="mb-4 text-[11px] leading-relaxed text-muted-text">
+              Generate a secure QR code to present when claiming your approved document.
+            </p>
+            {retrievalQr?.retrieval_status === 'released' ? (
+              <p className="rounded-xl bg-approved-bg px-3 py-3 text-xs font-semibold text-approved-text">
+                This document has been released.
+              </p>
+            ) : !isApproved ? (
+              <p className="rounded-xl bg-sidebar px-3 py-3 text-xs text-muted-text">
+                A retrieval QR code will be available after the request is approved and completed.
+              </p>
+            ) : retrievalQr?.retrieval_status === 'active' ? (
+              <div className="retrieval-qr-print rounded-xl border border-warm-border bg-white p-4 text-center">
+                {qrImage ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={qrImage}
+                    alt={`Retrieval QR code for ${sub.tracking_number}`}
+                    className="mx-auto h-64 w-64"
+                  />
+                ) : (
+                  <p className="py-12 text-xs text-muted-text">Preparing QR code...</p>
+                )}
+                <p className="mt-2 text-sm font-bold text-warm-text">
+                  Reference number: {sub.tracking_number}
+                </p>
+                <p className="mt-2 text-xs text-warm-text">
+                  Present this QR code to the authorized officer when claiming your document.
+                </p>
+                <p className="mt-2 text-[10px] text-muted-text">
+                  Valid until {new Date(retrievalQr.expires_at).toLocaleDateString()}
+                </p>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void generateRetrievalQr()}
+                disabled={qrLoading}
+                className="inline-flex h-10 w-full items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {qrLoading ? 'Generating QR code...' : 'Generate QR Code'}
+              </button>
+            )}
+            {retrievalQr?.retrieval_status === 'active' && (
+              <div className="mt-4 flex gap-2 print:hidden">
+                <button
+                  type="button"
+                  onClick={downloadRetrievalQr}
+                  disabled={!qrImage}
+                  className="inline-flex h-10 flex-1 items-center justify-center rounded-full border border-warm-border px-4 text-xs font-semibold text-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Download PNG
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  disabled={!qrImage}
+                  className="inline-flex h-10 flex-1 items-center justify-center rounded-full border border-warm-border px-4 text-xs font-semibold text-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Print QR Code
+                </button>
+              </div>
+            )}
+            {qrError && <p role="alert" className="mt-3 text-xs text-rejected-text">{qrError}</p>}
+            {qrOriginWarning && (
+              <p role="status" className="mt-3 rounded-xl bg-pending-bg px-3 py-2 text-[11px] leading-relaxed text-pending-text">
+                {qrOriginWarning}
+              </p>
+            )}
           </section>
 
           {/* Context Card */}
