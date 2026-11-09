@@ -2,21 +2,11 @@ import { createServerClient } from '@supabase/ssr';
 import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 
-const recoveryRequestCookieName = 'docuflow-password-recovery-request';
-
 export async function GET(request: NextRequest) {
   const callbackCode = request.nextUrl.searchParams.get('code');
-  const isPasswordRecovery = request.nextUrl.searchParams.get('next') === '/reset-password'
-    && Boolean(request.cookies.get(recoveryRequestCookieName)?.value);
+  const isPasswordRecovery = request.nextUrl.searchParams.get('next') === '/reset-password';
   const redirectUrl = new URL('/login', request.url);
   const response = NextResponse.redirect(redirectUrl);
-  response.cookies.set(recoveryRequestCookieName, '', {
-    httpOnly: true,
-    secure: request.nextUrl.protocol === 'https:',
-    sameSite: 'lax',
-    path: '/auth/callback',
-    maxAge: 0,
-  });
 
   if (!callbackCode) {
     if (isPasswordRecovery) {
