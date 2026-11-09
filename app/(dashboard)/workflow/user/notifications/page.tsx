@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 
@@ -42,31 +42,46 @@ const getNotificationContent = (status: string) => {
 
 const isNewUpdate = (updatedAt: string) => Date.now() - new Date(updatedAt).getTime() < 300000;
 
+interface UserNotification {
+  id: string;
+  submission_id: string;
+  notification_id: string;
+  notification_title?: string;
+  notification_message?: string;
+  notification_status?: string;
+  status?: string;
+  file_name?: string | null;
+  tracking_number?: string | null;
+  requester_email?: string | null;
+  description?: string | null;
+  updated_at: string;
+}
+
+const getNotificationStatus = (eventType: string, currentStatus: string) => {
+  switch (eventType) {
+    case 'SUBMITTED':
+      return 'pending';
+    case 'VERIFICATION_PASSED':
+      return 'pending_admin';
+    case 'RETURNED_FOR_CORRECTION':
+      return 'declined_by_approver';
+    case 'FINAL_APPROVAL':
+      return 'approved';
+    case 'FINAL_REJECTION':
+      return 'declined_by_admin';
+    case 'WORKFLOW_COMPLETED':
+      return 'completed';
+    default:
+      return currentStatus;
+  }
+};
+
 export default function NotificationsPage() {
-  const supabase = createClient();
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const supabase = useMemo(() => createClient(), []);
+  const [notifications, setNotifications] = useState<UserNotification[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const getNotificationStatus = (eventType: string, currentStatus: string) => {
-    switch (eventType) {
-      case 'SUBMITTED':
-        return 'pending';
-      case 'VERIFICATION_PASSED':
-        return 'pending_admin';
-      case 'RETURNED_FOR_CORRECTION':
-        return 'declined_by_approver';
-      case 'FINAL_APPROVAL':
-        return 'approved';
-      case 'FINAL_REJECTION':
-        return 'declined_by_admin';
-      case 'WORKFLOW_COMPLETED':
-        return 'completed';
-      default:
-        return currentStatus;
-    }
-  };
-
-  const fetchNotifications = async () => {
+  const fetchNotifications = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
@@ -78,12 +93,13 @@ export default function NotificationsPage() {
       .limit(20);
 
     if (data) {
-      const latestBySubmission = new Map<string, any>();
+      const latestBySubmission = new Map<string, UserNotification>();
       data.forEach((notification) => {
         if (!latestBySubmission.has(notification.submission_id)) {
           latestBySubmission.set(notification.submission_id, {
             ...notification.workflow_submissions,
             id: notification.submission_id,
+            submission_id: notification.submission_id,
             notification_id: notification.id,
             notification_title: notification.title,
             notification_message: notification.message,
@@ -104,10 +120,13 @@ export default function NotificationsPage() {
         .is('read_at', null);
     }
     setLoading(false);
-  };
+  }, [supabase]);
 
   useEffect(() => {
-    fetchNotifications();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void fetchNotifications();
+    });
 
     const channel = supabase
       .channel('schema-db-changes')
@@ -123,9 +142,10 @@ export default function NotificationsPage() {
       .subscribe();
 
     return () => {
+      active = false;
       supabase.removeChannel(channel);
     };
-  }, [supabase]);
+  }, [fetchNotifications, supabase]);
 
   if (loading) {
     return (
@@ -178,10 +198,8 @@ export default function NotificationsPage() {
 
                 <ul className="divide-y divide-warm-border overflow-hidden rounded-2xl border border-warm-border bg-card">
                   {group.items.map((note) => {
-                    const content = getNotificationContent(note.status);
+                    const content = getNotificationContent(note.status ?? 'unknown');
                     const isNew = isNewUpdate(note.updated_at);
-                    const isRejected = note.status.includes('declined') || note.status.includes('rejected');
-                    const feedback = isRejected ? (note.admin_comments || note.approver_comments) : null;
 
                     return (
                       <li
@@ -207,15 +225,9 @@ export default function NotificationsPage() {
                               )}
                             </div>
 
-                            {feedback ? (
-                              <p className="mt-2 line-clamp-2 border-l-2 border-rejected-bg pl-3 font-serif text-sm leading-relaxed text-warm-text">
-                                "{feedback}"
-                              </p>
-                            ) : (
-                              <p className="mt-1.5 max-w-xl truncate text-xs text-muted-text">
-                                {note.description || "No description provided."}
-                              </p>
-                            )}
+                            <p className="mt-1.5 max-w-xl truncate text-xs text-muted-text">
+                              {note.description || "No description provided."}
+                            </p>
                           </div>
                         </div>
 
@@ -236,7 +248,7 @@ export default function NotificationsPage() {
 
         <footer className="mt-8 border-t border-warm-border pt-6">
           <p className="text-center text-[11px] text-muted-text">
-            You're all caught up.
+            You&apos;re all caught up.
           </p>
         </footer>
       </div>

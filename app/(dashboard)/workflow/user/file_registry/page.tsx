@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
+import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
+import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 // ─── Styles & Fonts (synced with dashboard) ──────────────────────────────────
 const fonts = {
@@ -40,13 +42,23 @@ interface PreviewSubmission {
   file_type?: string | null;
 }
 
+interface FileSubmission extends PreviewSubmission {
+  id: string;
+  created_at: string;
+  status: string;
+  category?: string | null;
+  file_size?: number | null;
+  selected_office_role?: string | null;
+}
+
 export default function UserFileRegistry() {
-  const [submissions, setSubmissions] = useState<any[]>([]);
+  const [submissions, setSubmissions] = useState<FileSubmission[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<Filter>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [previewFile, setPreviewFile] = useState<PreviewSubmission | null>(null);
   const supabase = useMemo(() => createClient(), []);
+  const routesBySubmission = useRoutePreviews(submissions);
 
   useEffect(() => {
     if (!previewFile) return;
@@ -71,7 +83,8 @@ export default function UserFileRegistry() {
           .order('created_at', { ascending: false });
 
         if (error) console.error('Fetch error:', error);
-        setSubmissions(data || []);
+        const files = data || [];
+        setSubmissions(files);
       } catch (err) {
         console.error('Failed to load files:', err);
       } finally {
@@ -153,79 +166,96 @@ export default function UserFileRegistry() {
             <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
               <p className={`${fonts.serif} text-2xl text-warm-text`}>Nothing here</p>
               <p className="mt-2 text-xs text-muted-text">
-                No files found for "{searchQuery || activeFilter}"
+                No files found for &quot;{searchQuery || activeFilter}&quot;
               </p>
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredSubmissions.map((file) => (
-                <article
-                  key={file.id}
-                  className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
-                >
-                  <div className="flex min-w-0 flex-1 items-center gap-4">
-                    <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
-                      <span className="text-lg leading-4" aria-hidden="true">▤</span>
-                      <span className="mt-1 text-[8px] font-semibold uppercase">{file.file_type?.split('/').at(-1)?.slice(0, 3) || 'File'}</span>
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                        <span className="rounded-md bg-clay-soft px-2 py-1 text-[10px] font-medium text-clay">
-                          {file.category || "General"}
-                        </span>
-                        <span className="text-[11px] text-muted-text">
-                          ID: {String(file.id).slice(0, 8)}
-                        </span>
+              {filteredSubmissions.map((file) => {
+                const route = routesBySubmission[file.id];
+                return (
+                  <article
+                    key={file.id}
+                    className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+                  >
+                    <div className="flex min-w-0 items-center gap-4 sm:col-span-8">
+                      <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
+                        <span className="text-lg leading-4" aria-hidden="true">▤</span>
+                        <span className="mt-1 text-[8px] font-semibold uppercase">{file.file_type?.split('/').at(-1)?.slice(0, 3) || 'File'}</span>
                       </div>
 
-                      <h3 className="truncate text-sm font-semibold text-warm-text group-hover:text-clay">
-                        {file.file_name}
-                      </h3>
-
-                      <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1">
-                        <div className="flex flex-col">
-                          <span className="text-[10px] font-medium text-muted-text">Date Uploaded</span>
-                          <span className="text-[11px] text-warm-text">{new Date(file.created_at).toLocaleDateString()}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                          <span className="rounded-md bg-clay-soft px-2 py-1 text-[10px] font-medium text-clay">
+                            {file.category || 'General'}
+                          </span>
+                          <span className="text-[11px] text-muted-text">
+                            ID: {String(file.id).slice(0, 8)}
+                          </span>
                         </div>
-                        {file.file_size ? (
-                          <div className="flex flex-col border-l border-warm-border pl-5">
-                            <span className="text-[10px] font-medium text-muted-text">Size</span>
-                            <span className="text-[11px] text-warm-text">{(file.file_size / 1024).toFixed(1)} KB</span>
+
+                        <h3 className="truncate text-sm font-semibold text-warm-text group-hover:text-clay">
+                          {file.file_name}
+                        </h3>
+
+                        <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1">
+                          <div className="flex flex-col">
+                            <span className="text-[10px] font-medium text-muted-text">Date Uploaded</span>
+                            <span className="text-[11px] text-warm-text">{new Date(file.created_at).toLocaleDateString()}</span>
                           </div>
-                        ) : null}
+                          {file.file_size ? (
+                            <div className="flex flex-col border-l border-warm-border pl-5">
+                              <span className="text-[10px] font-medium text-muted-text">Size</span>
+                              <span className="text-[11px] text-warm-text">{(file.file_size / 1024).toFixed(1)} KB</span>
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="flex flex-wrap items-center gap-3 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
-                    <div className="flex flex-col items-start gap-1.5 sm:items-end max-md:self-start">
-                      <span className="text-[10px] font-medium text-muted-text">Current Status</span>
-                      <StatusBadge status={file.status} />
+                    <div className="flex flex-wrap items-center gap-3 sm:col-span-4 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+                      <div className="flex flex-col items-start gap-1.5 sm:items-end max-md:self-start">
+                        <span className="text-[10px] font-medium text-muted-text">Current Status</span>
+                        <StatusBadge status={file.status} />
+                      </div>
+
+                      <div className="flex items-center gap-2 max-md:w-full max-md:flex-col max-md:items-stretch">
+                        <button
+                          onClick={() => setPreviewFile(file)}
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-warm-border text-warm-text transition-colors hover:bg-sidebar max-md:h-11 max-md:w-full"
+                          title="Quick Preview"
+                          aria-label="Quick Preview"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+                          </svg>
+                        </button>
+
+                        <Link
+                          href={`/workflow/user/file_registry/${file.id}`}
+                          className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full"
+                        >
+                          View document <span aria-hidden="true">→</span>
+                        </Link>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2 max-md:w-full max-md:flex-col max-md:items-stretch">
-                      <button
-                        onClick={() => setPreviewFile(file)}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-warm-border text-warm-text transition-colors hover:bg-sidebar max-md:h-11 max-md:w-full"
-                        title="Quick Preview"
-                        aria-label="Quick Preview"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
-                        </svg>
-                      </button>
-
-                      <Link
-                        href={`/workflow/user/file_registry/${file.id}`}
-                        className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full"
-                      >
-                        View Details <span aria-hidden="true">→</span>
-                      </Link>
+                    <div className="sm:col-span-12">
+                      <WorkflowRoutingPipeline
+                        variant="compact"
+                        submissionStatus={file.status}
+                        submittedAt={file.created_at}
+                        routeSteps={route?.steps ?? []}
+                        routeStatus={route?.status ?? null}
+                        routeFinalizedAt={route?.finalizedAt}
+                        selectedOfficeRole={file.selected_office_role}
+                        auditEvents={[]}
+                        routeLoadFailed={route?.loadFailed ?? false}
+                      />
                     </div>
-                  </div>
-                </article>
-              ))}
+                  </article>
+                );
+              })}
             </div>
           )}
         </div>

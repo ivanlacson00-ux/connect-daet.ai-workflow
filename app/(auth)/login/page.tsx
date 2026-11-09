@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
+import { getRoleHomePath } from '@/lib/workflow/offices';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -24,11 +25,14 @@ export default function LoginPage() {
     const params = new URLSearchParams(window.location.search);
 
     if (params.get('verified') === '1') {
+      // Capture the one-time callback message before removing its query parameter.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setVerified(true);
       params.delete('verified');
     }
 
     if (params.get('verification') === 'failed') {
+      // Capture the one-time callback message before removing its query parameter.
       setError('Email confirmation could not be completed. Please request a new confirmation email and try again.');
       params.delete('verification');
     }
@@ -61,20 +65,23 @@ export default function LoginPage() {
       return;
     }
 
-    const role = refreshed.user.app_metadata?.role;
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', refreshed.user.id)
+      .single();
 
-    // Loading stays on while the browser redirects
-    if (role === 'admin') {
-      window.location.href = '/workflow/admin';
-    } else if (role === 'approver') {
-      window.location.href = '/workflow/approver';
-    } else {
-      window.location.href = '/workflow/user';
+    if (profileError || !profile) {
+      setError('Could not load your account role. Please try again or contact an administrator.');
+      setLoading(false);
+      return;
     }
+
+    window.location.href = getRoleHomePath(profile.role);
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-cream px-4 py-12">
+    <div className="workflow-system flex min-h-screen items-center justify-center bg-cream px-4 py-12">
       <div className="w-full max-w-[380px]">
         {/* Identity */}
         <div className="mb-8 flex flex-col items-center text-center max-md:mb-6">

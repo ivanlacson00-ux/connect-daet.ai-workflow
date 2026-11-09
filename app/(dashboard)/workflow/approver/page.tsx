@@ -2,15 +2,18 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import type { User } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
-import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
+import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
+import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
+import { useRoutePreviews, type WorkflowRoutePreview } from '@/lib/workflow/useRoutePreviews';
 
 // ─── Styles & Fonts ──────────────────────────────────────────────────────────
 const fonts = {
   serif: 'font-serif',
 };
 
-interface Submission {
+interface Submission extends PreviewableFile {
   id: string | number;
   file_name: string;
   file_url: string;
@@ -20,9 +23,8 @@ interface Submission {
   status: string;
   user_id: string;
   submitter_email?: string;
-  approver_comments?: string | null;
-  admin_comments?: string | null;
   created_at: string;
+  selected_office_role?: string | null;
 }
 
 // ─── Timeout helper (stops a hanging request from freezing the page) ─────────
@@ -38,7 +40,7 @@ const withTimeout = <T,>(promise: PromiseLike<T>, ms: number, label: string): Pr
 const QUEUE_STATUSES = ['pending', 'pending_approver'];
 // Approving a file passes it to the admin, so 'pending_admin' counts as approved here
 const APPROVED_STATUSES = ['pending_admin', 'approved', 'completed'];
-const DECLINED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'rejected'];
+const DECLINED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'declined_by_office', 'declined_by_mayor', 'rejected'];
 
 // ─── Filters ─────────────────────────────────────────────────────────────────
 type Filter = 'all' | 'queue' | 'approved' | 'declined';
@@ -72,9 +74,16 @@ function StatusStamp({ status }: { status: string }) {
       case 'pending_approver':
         return { label: 'Pending', styles: 'bg-pending-bg text-pending-text' };
       case 'pending_admin':
+        return { label: 'Administrative review', styles: 'bg-review-bg text-review-text' };
+      case 'pending_office':
+        return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
+      case 'pending_mayor':
+        return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
+      case 'returned_for_requirements':
+        return { label: 'Requirements requested', styles: 'bg-pending-bg text-pending-text' };
       case 'approved':
       case 'completed':
-        return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
+        return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
       case 'declined_by_approver':
       case 'declined_by_admin':
       case 'rejected':
@@ -95,15 +104,20 @@ function StatusStamp({ status }: { status: string }) {
 }
 
 // ─── Individual Card Component ───────────────────────────────────────────────
-function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Submission) => void }) {
+function SubmissionCard({
+  sub,
+  onPreview,
+  route,
+}: {
+  sub: Submission;
+  onPreview: (s: Submission) => void;
+  route?: WorkflowRoutePreview;
+}) {
   const router = useRouter();
-  const needsReview = matchesFilter(sub.status, 'queue');
-  const isDeclined = matchesFilter(sub.status, 'declined');
-  const feedback = sub.admin_comments || sub.approver_comments;
 
   return (
-    <article className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
-      <div className="flex min-w-0 items-center gap-4">
+    <article className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
+      <div className="flex min-w-0 items-center gap-4 sm:col-span-7">
         <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
           <span className="text-lg leading-4" aria-hidden="true">▤</span>
           <span className="mt-1 text-[8px] font-semibold uppercase">
@@ -130,7 +144,7 @@ function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Su
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+      <div className="flex flex-wrap items-center gap-2 sm:col-span-5 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
         <div className="max-md:self-start">
           <StatusStamp status={sub.status} />
         </div>
@@ -144,17 +158,22 @@ function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Su
           onClick={() => router.push(`/workflow/approver/file_management/${sub.id}`)}
           className="inline-flex h-10 items-center gap-2 rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text max-md:h-11 max-md:w-full max-md:justify-center"
         >
-          {needsReview ? 'Review file' : 'View entry'} <span aria-hidden="true">→</span>
+          View document <span aria-hidden="true">→</span>
         </button>
       </div>
-
-      {/* Decline feedback panel */}
-      {isDeclined && feedback && (
-        <div className="rounded-xl border border-rejected-bg bg-rejected-bg/50 p-5 sm:basis-full">
-          <div className="mb-2 text-xs font-semibold text-rejected-text">Decline reason</div>
-          <p className="font-serif text-base leading-relaxed text-warm-text">"{feedback}"</p>
-        </div>
-      )}
+      <div className="sm:col-span-12">
+        <WorkflowRoutingPipeline
+          variant="compact"
+          submissionStatus={sub.status}
+          submittedAt={sub.created_at}
+          routeSteps={route?.steps ?? []}
+          routeStatus={route?.status ?? null}
+          routeFinalizedAt={route?.finalizedAt}
+          selectedOfficeRole={sub.selected_office_role}
+          auditEvents={[]}
+          routeLoadFailed={route?.loadFailed ?? false}
+        />
+      </div>
     </article>
   );
 }
@@ -163,9 +182,12 @@ function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Su
 export default function ApproverDashboard() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [previewFile, setPreviewFile] = useState<Submission | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
+  const routesBySubmission = useRoutePreviews(
+    submissions.map((submission) => ({ ...submission, id: String(submission.id) }))
+  );
 
   // Stable client so fetchSubmissions doesn't re-run every render
   const supabase = useMemo(() => createClient(), []);
@@ -317,7 +339,12 @@ export default function ApproverDashboard() {
               </div>
             ) : (
               filteredSubmissions.map(sub => (
-                <SubmissionCard key={sub.id} sub={sub} onPreview={setPreviewFile} />
+                <SubmissionCard
+                  key={sub.id}
+                  sub={sub}
+                  onPreview={setPreviewFile}
+                  route={routesBySubmission[String(sub.id)]}
+                />
               ))
             )}
           </div>
@@ -334,7 +361,7 @@ export default function ApproverDashboard() {
             <div className="flex shrink-0 items-center gap-2 sm:gap-4">
               <button
                 onClick={async () => {
-                  const url = await getFileUrl(supabase, previewFile as any);
+                  const url = await getFileUrl(supabase, previewFile);
                   await downloadFile(url, previewFile.file_name);
                 }}
                 aria-label="Download preview file"
@@ -357,7 +384,7 @@ export default function ApproverDashboard() {
 
           <div className="flex flex-1 items-center justify-center overflow-hidden bg-cream p-3 sm:p-8 max-md:bg-card max-md:p-0">
             <div className="relative flex h-full w-full max-w-6xl items-center justify-center overflow-hidden rounded-xl border border-warm-border bg-card shadow-xl max-md:max-w-none max-md:rounded-none max-md:border-0 max-md:shadow-none">
-              <FilePreview file={previewFile as any} />
+              <FilePreview file={previewFile} />
             </div>
           </div>
         </div>

@@ -1,7 +1,7 @@
 // src/hooks/useUsers.ts
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
 export interface UserProfile {
@@ -12,19 +12,18 @@ export interface UserProfile {
 }
 
 export function useUsers() {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchUsers = async () => {
-    setLoading(true);
+  const fetchUsers = useCallback(async () => {
     const { data } = await supabase
       .from('profiles')
       .select('*')
       .order('created_at', { ascending: false });
     setUsers(data ?? []);
     setLoading(false);
-  };
+  }, [supabase]);
 
   // ✅ Update role in profiles (trigger will sync to app_metadata)
   const updateRole = async (userId: string, newRole: 'user' | 'approver' | 'admin') => {
@@ -42,7 +41,10 @@ export function useUsers() {
   };
 
   useEffect(() => {
-    fetchUsers();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void fetchUsers();
+    });
 
     const channel = supabase
       .channel('realtime-users')
@@ -53,8 +55,11 @@ export function useUsers() {
       }, fetchUsers)
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, []);
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [fetchUsers, supabase]);
 
   return { users, loading, updateRole };
 }

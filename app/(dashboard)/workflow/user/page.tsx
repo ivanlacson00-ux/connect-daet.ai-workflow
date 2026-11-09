@@ -2,8 +2,11 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import type { User } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
-import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
+import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
+import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
+import { useRoutePreviews, type WorkflowRoutePreview } from '@/lib/workflow/useRoutePreviews';
 
 // ─── Styles & Fonts ──────────────────────────────────────────────────────────
 const fonts = {
@@ -11,7 +14,7 @@ const fonts = {
   mono: "font-sans text-xs",
 };
 
-interface Submission {
+interface Submission extends PreviewableFile {
   id: string;
   tracking_number: string;
   file_name: string;
@@ -21,6 +24,7 @@ interface Submission {
   file_type: string;
   status: string;
   category?: string;
+  selected_office_role?: string | null;
   approver_comments: string;
   admin_comments: string;
   created_at: string;
@@ -38,9 +42,9 @@ const withTimeout = <T,>(promise: PromiseLike<T>, ms: number, label: string): Pr
 
 // ─── Status groups ───────────────────────────────────────────────────────────
 // Add any other status values from your database to these lists
-const PENDING_STATUSES = ['pending', 'pending_approver', 'pending_admin'];
+const PENDING_STATUSES = ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'returned_for_requirements'];
 const COMPLETED_STATUSES = ['approved', 'completed'];
-const REJECTED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'rejected'];
+const REJECTED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'declined_by_office', 'declined_by_mayor', 'rejected'];
 
 // ─── Filters ─────────────────────────────────────────────────────────────────
 type Filter = 'all' | 'pending' | 'completed' | 'rejected';
@@ -75,11 +79,19 @@ function StatusStamp({ status }: { status: string }) {
         return { label: 'Pending', styles: 'bg-pending-bg text-pending-text' };
       case 'pending_admin':
         return { label: 'Under review', styles: 'bg-review-bg text-review-text' };
+      case 'pending_office':
+        return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
+      case 'pending_mayor':
+        return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
+      case 'returned_for_requirements':
+        return { label: 'Additional requirements requested', styles: 'bg-pending-bg text-pending-text' };
       case 'approved':
       case 'completed':
         return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
       case 'declined_by_approver':
       case 'declined_by_admin':
+      case 'declined_by_office':
+      case 'declined_by_mayor':
       case 'rejected':
         return { label: 'Rejected', styles: 'bg-rejected-bg text-rejected-text' };
       default:
@@ -98,13 +110,20 @@ function StatusStamp({ status }: { status: string }) {
 }
 
 // ─── Individual Card Component ───────────────────────────────────────────────
-function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Submission) => void }) {
+function SubmissionCard({
+  sub,
+  onPreview,
+  route,
+}: {
+  sub: Submission;
+  onPreview: (s: Submission) => void;
+  route?: WorkflowRoutePreview;
+}) {
   const router = useRouter();
-  const isRejected = matchesFilter(sub.status, 'rejected');
 
   return (
-    <article className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
-      <div className="flex min-w-0 items-center gap-4">
+    <article className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
+      <div className="flex min-w-0 items-center gap-4 sm:col-span-7">
         <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
           <span className="text-lg leading-4" aria-hidden="true">▤</span>
           <span className="mt-1 text-[8px] font-semibold uppercase">{sub.file_type?.split('/').at(-1)?.slice(0, 3) || 'File'}</span>
@@ -121,7 +140,7 @@ function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Su
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+      <div className="flex flex-wrap items-center gap-2 sm:col-span-5 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
         <div className="max-md:self-start">
           <StatusStamp status={sub.status} />
         </div>
@@ -138,16 +157,19 @@ function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Su
           View full log <span aria-hidden="true">→</span>
         </button>
       </div>
-
-      {/* Rejection Feedback Panel */}
-      {isRejected && (sub.approver_comments || sub.admin_comments) && (
-        <div className="mt-5 rounded-xl border border-rejected-bg bg-rejected-bg/50 p-5">
-          <div className="mb-2 text-xs font-semibold text-rejected-text">Official feedback</div>
-          <p className="font-serif text-base leading-relaxed text-warm-text">
-            "{sub.admin_comments || sub.approver_comments}"
-          </p>
-        </div>
-      )}
+      <div className="sm:col-span-12">
+        <WorkflowRoutingPipeline
+          variant="compact"
+          submissionStatus={sub.status}
+          submittedAt={sub.created_at}
+          routeSteps={route?.steps ?? []}
+          routeStatus={route?.status ?? null}
+          routeFinalizedAt={route?.finalizedAt}
+          selectedOfficeRole={sub.selected_office_role}
+          auditEvents={[]}
+          routeLoadFailed={route?.loadFailed ?? false}
+        />
+      </div>
     </article>
   );
 }
@@ -156,9 +178,10 @@ function SubmissionCard({ sub, onPreview }: { sub: Submission; onPreview: (s: Su
 export default function WorkflowDashboard() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [previewFile, setPreviewFile] = useState<Submission | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
+  const routesBySubmission = useRoutePreviews(submissions);
 
   // Stable client so fetchAll doesn't re-run every render
   const supabase = useMemo(() => createClient(), []);
@@ -315,7 +338,12 @@ export default function WorkflowDashboard() {
               </div>
             ) : (
               filteredSubmissions.map(sub => (
-                <SubmissionCard key={sub.id} sub={sub} onPreview={setPreviewFile} />
+                <SubmissionCard
+                  key={sub.id}
+                  sub={sub}
+                  onPreview={setPreviewFile}
+                  route={routesBySubmission[sub.id]}
+                />
               ))
             )}
           </div>
