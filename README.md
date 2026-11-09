@@ -66,9 +66,16 @@ cp .env.example .env
    A rejection is archived, and the sender must submit a new request.
 
 The three office roles are Municipal Treasurer's Office, Mayor's Office, and
-Sangguniang Bayan Office. Assign accounts from the Admin workspace's User
-management page. Workflow decisions are recorded in the document history, and
-sender milestone notifications are delivered in-app and by email.
+Sangguniang Bayan Office. The Admin workspace dashboard monitors accounts in
+role-based groups and displays submission status and document details, including
+file previews. Administrators can create accounts for the approver and office
+roles from the User management page. Each account gets a one-time verification
+link that the administrator can copy or open in a prefilled Gmail message. After
+the official verifies the invitation and sets a password, they are sent to their
+assigned role dashboard. The server restricts account creation to administrators
+and those official roles.
+Workflow decisions are recorded in the document history, and sender milestone
+notifications are delivered in-app and by email.
 
 Apply the migrations in `supabase/migrations/` in filename order to enable the
 office roles, workflow transitions, attachment access, archive behavior, and

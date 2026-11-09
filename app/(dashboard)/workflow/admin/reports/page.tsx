@@ -118,7 +118,13 @@ export default function ReportsPage() {
   }, [supabase]);
 
   useEffect(() => {
-    fetchReport();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void fetchReport();
+    });
+    return () => {
+      active = false;
+    };
   }, [fetchReport]);
 
   const filteredRows = useMemo(() => rows.filter((row) => {

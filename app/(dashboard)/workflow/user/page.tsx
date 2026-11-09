@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import type { User } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
-import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
+import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
 import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
 import { useRoutePreviews, type WorkflowRoutePreview } from '@/lib/workflow/useRoutePreviews';
 
@@ -13,7 +14,7 @@ const fonts = {
   mono: "font-sans text-xs",
 };
 
-interface Submission {
+interface Submission extends PreviewableFile {
   id: string;
   tracking_number: string;
   file_name: string;
@@ -121,7 +122,7 @@ function SubmissionCard({
   const router = useRouter();
 
   return (
-    <article className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
+    <article className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
       <div className="flex min-w-0 items-center gap-4 sm:col-span-7">
         <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
           <span className="text-lg leading-4" aria-hidden="true">▤</span>
@@ -177,7 +178,7 @@ function SubmissionCard({
 export default function WorkflowDashboard() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [previewFile, setPreviewFile] = useState<Submission | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const routesBySubmission = useRoutePreviews(submissions);

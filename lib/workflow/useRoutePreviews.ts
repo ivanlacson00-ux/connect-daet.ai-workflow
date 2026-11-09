@@ -38,12 +38,7 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
     const submissionIds = submissionKey ? submissionKey.split(',') : [];
 
     if (submissionIds.length === 0) {
-      setRoutesBySubmission((current) =>
-        Object.keys(current).length === 0 ? current : {}
-      );
-      return () => {
-        active = false;
-      };
+      return;
     }
 
     const loadRoutes = async () => {
@@ -100,5 +95,10 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
     };
   }, [submissionKey, supabase]);
 
-  return routesBySubmission;
+  return useMemo(() => {
+    const activeSubmissionIds = new Set(submissionKey ? submissionKey.split(',') : []);
+    return Object.fromEntries(
+      Object.entries(routesBySubmission).filter(([id]) => activeSubmissionIds.has(id))
+    );
+  }, [routesBySubmission, submissionKey]);
 }

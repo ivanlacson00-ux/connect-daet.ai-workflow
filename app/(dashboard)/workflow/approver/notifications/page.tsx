@@ -11,6 +11,24 @@ const fonts = {
 
 type EventConfig = { label: string; styles: string; needsReview?: boolean };
 
+interface ApproverNotification {
+  id: string;
+  submission_id: string;
+  notification_id: string;
+  user_id?: string | null;
+  updated_at: string;
+  event_type?: string;
+  notification_title?: string | null;
+  notification_message?: string | null;
+  status?: string;
+  notification_status?: string;
+  file_name?: string | null;
+  tracking_number?: string | null;
+  requester_email?: string;
+  user_email?: string;
+  is_unread: boolean;
+}
+
 const getStatusConfig = (status?: string): EventConfig => {
   const currentStatus = (status || '').toLowerCase();
   switch (currentStatus) {
@@ -55,7 +73,7 @@ const timeAgo = (iso: string) => {
 
 export default function ApproverNotificationsPage() {
   const supabase = useMemo(() => createClient(), []);
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<ApproverNotification[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchNotifications = useCallback(async () => {
@@ -76,12 +94,13 @@ export default function ApproverNotificationsPage() {
       }
 
       // Keep only the latest notification for each submission
-      const latestBySubmission = new Map<string, any>();
+      const latestBySubmission = new Map<string, ApproverNotification>();
       (data || []).forEach((notification) => {
         if (!latestBySubmission.has(notification.submission_id)) {
           latestBySubmission.set(notification.submission_id, {
             ...notification.workflow_submissions,
             id: notification.submission_id,
+            submission_id: notification.submission_id,
             notification_id: notification.id,
             event_type: notification.event_type,
             updated_at: notification.created_at,
@@ -202,7 +221,7 @@ export default function ApproverNotificationsPage() {
             return (
               <article
                 key={note.id}
-                className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+                className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
               >
                 <div className="flex min-w-0 flex-1 items-center gap-4">
                   <div className="relative flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">

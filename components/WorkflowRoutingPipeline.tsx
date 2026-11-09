@@ -316,7 +316,7 @@ export default function WorkflowRoutingPipeline({
             step.state === 'complete'
               ? 'border-approved-text bg-approved-text text-white'
               : step.state === 'active'
-                ? 'border-blue-600 bg-blue-600 text-white ring-4 ring-blue-100'
+                ? 'animate-pulse border-review-text bg-review-text text-white ring-4 ring-review-bg motion-reduce:animate-none'
                 : step.state === 'rejected'
                   ? 'border-rejected-text bg-rejected-text text-white'
                   : 'border-warm-border bg-sidebar text-muted-text';
@@ -369,7 +369,7 @@ export default function WorkflowRoutingPipeline({
                   step.state === 'complete'
                     ? 'text-approved-text'
                     : step.state === 'active'
-                      ? 'text-blue-700'
+                      ? 'text-review-text'
                       : step.state === 'rejected'
                         ? 'text-rejected-text'
                         : 'text-muted-text'

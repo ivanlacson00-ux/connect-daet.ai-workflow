@@ -1,7 +1,7 @@
 // src/hooks/useAdminStats.ts
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
 interface AdminStats {
@@ -19,7 +19,7 @@ interface AdminStats {
 }
 
 export function useAdminStats() {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [stats, setStats] = useState<AdminStats>({
     totalUsers: 0,
     pendingApprover: 0,
@@ -34,7 +34,7 @@ export function useAdminStats() {
     declinedByMayor: 0,
   });
 
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     const [
       { count: totalUsers },
       { count: pendingApprover },
@@ -74,10 +74,13 @@ export function useAdminStats() {
       declinedByOffice: declinedByOffice ?? 0,
       declinedByMayor: declinedByMayor ?? 0,
     });
-  };
+  }, [supabase]);
 
   useEffect(() => {
-    fetchStats();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void fetchStats();
+    });
 
     // ✅ Real-time: new user registered
     const usersChannel = supabase
@@ -100,10 +103,11 @@ export function useAdminStats() {
       .subscribe();
 
     return () => {
+      active = false;
       supabase.removeChannel(usersChannel);
       supabase.removeChannel(submissionsChannel);
     };
-  }, []);
+  }, [fetchStats, supabase]);
 
   return { stats, refetch: fetchStats };
 }

@@ -1,13 +1,12 @@
 // app/(dashboard)/workflow/page.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { getRoleHomePath } from '@/lib/workflow/offices';
 
 export default function WorkflowLanding() {
-  const [loading, setLoading] = useState(true);
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
     const checkRoleAndRedirect = async () => {
@@ -33,15 +32,14 @@ export default function WorkflowLanding() {
       }
 
       window.location.href = getRoleHomePath(profile.role);
-      setLoading(false);
     };
 
     checkRoleAndRedirect();
-  }, []);
+  }, [supabase]);
 
   return (
     <div className="flex justify-center items-center h-64">
-      <div className="text-gray-500">Redirecting to your dashboard...</div>
+      <div className="text-muted-text">Redirecting to your dashboard...</div>
     </div>
   );
 }

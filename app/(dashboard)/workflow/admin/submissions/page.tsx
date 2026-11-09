@@ -234,7 +234,7 @@ export default function SubmissionsPage() {
             return (
               <article
                 key={sub.id}
-                className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+                className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
               >
                 <div className="flex min-w-0 items-center gap-4 sm:col-span-7">
                   <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
