@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import type { User } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
-import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
+import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
 import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
 import { useRoutePreviews, type WorkflowRoutePreview } from '@/lib/workflow/useRoutePreviews';
 
@@ -12,7 +13,7 @@ const fonts = {
   serif: 'font-serif',
 };
 
-interface Submission {
+interface Submission extends PreviewableFile {
   id: string | number;
   file_name: string;
   file_url: string;
@@ -115,7 +116,7 @@ function SubmissionCard({
   const router = useRouter();
 
   return (
-    <article className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
+    <article className="group grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:grid-cols-12 max-md:gap-3 max-md:px-3.5 max-md:py-3.5">
       <div className="flex min-w-0 items-center gap-4 sm:col-span-7">
         <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-sidebar text-muted-text">
           <span className="text-lg leading-4" aria-hidden="true">▤</span>
@@ -181,7 +182,7 @@ function SubmissionCard({
 export default function ApproverDashboard() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [previewFile, setPreviewFile] = useState<Submission | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const routesBySubmission = useRoutePreviews(
@@ -360,7 +361,7 @@ export default function ApproverDashboard() {
             <div className="flex shrink-0 items-center gap-2 sm:gap-4">
               <button
                 onClick={async () => {
-                  const url = await getFileUrl(supabase, previewFile as any);
+                  const url = await getFileUrl(supabase, previewFile);
                   await downloadFile(url, previewFile.file_name);
                 }}
                 aria-label="Download preview file"
@@ -383,7 +384,7 @@ export default function ApproverDashboard() {
 
           <div className="flex flex-1 items-center justify-center overflow-hidden bg-cream p-3 sm:p-8 max-md:bg-card max-md:p-0">
             <div className="relative flex h-full w-full max-w-6xl items-center justify-center overflow-hidden rounded-xl border border-warm-border bg-card shadow-xl max-md:max-w-none max-md:rounded-none max-md:border-0 max-md:shadow-none">
-              <FilePreview file={previewFile as any} />
+              <FilePreview file={previewFile} />
             </div>
           </div>
         </div>

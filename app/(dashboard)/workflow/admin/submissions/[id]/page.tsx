@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
-import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
+import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
 import { isOfficeRole, OFFICE_CONFIG, type OfficeRole } from '@/lib/workflow/offices';
 
 // ─── Styles & Fonts (synced with the approver and user file pages) ───────────
@@ -16,7 +16,7 @@ const fonts = {
 const fieldClasses =
   'h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none transition-colors focus:border-clay';
 
-interface Submission {
+interface Submission extends PreviewableFile {
   id: string;
   user_id: string;
   tracking_number?: string | null;
@@ -61,6 +61,20 @@ interface RouteStep {
 
 type AdminDecision = 'verified' | 'declined' | 'completed';
 
+interface SenderProfile {
+  email: string | null;
+  full_name: string | null;
+  role: string | null;
+}
+
+interface AuditLog {
+  id: string;
+  action_type: string;
+  created_at: string;
+  comments: string | null;
+  profiles: SenderProfile | null;
+}
+
 // ─── Status helpers ──────────────────────────────────────────────────────────
 const getStatusStyles = (status: string) => {
   const s = (status || '').toLowerCase();
@@ -100,8 +114,8 @@ export default function AdminManagePage() {
   const supabase = useMemo(() => createClient(), []);
 
   const [sub, setSub] = useState<Submission | null>(null);
-  const [sender, setSender] = useState<any>(null);
-  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [sender, setSender] = useState<SenderProfile | null>(null);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [attachments, setAttachments] = useState<SupportingAttachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -465,7 +479,7 @@ export default function AdminManagePage() {
             <div>
               <p className="mb-1.5 text-[11px] font-medium text-muted-text">Sender notes</p>
               <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
-                "{sub.description || 'No description provided.'}"
+                &quot;{sub.description || 'No description provided.'}&quot;
               </p>
             </div>
             <div className="border-t border-warm-border pt-4">
@@ -512,7 +526,7 @@ export default function AdminManagePage() {
             <section className="no-print rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
               <p className="mb-2 text-xs font-semibold text-warm-text">Approver notes</p>
               <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
-                "{sub.approver_comments}"
+                &quot;{sub.approver_comments}&quot;
               </p>
             </section>
           )}
@@ -521,7 +535,7 @@ export default function AdminManagePage() {
             <section className="no-print rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
               <p className="mb-2 text-xs font-semibold text-warm-text">Municipal office evaluation</p>
               <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
-                "{sub.office_comments}"
+                &quot;{sub.office_comments}&quot;
               </p>
             </section>
           )}
@@ -530,7 +544,7 @@ export default function AdminManagePage() {
             <section className="no-print rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
               <p className="mb-2 text-xs font-semibold text-warm-text">Mayor’s decision / requirements</p>
               <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
-                "{sub.mayor_comments}"
+                &quot;{sub.mayor_comments}&quot;
               </p>
             </section>
           )}
@@ -678,7 +692,7 @@ export default function AdminManagePage() {
                 <div className={`rounded-xl border p-4 ${sub.status.includes('declined') ? 'border-rejected-bg bg-rejected-bg/50' : 'border-approved-bg bg-approved-bg/50'}`}>
                   <p className={`mb-2 text-xs font-semibold ${sub.status.includes('declined') ? 'text-rejected-text' : 'text-approved-text'}`}>Admin notes</p>
                   <p className="whitespace-pre-wrap break-words font-serif text-base leading-relaxed text-warm-text">
-                    "{sub.admin_comments}"
+                    &quot;{sub.admin_comments}&quot;
                   </p>
                 </div>
               ) : (
@@ -754,7 +768,7 @@ export default function AdminManagePage() {
                         </p>
                         {log.comments && (
                           <p className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-sidebar p-3 font-serif text-sm leading-relaxed text-warm-text">
-                            "{log.comments}"
+                            &quot;{log.comments}&quot;
                           </p>
                         )}
                       </div>

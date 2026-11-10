@@ -11,34 +11,34 @@ export default function PendingPage() {
   const routesBySubmission = useRoutePreviews(submissions);
 
   const statusColor: Record<string, string> = {
-    pending:              'bg-yellow-100 text-yellow-700',
-    pending_approver:     'bg-yellow-100 text-yellow-700',
-    pending_admin:        'bg-orange-100 text-orange-700',
-    approved:             'bg-green-100 text-green-700',
-    declined_by_approver: 'bg-red-100 text-red-500',
-    declined_by_admin:    'bg-red-200 text-red-700',
+    pending:              'bg-pending-bg text-pending-text',
+    pending_approver:     'bg-pending-bg text-pending-text',
+    pending_admin:        'bg-pending-bg text-pending-text',
+    approved:             'bg-approved-bg text-approved-text',
+    declined_by_approver: 'bg-rejected-bg text-rejected-text',
+    declined_by_admin:    'bg-rejected-bg text-rejected-text',
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="min-h-screen bg-cream p-6">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">My Pending Reviews</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <h1 className="text-2xl font-bold text-warm-text">My Pending Reviews</h1>
+        <p className="mt-1 text-sm text-muted-text">
           Verify the approver-selected office route or archive the request with a reason.
         </p>
       </div>
 
-      <div className="bg-white rounded-2xl shadow p-6">
+      <div className="rounded-2xl bg-card p-6 shadow">
         {loading ? (
-          <p className="text-gray-400">Loading submissions...</p>
+          <p className="text-muted-text">Loading submissions...</p>
         ) : submissions.length === 0 ? (
           <div className="text-center py-12">
-            <p className="text-gray-400">No pending submissions for your review.</p>
+            <p className="text-muted-text">No pending submissions for your review.</p>
           </div>
         ) : (
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b text-gray-400 text-xs uppercase">
+              <tr className="border-b border-warm-border text-xs uppercase text-muted-text">
                 <th className="pb-3">File</th>
                 <th className="pb-3">Uploaded By</th>
                 <th className="pb-3">Type</th>
@@ -50,7 +50,7 @@ export default function PendingPage() {
             <tbody>
               {submissions.map((sub) => (
                 <Fragment key={sub.id}>
-                  <tr className="border-b last:border-0 hover:bg-gray-50">
+                  <tr className="border-b border-warm-border last:border-0 hover:bg-sidebar">
                     <td className="py-3">
                       <span
                         onClick={() => window.open(`/api/workflow/files/${sub.id}?redirect=1`, '_blank')}
@@ -59,9 +59,9 @@ export default function PendingPage() {
                         {sub.file_name}
                       </span>
                     </td>
-                    <td className="py-3 text-gray-500">{sub.profiles?.email ?? '—'}</td>
-                    <td className="py-3 text-gray-400 uppercase text-xs">{sub.file_type}</td>
-                    <td className="py-3 text-gray-400">
+                    <td className="py-3 text-muted-text">{sub.profiles?.email ?? '—'}</td>
+                    <td className="py-3 text-xs uppercase text-muted-text">{sub.file_type}</td>
+                    <td className="py-3 text-muted-text">
                       {new Date(sub.created_at).toLocaleDateString()}
                     </td>
                     <td className="py-3">
@@ -72,7 +72,7 @@ export default function PendingPage() {
                     <td className="py-3">
                       <Link
                         href={`/workflow/admin/submissions/${sub.id}`}
-                        className="inline-flex rounded-full bg-orange-500 px-3 py-1 text-xs text-white hover:bg-orange-600"
+                        className="inline-flex rounded-full bg-clay px-3 py-1 text-xs text-white hover:bg-blue-700"
                       >
                         Verify route
                       </Link>

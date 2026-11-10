@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
-import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
+import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
 import { getRoleHomePath, isOfficeRole, OFFICE_CONFIG, type OfficeRole } from '@/lib/workflow/offices';
 
 // ─── Styles & Fonts (synced with the user file page) ─────────────────────────
@@ -12,7 +12,7 @@ const fonts = {
   serif: 'font-serif',
 };
 
-interface Submission {
+interface Submission extends PreviewableFile {
   id: string;
   user_id: string;
   tracking_number?: string | null;
@@ -53,6 +53,20 @@ interface RouteStep {
   decided_at: string | null;
   requirements_requested_at: string | null;
   requirements_comments: string | null;
+}
+
+interface SenderProfile {
+  email: string | null;
+  full_name: string | null;
+  role: string | null;
+}
+
+interface AuditLog {
+  id: string;
+  action_type: string;
+  created_at: string;
+  comments: string | null;
+  profiles: SenderProfile | null;
 }
 
 // ─── Status groups ───────────────────────────────────────────────────────────
@@ -107,8 +121,8 @@ export default function ApproverManagePage() {
   const supabase = useMemo(() => createClient(), []);
 
   const [sub, setSub] = useState<Submission | null>(null);
-  const [sender, setSender] = useState<any>(null);
-  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [sender, setSender] = useState<SenderProfile | null>(null);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [attachments, setAttachments] = useState<SupportingAttachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -582,7 +596,7 @@ export default function ApproverManagePage() {
             <div>
               <p className="mb-1.5 text-[11px] font-medium text-muted-text">Sender notes</p>
               <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
-                "{sub.description || 'No description provided.'}"
+                &quot;{sub.description || 'No description provided.'}&quot;
               </p>
             </div>
             <div className="border-t border-warm-border pt-4">
@@ -643,7 +657,7 @@ export default function ApproverManagePage() {
                   <div className={`rounded-xl border p-4 ${isDeclined ? 'border-rejected-bg bg-rejected-bg/50' : 'border-approved-bg bg-approved-bg/50'}`}>
                     <p className={`mb-2 text-xs font-semibold ${isDeclined ? 'text-rejected-text' : 'text-approved-text'}`}>Your notes</p>
                     <p className="whitespace-pre-wrap break-words font-serif text-base leading-relaxed text-warm-text">
-                      "{reviewNotes}"
+                      &quot;{reviewNotes}&quot;
                     </p>
                     <p className="mt-3 text-[10px] text-muted-text">{new Date(sub.updated_at).toLocaleDateString()}</p>
                   </div>
@@ -840,7 +854,7 @@ export default function ApproverManagePage() {
                         </p>
                         {log.comments && (
                           <p className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-sidebar p-3 font-serif text-sm leading-relaxed text-warm-text">
-                            "{log.comments}"
+                            &quot;{log.comments}&quot;
                           </p>
                         )}
                       </div>

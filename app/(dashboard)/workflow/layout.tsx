@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -17,7 +17,7 @@ export default function WorkflowLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hasUnread, setHasUnread] = useState(false); 
   const pathname = usePathname();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   // 1. Initial User & Role Fetch
   useEffect(() => {
@@ -48,7 +48,6 @@ export default function WorkflowLayout({
   useEffect(() => {
     // Only subscribe if we have the necessary user data and aren't on the notifs page
     if (!role || pathname.includes('notifications')) {
-      if (pathname.includes('notifications')) setHasUnread(false);
       return;
     }
 
@@ -82,14 +81,14 @@ export default function WorkflowLayout({
         { href: '/workflow/user', label: 'Dashboard', icon: '◰' },
         { href: '/workflow/user/upload', label: 'Upload', icon: '⊕' },
         { href: '/workflow/user/file_registry', label: 'File Registry', icon: '▤' },
-        { href: '/workflow/user/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread },
+        { href: '/workflow/user/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
       ];
     }
     if (role === 'approver') {
       return [
         { href: '/workflow/approver', label: 'Dashboard', icon: '⎚' },
         { href: '/workflow/approver/file_management', label: 'File Registry', icon: '▤' },
-        { href: '/workflow/approver/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread },
+        { href: '/workflow/approver/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
       ];
     }
     if (isOfficeRole(role)) {
@@ -114,7 +113,7 @@ export default function WorkflowLayout({
   const isActive = (path: string) => pathname === path;
 
   return (
-    <div className="min-h-screen bg-cream text-warm-text">
+    <div className="workflow-system min-h-screen bg-cream text-warm-text">
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
         aria-label={sidebarOpen ? 'Close navigation' : 'Open navigation'}

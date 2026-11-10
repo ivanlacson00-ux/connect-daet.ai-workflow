@@ -547,7 +547,7 @@ export default function UserFileDetail() {
             <div>
               <p className="mb-1.5 text-[11px] font-medium text-muted-text">Description</p>
               <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
-                "{sub.description || 'No description provided.'}"
+                &quot;{sub.description || 'No description provided.'}&quot;
               </p>
             </div>
             <div>
@@ -692,7 +692,7 @@ export default function UserFileDetail() {
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${isApproved ? 'bg-approved-bg text-approved-text' : 'bg-rejected-bg text-rejected-text'}`}>Official</span>
               </div>
               <p className="break-words font-serif text-base leading-relaxed text-warm-text">
-                "{officialNote}"
+                &quot;{officialNote}&quot;
               </p>
             </section>
           )}

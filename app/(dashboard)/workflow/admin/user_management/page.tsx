@@ -17,22 +17,22 @@ type Role =
   | 'mayor_office'
   | 'sangguniang_bayan';
 type RoleFilter = 'all' | Role;
+type VerificationStatus = 'pending' | 'verified' | 'unknown';
 
 interface UserProfile {
   id: string;
   email: string;
+  full_name: string | null;
   role: string;
   created_at: string;
   is_active: boolean;
 }
 
-const ROLES: Role[] = [
-  'user',
+const OFFICIAL_ROLES: Role[] = [
   'approver',
   'municipal_treasurer',
   'mayor_office',
   'sangguniang_bayan',
-  'admin',
 ];
 
 const FILTERS: { key: RoleFilter; label: string }[] = [
@@ -75,10 +75,26 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
+function VerificationBadge({ status }: { status: VerificationStatus }) {
+  const config = status === 'verified'
+    ? { label: 'Verified', styles: 'bg-approved-bg text-approved-text' }
+    : status === 'pending'
+      ? { label: 'Pending verification', styles: 'bg-pending-bg text-pending-text' }
+      : { label: 'Status unavailable', styles: 'bg-sidebar text-muted-text' };
+
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${config.styles}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
+      {config.label}
+    </span>
+  );
+}
+
 export default function UserManagementPage() {
   const supabase = useMemo(() => createClient(), []);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [usersError, setUsersError] = useState('');
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
   const [showInactive, setShowInactive] = useState(false);
@@ -89,6 +105,7 @@ export default function UserManagementPage() {
 
   // ─── Data actions ──────────────────────────────────────────────────────────
   const fetchUsers = useCallback(async () => {
+    setUsersError('');
     const { data, error } = await supabase
       .from('profiles')
       .select('id, email, role, created_at, is_active')
@@ -106,21 +123,68 @@ export default function UserManagementPage() {
     setLoading(false);
   }, [showInactive, supabase]);
 
-  const updateRole = async (userId: string, newRole: Role) => {
-    setUpdating(userId);
-    setRoleUpdateError('');
-    const { error } = await supabase.rpc('admin_update_profile_role', {
-      target_user_id: userId,
-      new_role: newRole,
-    });
+  const createOfficialAccount = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCreatingAccount(true);
+    setAccountCreationStatus(null);
+    setInvitationLink(null);
+    setLinkActionStatus('');
+    const fullName = [newAccountDetails.firstName, newAccountDetails.middleName, newAccountDetails.lastName]
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .join(' ');
 
-    if (error) {
-      console.error('Role update failed:', error.message);
-      setRoleUpdateError(error.message);
-    } else {
-      setUsers(prev => prev.map(u => (u.id === userId ? { ...u, role: newRole } : u)));
+    try {
+      const response = await fetch('/api/admin/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: newAccountEmail,
+          ...newAccountDetails,
+          age: Number(newAccountDetails.age),
+          role: newAccountRole,
+        }),
+      });
+      const result = await response.json() as { error?: string; message?: string; invitationUrl?: string };
+      if (!response.ok) throw new Error(result.error || 'Could not create the official account.');
+      if (!result.invitationUrl) throw new Error('The account was created, but the invitation link was not returned. Contact an administrator before creating another account.');
+
+      setAccountCreationStatus({ type: 'success', message: result.message || 'Invitation sent.' });
+      setInvitationLink({
+        email: newAccountEmail.trim(),
+        fullName,
+        role: newAccountRole,
+        url: result.invitationUrl,
+      });
+      setNewAccountDetails({
+        firstName: '',
+        middleName: '',
+        lastName: '',
+        phoneNumber: '',
+        age: '',
+        sex: '',
+        address: '',
+      });
+      setNewAccountEmail('');
+      await fetchUsers();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not create the official account.';
+      console.error('Official account creation failed:', message);
+      setAccountCreationStatus({ type: 'error', message });
+    } finally {
+      setCreatingAccount(false);
     }
-    setUpdating(null);
+  };
+
+  const copyInvitationLink = async () => {
+    if (!invitationLink) return;
+    try {
+      await navigator.clipboard.writeText(invitationLink.url);
+      setLinkActionStatus('Invitation link copied. Paste it into your email to the official.');
+    } catch (error) {
+      console.error('Could not copy the official invitation link:', error);
+      setLinkActionStatus('Copy failed. Select and copy the invitation link from the field above.');
+    }
   };
 
   const deleteUser = async (userId: string, email: string) => {
@@ -189,7 +253,7 @@ export default function UserManagementPage() {
   const filtered = useMemo(() => {
     const query = search.toLowerCase();
     return users.filter(u =>
-      (u.email || '').toLowerCase().includes(query) &&
+      ((u.email || '').toLowerCase().includes(query) || (u.full_name || '').toLowerCase().includes(query)) &&
       (roleFilter === 'all' || u.role === roleFilter)
     );
   }, [users, search, roleFilter]);
@@ -201,19 +265,216 @@ export default function UserManagementPage() {
         <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
           <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Admin workspace
         </p>
-        <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>User management</h1>
+        <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>User Registry</h1>
         <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">
           Control who can submit, review and administer files. Total users: <span className="text-warm-text">{users.length}</span>
         </p>
       </div>
 
-      {roleUpdateError && (
-        <p
-          role="alert"
-          className="mb-4 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text"
-        >
-          Role update failed: {roleUpdateError}
-        </p>
+      <section className="mb-6 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+        <div className="mb-4">
+          <h2 className="text-sm font-semibold text-warm-text">Create an account and assign a role</h2>
+          <p className="mt-1 text-[11px] text-muted-text">
+            Create an account for an official and assign their dashboard role. The recipient verifies the invitation link and sets their password before signing in.
+          </p>
+        </div>
+        <form onSubmit={createOfficialAccount} className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div>
+            <label htmlFor="official-account-first-name" className="mb-1.5 block text-[11px] font-medium text-muted-text">First name</label>
+            <input
+              id="official-account-first-name"
+              type="text"
+              autoComplete="given-name"
+              value={newAccountDetails.firstName}
+              onChange={(event) => setNewAccountDetails((current) => ({ ...current, firstName: event.target.value }))}
+              maxLength={80}
+              required
+              className="h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay"
+              placeholder="First name"
+            />
+          </div>
+          <div>
+            <label htmlFor="official-account-middle-name" className="mb-1.5 block text-[11px] font-medium text-muted-text">Middle name <span className="font-normal">(optional)</span></label>
+            <input
+              id="official-account-middle-name"
+              type="text"
+              autoComplete="additional-name"
+              value={newAccountDetails.middleName}
+              onChange={(event) => setNewAccountDetails((current) => ({ ...current, middleName: event.target.value }))}
+              maxLength={80}
+              className="h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay"
+              placeholder="Middle name"
+            />
+          </div>
+          <div>
+            <label htmlFor="official-account-last-name" className="mb-1.5 block text-[11px] font-medium text-muted-text">Last name</label>
+            <input
+              id="official-account-last-name"
+              type="text"
+              autoComplete="family-name"
+              value={newAccountDetails.lastName}
+              onChange={(event) => setNewAccountDetails((current) => ({ ...current, lastName: event.target.value }))}
+              maxLength={80}
+              required
+              className="h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay"
+              placeholder="Last name"
+            />
+          </div>
+          <div>
+            <label htmlFor="official-account-email" className="mb-1.5 block text-[11px] font-medium text-muted-text">Email / Gmail</label>
+            <input
+              id="official-account-email"
+              type="email"
+              autoComplete="email"
+              value={newAccountEmail}
+              onChange={(event) => setNewAccountEmail(event.target.value)}
+              maxLength={254}
+              required
+              className="h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay"
+              placeholder="name@example.com"
+            />
+          </div>
+          <div>
+            <label htmlFor="official-account-phone" className="mb-1.5 block text-[11px] font-medium text-muted-text">CP number</label>
+            <input
+              id="official-account-phone"
+              type="tel"
+              autoComplete="tel"
+              value={newAccountDetails.phoneNumber}
+              onChange={(event) => setNewAccountDetails((current) => ({ ...current, phoneNumber: event.target.value }))}
+              maxLength={24}
+              required
+              className="h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay"
+              placeholder="+63 9XX XXX XXXX"
+            />
+          </div>
+          <div>
+            <label htmlFor="official-account-age" className="mb-1.5 block text-[11px] font-medium text-muted-text">Age</label>
+            <input
+              id="official-account-age"
+              type="number"
+              min={1}
+              max={120}
+              step={1}
+              value={newAccountDetails.age}
+              onChange={(event) => setNewAccountDetails((current) => ({ ...current, age: event.target.value }))}
+              required
+              className="h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay"
+              placeholder="Age"
+            />
+          </div>
+          <div>
+            <label htmlFor="official-account-sex" className="mb-1.5 block text-[11px] font-medium text-muted-text">Sex</label>
+            <select
+              id="official-account-sex"
+              value={newAccountDetails.sex}
+              onChange={(event) => setNewAccountDetails((current) => ({ ...current, sex: event.target.value }))}
+              required
+              className="h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay"
+            >
+              <option value="" disabled>Select sex</option>
+              <option value="female">Female</option>
+              <option value="male">Male</option>
+              <option value="other">Other</option>
+              <option value="prefer_not_to_say">Prefer not to say</option>
+            </select>
+          </div>
+          <div className="md:col-span-2 xl:col-span-4">
+            <label htmlFor="official-account-address" className="mb-1.5 block text-[11px] font-medium text-muted-text">Address</label>
+            <textarea
+              id="official-account-address"
+              autoComplete="street-address"
+              value={newAccountDetails.address}
+              onChange={(event) => setNewAccountDetails((current) => ({ ...current, address: event.target.value }))}
+              maxLength={500}
+              required
+              rows={2}
+              className="w-full rounded-2xl border border-warm-border bg-card px-4 py-3 text-xs text-warm-text outline-none focus:border-clay"
+              placeholder="House number, street, barangay, municipality, province"
+            />
+          </div>
+          <div className="md:col-span-2 xl:col-span-4">
+            <label htmlFor="official-account-role" className="mb-1.5 block text-[11px] font-medium text-muted-text">Official role</label>
+            <select
+              id="official-account-role"
+              value={newAccountRole}
+              onChange={(event) => setNewAccountRole(event.target.value as Role)}
+              className="h-11 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay"
+            >
+              {OFFICIAL_ROLES.map((role) => <option key={role} value={role}>{capitalize(role)}</option>)}
+            </select>
+          </div>
+          <div className="md:col-span-2 xl:col-span-4">
+            <button
+              type="submit"
+              disabled={creatingAccount}
+              className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
+            >
+              {creatingAccount ? 'Sending invitation...' : 'Create official account'}
+            </button>
+          </div>
+        </form>
+        {accountCreationStatus && (
+          <p
+            role={accountCreationStatus.type === 'error' ? 'alert' : 'status'}
+            className={`mt-3 rounded-xl border px-4 py-3 text-xs font-medium ${
+              accountCreationStatus.type === 'success'
+                ? 'border-approved-bg bg-approved-bg/50 text-approved-text'
+                : 'border-rejected-bg bg-rejected-bg/50 text-rejected-text'
+            }`}
+          >
+            {accountCreationStatus.message}
+          </p>
+        )}
+        {invitationLink && (
+          <div className="mt-4 rounded-xl border border-warm-border bg-sidebar p-4">
+            <p className="text-xs font-semibold text-warm-text">Account created — send the verification link</p>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-text">
+              This one-time link is for {invitationLink.fullName} ({invitationLink.email}), assigned to {capitalize(invitationLink.role)}.
+              They must open it, verify the invitation, and set a password before accessing their dashboard.
+            </p>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input
+                type="url"
+                aria-label="Official account invitation link"
+                readOnly
+                value={invitationLink.url}
+                onFocus={(event) => event.currentTarget.select()}
+                className="h-11 min-w-0 flex-1 rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay"
+              />
+              <button
+                type="button"
+                onClick={() => void copyInvitationLink()}
+                className="inline-flex h-11 items-center justify-center rounded-full border border-warm-border px-5 text-xs font-semibold text-warm-text transition-colors hover:bg-card"
+              >
+                Copy link
+              </button>
+              <a
+                href={`https://mail.google.com/mail/?${new URLSearchParams({
+                  view: 'cm',
+                  fs: '1',
+                  to: invitationLink.email,
+                  su: 'Your CONNECT-Daet account invitation',
+                  body: `Hello ${invitationLink.fullName},\n\nYour CONNECT-Daet account has been created with the role ${capitalize(invitationLink.role)}. Open the link below to verify your invitation and set your password:\n\n${invitationLink.url}\n\nThis invitation link is for your account only and can be used once.\n\nCONNECT-Daet`,
+                }).toString()}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-11 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
+              >
+                Compose email in Gmail
+              </a>
+            </div>
+            {linkActionStatus && <p role="status" className="mt-2 text-[11px] text-muted-text">{linkActionStatus}</p>}
+            <p className="mt-2 text-[10px] text-muted-text">Gmail opens a draft; review it and press Send. The invitation link can only be used once.</p>
+          </div>
+        )}
+      </section>
+
+      {usersError && (
+        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs text-rejected-text">
+          <span>{usersError}</span>
+          <button type="button" onClick={() => void fetchUsers()} className="font-semibold underline">Retry</button>
+        </div>
       )}
       {deleteError && (
         <p
@@ -284,7 +545,7 @@ export default function UserManagementPage() {
 
       {/* List header */}
       <div className="mb-4 flex items-center gap-3">
-        <h2 className="text-sm font-semibold text-warm-text">User directory</h2>
+        <h2 className="text-sm font-semibold text-warm-text">Registered accounts</h2>
         <span className="rounded-md bg-sidebar px-2 py-1 text-[10px] font-medium text-muted-text">{filtered.length}</span>
       </div>
 
@@ -315,15 +576,16 @@ export default function UserManagementPage() {
           {filtered.map((user) => (
             <article
               key={user.id}
-              className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-[#d9cabb] sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
+              className="group flex flex-col gap-5 rounded-2xl border border-warm-border bg-card px-5 py-5 transition-colors hover:border-clay-border sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:py-3.5"
             >
               <div className="flex min-w-0 items-center gap-4">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-sidebar text-lg font-semibold uppercase text-muted-text" aria-hidden="true">
                   {user.email?.charAt(0) || '?'}
                 </div>
                 <div className="min-w-0">
-                  <h3 className="truncate text-sm font-semibold text-warm-text group-hover:text-clay">{user.email}</h3>
+                  <h3 className="truncate text-sm font-semibold text-warm-text group-hover:text-clay">{user.full_name || user.email}</h3>
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
+                    {user.full_name && <><span>{user.email}</span><span aria-hidden="true">·</span></>}
                     <span>{user.id.slice(0, 8)}</span>
                     <span aria-hidden="true">·</span>
                     <span>
@@ -334,7 +596,9 @@ export default function UserManagementPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2 sm:justify-end max-md:w-full max-md:flex-col max-md:items-stretch">
+                <VerificationBadge status={user.verificationStatus} />
                 <div className="max-md:self-start">
+                  <span className="mr-2 text-[10px] font-medium text-muted-text">Base role</span>
                   <RoleBadge role={user.role} />
                 </div>
 

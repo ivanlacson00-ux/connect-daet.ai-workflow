@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { Parsed } from '@/lib/previewParsers';
@@ -201,7 +202,6 @@ export default function FilePreview({ file }: { file: PreviewableFile }) {
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, kind, file.file_name]);
 
   const loadingView = (
@@ -239,9 +239,12 @@ export default function FilePreview({ file }: { file: PreviewableFile }) {
 
   if (kind === 'image') {
     return (
-      <img
+      <Image
         src={url}
         alt="Preview"
+        width={1200}
+        height={900}
+        unoptimized
         onError={() => setFailed(true)}
         className="max-h-full max-w-full object-contain p-4 sm:p-8"
       />

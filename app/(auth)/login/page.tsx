@@ -28,11 +28,14 @@ export default function LoginPage() {
     const params = new URLSearchParams(window.location.search);
 
     if (params.get('verified') === '1') {
+      // Capture the one-time callback message before removing its query parameter.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setVerified(true);
       params.delete('verified');
     }
 
     if (params.get('verification') === 'failed') {
+      // Capture the one-time callback message before removing its query parameter.
       setError('Email confirmation could not be completed. Please request a new confirmation email and try again.');
       params.delete('verification');
     }
@@ -120,7 +123,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-cream px-4 py-12">
+    <div className="workflow-system flex min-h-screen items-center justify-center bg-cream px-4 py-12">
       <div className="w-full max-w-[380px]">
         {/* Identity */}
         <div className="mb-8 flex flex-col items-center text-center max-md:mb-6">
