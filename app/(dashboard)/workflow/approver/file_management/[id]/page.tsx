@@ -5,7 +5,18 @@ import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
 import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
-import { getRoleHomePath, isOfficeRole, OFFICE_CONFIG, type OfficeRole } from '@/lib/workflow/offices';
+import {
+  getRoleHomePath,
+  getWorkflowDocumentTypeLabel,
+  isOfficeRole,
+  OFFICE_CONFIG,
+  OFFICE_RESPONSIBILITIES,
+  TOURISM_OFFICE_LABEL,
+  TOURISM_OFFICE_ROLE,
+  type OfficeResponsibility,
+  type OfficeRole,
+  type OfficeRoutingMode,
+} from '@/lib/workflow/offices';
 
 // ─── Styles & Fonts (synced with the user file page) ─────────────────────────
 const fonts = {
@@ -23,11 +34,14 @@ interface Submission extends PreviewableFile {
   file_size: number;
   status: string;
   category?: string | null;
+  other_document_type?: string | null;
   description?: string | null;
   purpose?: string | null;
   requested_action?: string | null;
   intended_recipient?: string | null;
   selected_office_role?: string | null;
+  initial_destination_role?: string | null;
+  final_decision_office_role?: string | null;
   approver_comments?: string | null;
   office_comments?: string | null;
   admin_comments?: string | null;
@@ -49,6 +63,8 @@ interface RouteStep {
   sequence_number: number;
   office_role: OfficeRole;
   status: string;
+  responsibility: OfficeResponsibility;
+  assignment_source: string;
   started_at: string | null;
   decided_at: string | null;
   requirements_requested_at: string | null;
@@ -102,7 +118,13 @@ const getActionLabel = (type: string) => {
     case 'RETURNED_FOR_CORRECTION': return 'Returned for correction';
     case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Office route step assigned';
     case 'OFFICE_ROUTE_STEP_APPROVED': return 'Office route step approved';
-    case 'ROUTE_PROPOSED': return 'Approver proposed office route';
+    case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Municipal office forwarded for Tourism Officer review';
+    case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer assigned additional offices';
+    case 'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED': return 'Additional office assignments completed';
+    case 'OFFICE_FINAL_DECISION': return 'Final decision by authorized office';
+    case 'ROUTE_PROPOSED': return 'Tourism Officer proposed office route';
+    case 'REVISED_DOCUMENT_SUBMITTED': return 'Submitter uploaded a revised document';
+    case 'REQUIREMENTS_RESUBMITTED': return 'Submitter responded to requested changes';
     case 'ROUTE_REQUIREMENTS_REQUESTED': return 'Municipal office requested additional requirements';
     case 'ROUTE_RETURNED_TO_ADMIN': return 'All routed offices approved; returned to Admin';
     case 'APPROVER_REJECTED': return 'Approver rejected request';
@@ -129,6 +151,11 @@ export default function ApproverManagePage() {
   const [actionError, setActionError] = useState('');
   const [comment, setComment] = useState('');
   const [proposedOffices, setProposedOffices] = useState<OfficeRole[]>([]);
+  const [officeResponsibilities, setOfficeResponsibilities] = useState<
+    Partial<Record<OfficeRole, OfficeResponsibility>>
+  >({});
+  const [routingMode, setRoutingMode] = useState<OfficeRoutingMode>('sequential');
+  const [finalDecisionOfficeRole, setFinalDecisionOfficeRole] = useState<OfficeRole | ''>('');
   const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
   const [routeStatus, setRouteStatus] = useState<string | null>(null);
   const [hasFinalizedRoute, setHasFinalizedRoute] = useState(false);
@@ -137,23 +164,26 @@ export default function ApproverManagePage() {
 
   const toggleProposedOffice = (officeRole: OfficeRole) => {
     setProposedOffices((current) => {
-      if (current.includes(officeRole)) return current.filter((entry) => entry !== officeRole);
-      if (officeRole === 'mayor_office') return [...current, officeRole];
-      return current.includes('mayor_office')
-        ? [...current.filter((entry) => entry !== 'mayor_office'), officeRole, 'mayor_office']
-        : [...current, officeRole];
+      if (current.includes(officeRole)) {
+        setOfficeResponsibilities((responsibilities) => {
+          const next = { ...responsibilities };
+          delete next[officeRole];
+          return next;
+        });
+        return current.filter((entry) => entry !== officeRole);
+      }
+      setOfficeResponsibilities((responsibilities) => ({
+        ...responsibilities,
+        [officeRole]: 'mandatory_approval_clearance',
+      }));
+      return [...current, officeRole];
     });
   };
 
   const moveProposedOffice = (index: number, offset: -1 | 1) => {
     setProposedOffices((current) => {
       const target = index + offset;
-      if (
-        target < 0
-        || target >= current.length
-        || current[index] === 'mayor_office'
-        || current[target] === 'mayor_office'
-      ) return current;
+      if (target < 0 || target >= current.length) return current;
       const updated = [...current];
       [updated[index], updated[target]] = [updated[target], updated[index]];
       return updated;
@@ -182,6 +212,11 @@ export default function ApproverManagePage() {
 
       if (submission) {
         setSub(submission);
+        setFinalDecisionOfficeRole(
+          isOfficeRole(submission.final_decision_office_role)
+            ? submission.final_decision_office_role
+            : ''
+        );
         setComment(
           currentRole === 'mayor_office' && submission.status === 'pending_mayor'
             ? submission.mayor_comments || ''
@@ -210,7 +245,7 @@ export default function ApproverManagePage() {
           if (currentRoute) {
             const { data: steps, error: stepsError } = await supabase
               .from('workflow_routing_steps')
-              .select('sequence_number, office_role, status, started_at, decided_at, requirements_requested_at, requirements_comments')
+              .select('sequence_number, office_role, status, responsibility, assignment_source, started_at, decided_at, requirements_requested_at, requirements_comments')
               .eq('routing_plan_id', currentRoute.id)
               .order('sequence_number', { ascending: true });
 
@@ -223,6 +258,7 @@ export default function ApproverManagePage() {
             } else {
               const validSteps = (steps ?? []).filter(
                 (step): step is RouteStep => isOfficeRole(step.office_role)
+                  && step.responsibility in OFFICE_RESPONSIBILITIES
               );
               setRouteSteps(validSteps);
               setRouteStatus(currentRoute.status);
@@ -281,26 +317,48 @@ export default function ApproverManagePage() {
   };
 
   const handleWorkflowAction = async (
-    decision: 'approve' | 'reject' | 'return'
+    decision: 'approve' | 'reject' | 'return' | 'forward'
   ) => {
     if (!sub) return;
     setUpdating(true);
     setActionError('');
 
-    if (role === 'approver' && QUEUE_STATUSES.includes(sub.status) && decision === 'approve') {
-      if (proposedOffices.length === 0) {
-        setActionError('Select at least one municipal office for the proposed route.');
+    if (role === 'tourism_officer' && QUEUE_STATUSES.includes(sub.status) && decision === 'approve') {
+      if (
+        proposedOffices.length === 0
+        && sub.initial_destination_role !== TOURISM_OFFICE_ROLE
+      ) {
+        setActionError('Select at least one additional municipal office.');
+        setUpdating(false);
+        return;
+      }
+      if (
+        sub.initial_destination_role === TOURISM_OFFICE_ROLE
+        && !finalDecisionOfficeRole
+      ) {
+        setActionError('Select the municipal office that will make the final decision.');
         setUpdating(false);
         return;
       }
 
-      const { error } = await supabase.rpc('propose_workflow_route', {
-        target_submission_id: sub.id,
-        proposed_office_roles: proposedOffices,
-        proposal_comments: comment.trim() || null,
-      });
+      const { error } = sub.status === 'pending_approver'
+        ? await supabase.rpc('create_tourism_officer_assignments', {
+            target_submission_id: sub.id,
+            assignment_records: proposedOffices.map((officeRole) => ({
+              office_role: officeRole,
+              responsibility: officeResponsibilities[officeRole] ?? 'mandatory_approval_clearance',
+            })),
+            routing_mode: routingMode,
+            assignment_comments: comment.trim() || null,
+            final_decision_office_role: finalDecisionOfficeRole || null,
+          })
+        : await supabase.rpc('propose_workflow_route', {
+            target_submission_id: sub.id,
+            proposed_office_roles: proposedOffices,
+            proposal_comments: comment.trim() || null,
+          });
       if (error) {
-        setActionError(error.message || 'Could not save the proposed office route.');
+        setActionError(error.message || 'Could not create the office assignments.');
       } else {
         await fetchDetails();
       }
@@ -308,48 +366,53 @@ export default function ApproverManagePage() {
       return;
     }
 
-    if (isOfficeRole(role) && role === sub.selected_office_role && sub.status === 'pending_office') {
+    const activeOfficeRouteStep = isOfficeRole(role)
+      ? routeSteps.find((step) => step.office_role === role && step.status === 'in_progress')
+      : undefined;
+    const officeIsAssigned = isOfficeRole(role)
+      && sub.status === 'pending_office'
+      && (role === sub.selected_office_role || Boolean(activeOfficeRouteStep));
+
+    if (officeIsAssigned && isOfficeRole(role)) {
+      if (decision === 'forward') {
+        const { error } = await supabase.rpc('forward_workflow_submission_to_tourism_officer', {
+          target_submission_id: sub.id,
+          forwarding_comments: comment.trim() || null,
+        });
+        if (error) {
+          setActionError(error.message || 'Could not forward the reviewed submission.');
+        } else {
+          await fetchDetails();
+        }
+        setUpdating(false);
+        return;
+      }
+
+      if (decision === 'return') {
+        if (!comment.trim()) {
+          setActionError('Explain the changes required before returning this submission.');
+          setUpdating(false);
+          return;
+        }
+        const { error } = await supabase.rpc('request_workflow_submission_changes', {
+          target_submission_id: sub.id,
+          request_comments: comment.trim(),
+        });
+        if (error) {
+          setActionError(error.message || 'Could not request changes.');
+        } else {
+          await fetchDetails();
+        }
+        setUpdating(false);
+        return;
+      }
+
       if (routeStateError) {
         setActionError('Could not verify the finalized route. Refresh and try again.');
         setUpdating(false);
         return;
       }
-      if (hasFinalizedRoute) {
-        if (decision === 'return') {
-          if (!comment.trim()) {
-            setActionError('Explain the additional requirements before returning this request.');
-            setUpdating(false);
-            return;
-          }
-          try {
-            const { error } = await supabase.rpc('request_workflow_route_requirements', {
-              target_submission_id: sub.id,
-              request_comments: comment.trim(),
-            });
-            if (error) {
-              console.error('Office requirements request failed:', error.message);
-              setActionError([
-                error.message,
-                error.details,
-                error.hint,
-                error.code ? `Database code: ${error.code}` : '',
-              ].filter(Boolean).join('\n') || 'Could not return this request for requirements.');
-            } else {
-              await fetchDetails();
-            }
-          } catch (error) {
-            console.error('Office requirements request failed:', error);
-            setActionError(
-              error instanceof Error
-                ? error.message
-                : 'Could not return this request for requirements.'
-            );
-          } finally {
-            setUpdating(false);
-          }
-          return;
-        }
-
+      if (activeOfficeRouteStep) {
         const { error } = await supabase.rpc('decide_workflow_route_step', {
           target_submission_id: sub.id,
           approve_step: decision === 'approve',
@@ -363,13 +426,27 @@ export default function ApproverManagePage() {
         setUpdating(false);
         return;
       }
+
+      if (decision === 'approve') {
+        const { error } = await supabase.rpc('finalize_workflow_submission', {
+          target_submission_id: sub.id,
+          decision_comments: comment.trim() || null,
+        });
+        if (error) {
+          setActionError(error.message || 'Could not record the final office decision.');
+        } else {
+          await fetchDetails();
+        }
+        setUpdating(false);
+        return;
+      }
     }
 
     const update: Record<string, string> = {
       updated_at: new Date().toISOString(),
     };
 
-    if (role === 'approver' && QUEUE_STATUSES.includes(sub.status)) {
+    if (role === 'tourism_officer' && QUEUE_STATUSES.includes(sub.status)) {
       if (decision === 'approve') {
         setUpdating(false);
         return;
@@ -459,19 +536,23 @@ export default function ApproverManagePage() {
     );
   }
 
+  const finalDecisionOfficeRoleValue = sub.final_decision_office_role ?? null;
+  const finalDecisionOfficeLabel = isOfficeRole(finalDecisionOfficeRoleValue)
+    ? OFFICE_CONFIG[finalDecisionOfficeRoleValue].label
+    : 'Not designated yet';
   const statusConfig = sub.status === 'pending_office' && sub.selected_office_role === 'mayor_office'
     ? { label: "Mayor's final route decision", classes: 'bg-review-bg text-review-text' }
     : getStatusStyles(sub.status);
+  const activeRouteStep = isOfficeRole(role)
+    ? routeSteps.find((step) => step.office_role === role && step.status === 'in_progress')
+    : undefined;
   const officeReview =
     isOfficeRole(role)
-    && role === sub.selected_office_role
-    && sub.status === 'pending_office';
-  const mayorRouteStep = role === 'mayor_office' && officeReview && hasFinalizedRoute;
-  const activeRouteStep = routeSteps.find(
-    (step) => step.office_role === sub.selected_office_role && step.status === 'in_progress'
-  );
+    && sub.status === 'pending_office'
+    && (role === sub.selected_office_role || Boolean(activeRouteStep));
+  const mayorRouteStep = role === 'mayor_office' && officeReview && Boolean(activeRouteStep);
   const mayorReview = role === 'mayor_office' && sub.status === 'pending_mayor';
-  const approverReview = role === 'approver' && QUEUE_STATUSES.includes(sub.status);
+  const approverReview = role === 'tourism_officer' && QUEUE_STATUSES.includes(sub.status);
   const canAct = officeReview || mayorReview || approverReview;
   const isLocked = !canAct;
   const isDeclined = DECLINED_STATUSES.includes(sub.status.toLowerCase());
@@ -521,19 +602,26 @@ export default function ApproverManagePage() {
           <section className="space-y-5 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
             <div>
               <p className="mb-1 text-[11px] font-medium text-muted-text">Document type</p>
-              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">{sub.category || 'Unassigned'}</p>
+              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">
+                {getWorkflowDocumentTypeLabel(sub.category ?? null, sub.other_document_type)}
+              </p>
             </div>
             <div>
               <p className="mb-1 text-[11px] font-medium text-muted-text">
                 {routeSteps.length > 0 || proposedOffices.length > 0
-                  ? 'Municipal office route'
-                  : 'Selected municipal office'}
+                  ? 'Additional office assignments'
+                  : 'Submitter-selected destination'}
               </p>
               {routeSteps.length > 0 ? (
                 <ol className="space-y-1.5 text-xs font-semibold text-warm-text">
                   {routeSteps.map((step) => (
                     <li key={`${step.sequence_number}-${step.office_role}`} className="flex items-center justify-between gap-3">
-                      <span>{step.sequence_number}. {OFFICE_CONFIG[step.office_role].label}</span>
+                      <span>
+                        {step.sequence_number}. {OFFICE_CONFIG[step.office_role].label}
+                        <span className="ml-2 font-normal text-muted-text">
+                          {OFFICE_RESPONSIBILITIES[step.responsibility]}
+                        </span>
+                      </span>
                       <span className="text-[10px] font-normal capitalize text-muted-text">
                         {step.status.replaceAll('_', ' ')}
                       </span>
@@ -548,9 +636,17 @@ export default function ApproverManagePage() {
                 </ol>
               ) : (
                 <p className="text-xs font-semibold text-warm-text">
-                  {typeof sub.selected_office_role === 'string' && isOfficeRole(sub.selected_office_role)
-                    ? OFFICE_CONFIG[sub.selected_office_role].label
-                    : 'Not selected yet'}
+                  {sub.initial_destination_role === TOURISM_OFFICE_ROLE
+                    ? TOURISM_OFFICE_LABEL
+                    : typeof sub.initial_destination_role === 'string' && isOfficeRole(sub.initial_destination_role)
+                      ? OFFICE_CONFIG[sub.initial_destination_role].label
+                      : 'Not selected yet'}
+                </p>
+              )}
+              {sub.initial_destination_role === TOURISM_OFFICE_ROLE && (
+                <p className="mt-2 text-[11px] text-muted-text">
+                  Final-decision office:{' '}
+                  <span className="font-semibold text-warm-text">{finalDecisionOfficeLabel}</span>
                 </p>
               )}
               {routeStatus === 'proposed' && (
@@ -678,38 +774,102 @@ export default function ApproverManagePage() {
             ) : (
               <>
                 {approverReview && (
+                  sub.initial_destination_role === TOURISM_OFFICE_ROLE && (
+                    <label className="mb-4 block text-xs font-semibold text-warm-text">
+                      Municipal office responsible for the final decision
+                      <select
+                        value={finalDecisionOfficeRole}
+                        onChange={(event) => {
+                          const officeRole = event.target.value;
+                          setFinalDecisionOfficeRole(isOfficeRole(officeRole) ? officeRole : '');
+                        }}
+                        required
+                        className="mt-2 h-11 w-full rounded-xl border border-warm-border bg-card px-3 text-xs font-normal text-warm-text"
+                      >
+                        <option value="">Select a municipal office</option>
+                        {Object.entries(OFFICE_CONFIG).map(([officeRole, office]) => (
+                          <option key={officeRole} value={officeRole}>{office.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )
+                )}
+                {approverReview && (
                   <fieldset className="mb-4 space-y-3">
                     <legend className="mb-2 text-xs font-semibold text-warm-text">
-                      Propose the municipal offices this request requires
+                      {sub.initial_destination_role === TOURISM_OFFICE_ROLE
+                        ? 'Optional additional office assignments after review'
+                        : 'Assign additional offices after reviewing this submission'}
                     </legend>
                     <div className="space-y-2">
                       {Object.entries(OFFICE_CONFIG).map(([officeRole, office]) => (
-                        <label key={officeRole} className="flex items-start gap-3 rounded-xl border border-warm-border bg-card p-3 text-xs text-warm-text">
-                          <input
-                            type="checkbox"
-                            checked={proposedOffices.includes(officeRole as OfficeRole)}
-                            onChange={() => toggleProposedOffice(officeRole as OfficeRole)}
-                            className="mt-0.5 accent-clay"
-                          />
-                          <span>{office.label}</span>
-                        </label>
+                        sub.initial_destination_role !== officeRole && (
+                          <div key={officeRole} className="rounded-xl border border-warm-border bg-card p-3 text-xs text-warm-text">
+                            <label className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={proposedOffices.includes(officeRole as OfficeRole)}
+                                onChange={() => toggleProposedOffice(officeRole as OfficeRole)}
+                                className="mt-0.5 accent-clay"
+                              />
+                              <span>{office.label}</span>
+                            </label>
+                            {proposedOffices.includes(officeRole as OfficeRole) && (
+                              <label className="mt-3 block text-[11px] text-muted-text">
+                                Responsibility
+                                <select
+                                  value={officeResponsibilities[officeRole as OfficeRole] ?? 'mandatory_approval_clearance'}
+                                  onChange={(event) => setOfficeResponsibilities((current) => ({
+                                    ...current,
+                                    [officeRole]: event.target.value as OfficeResponsibility,
+                                  }))}
+                                  className="mt-1 h-10 w-full rounded-lg border border-warm-border bg-card px-3 text-xs text-warm-text"
+                                >
+                                  {Object.entries(OFFICE_RESPONSIBILITIES).map(([value, label]) => (
+                                    <option key={value} value={value}>{label}</option>
+                                  ))}
+                                </select>
+                              </label>
+                            )}
+                          </div>
+                        )
                       ))}
                     </div>
+                    <label className="block text-[11px] font-medium text-muted-text">
+                      Routing order
+                      <select
+                        value={routingMode}
+                        onChange={(event) => setRoutingMode(event.target.value as OfficeRoutingMode)}
+                        className="mt-1 h-10 w-full rounded-lg border border-warm-border bg-card px-3 text-xs text-warm-text"
+                      >
+                        <option value="sequential">Sequential — one office at a time</option>
+                        <option value="simultaneous">Simultaneous — assigned offices work in parallel</option>
+                      </select>
+                    </label>
                     {proposedOffices.length > 0 && (
                       <ol className="space-y-2 rounded-xl bg-sidebar p-3 text-xs text-warm-text">
                         {proposedOffices.map((officeRole, index) => (
                           <li key={officeRole} className="flex items-center justify-between gap-3">
-                            <span>{index + 1}. {OFFICE_CONFIG[officeRole].label}</span>
+                            <span>
+                              {routingMode === 'simultaneous' ? 1 : index + 1}. {OFFICE_CONFIG[officeRole].label}
+                              <span className="ml-2 font-normal text-muted-text">
+                                {OFFICE_RESPONSIBILITIES[officeResponsibilities[officeRole] ?? 'mandatory_approval_clearance']}
+                              </span>
+                            </span>
                             <span className="flex gap-2">
-                              <button type="button" onClick={() => moveProposedOffice(index, -1)} disabled={index === 0 || officeRole === 'mayor_office'} aria-label={`Move ${OFFICE_CONFIG[officeRole].label} up`} className="disabled:opacity-40">↑</button>
-                              <button type="button" onClick={() => moveProposedOffice(index, 1)} disabled={index === proposedOffices.length - 1 || officeRole === 'mayor_office' || proposedOffices[index + 1] === 'mayor_office'} aria-label={`Move ${OFFICE_CONFIG[officeRole].label} down`} className="disabled:opacity-40">↓</button>
+                              {routingMode === 'sequential' && (
+                                <>
+                                  <button type="button" onClick={() => moveProposedOffice(index, -1)} disabled={index === 0} aria-label={`Move ${OFFICE_CONFIG[officeRole].label} up`} className="disabled:opacity-40">↑</button>
+                                  <button type="button" onClick={() => moveProposedOffice(index, 1)} disabled={index === proposedOffices.length - 1} aria-label={`Move ${OFFICE_CONFIG[officeRole].label} down`} className="disabled:opacity-40">↓</button>
+                                </>
+                              )}
                             </span>
                           </li>
                         ))}
                       </ol>
                     )}
                     <p className="text-[11px] text-muted-text">
-                      The Mayor’s Office is optional and, if selected, must be the final route step.
+                      Additional assignments do not replace the final-decision office or grant final decision authority.
                     </p>
                   </fieldset>
                 )}
@@ -717,26 +877,26 @@ export default function ApproverManagePage() {
                   {mayorReview || mayorRouteStep
                     ? mayorRouteStep ? 'Additional requirements or office decision notes' : "Mayor's official decision"
                     : officeReview
-                      ? hasFinalizedRoute
-                        ? 'Office evaluation or additional requirements'
-                        : 'Office evaluation'
-                      : 'Approver remarks'}
+                      ? activeRouteStep
+                        ? 'Evaluation, clearance, or recommendation notes'
+                        : 'Final office decision notes'
+                      : 'Tourism Officer remarks'}
                 </label>
                 <textarea
                   id="approver-notes"
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
-                  aria-describedby={hasFinalizedRoute && officeReview && actionError ? 'office-route-action-error' : undefined}
+                  aria-describedby={officeReview && actionError ? 'office-route-action-error' : undefined}
                   className="mb-4 h-32 w-full resize-none rounded-xl border border-warm-border bg-card p-4 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay"
-                  placeholder={hasFinalizedRoute && officeReview
-                    ? 'Explain the additional information the sender must provide...'
+                  placeholder={officeReview
+                    ? 'Record your evaluation, final decision, or the changes the sender must provide...'
                     : mayorReview
                       ? 'Explain the final decision...'
                     : 'Record your evaluation and any reasons...'}
                 />
                 {actionError && (
                   <p
-                    id={hasFinalizedRoute && officeReview ? 'office-route-action-error' : undefined}
+                    id={officeReview ? 'office-route-action-error' : undefined}
                     role="alert"
                     className="mb-3 whitespace-pre-wrap rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text"
                   >
@@ -751,7 +911,11 @@ export default function ApproverManagePage() {
                         disabled={updating}
                         className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
                       >
-                        {updating ? 'Saving...' : 'Approve and send to admin'}
+                        {updating
+                          ? 'Saving...'
+                          : sub.initial_destination_role === TOURISM_OFFICE_ROLE
+                            ? 'Route submission'
+                            : 'Assign additional offices'}
                       </button>
                       <button
                         onClick={() => handleWorkflowAction('reject')}
@@ -764,16 +928,14 @@ export default function ApproverManagePage() {
                   )}
                   {officeReview && (
                     <>
-                      {hasFinalizedRoute && (
-                        <button
-                          type="button"
-                          onClick={() => void handleWorkflowAction('return')}
-                          disabled={updating}
-                          className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar disabled:opacity-50"
-                        >
-                          {updating ? 'Saving...' : 'Return for requirements'}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => void handleWorkflowAction('return')}
+                        disabled={updating}
+                        className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar disabled:opacity-50"
+                      >
+                        {updating ? 'Saving...' : 'Request changes'}
+                      </button>
                       <button
                         onClick={() => handleWorkflowAction('approve')}
                         disabled={updating}
@@ -781,10 +943,20 @@ export default function ApproverManagePage() {
                       >
                         {updating
                           ? 'Saving...'
-                          : mayorRouteStep
-                            ? 'Approve and return to Admin'
-                            : 'Complete office review'}
+                          : activeRouteStep
+                            ? 'Record assignment complete'
+                            : 'Approve and complete'}
                       </button>
+                      {role === sub.initial_destination_role && !activeRouteStep && (
+                        <button
+                          type="button"
+                          onClick={() => void handleWorkflowAction('forward')}
+                          disabled={updating}
+                          className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar disabled:opacity-50"
+                        >
+                          {updating ? 'Saving...' : 'Forward to Tourism Officer'}
+                        </button>
+                      )}
                       <button
                         onClick={() => handleWorkflowAction('reject')}
                         disabled={updating}

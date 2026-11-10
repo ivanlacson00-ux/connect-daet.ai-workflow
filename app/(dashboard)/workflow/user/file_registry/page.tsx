@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
 import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
+import { getWorkflowDocumentTypeLabel } from '@/lib/workflow/offices';
 import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 // ─── Styles & Fonts (synced with dashboard) ──────────────────────────────────
@@ -47,6 +48,7 @@ interface FileSubmission extends PreviewSubmission {
   created_at: string;
   status: string;
   category?: string | null;
+  other_document_type?: string | null;
   file_size?: number | null;
   selected_office_role?: string | null;
 }
@@ -187,7 +189,7 @@ export default function UserFileRegistry() {
                       <div className="min-w-0 flex-1">
                         <div className="mb-1.5 flex flex-wrap items-center gap-2">
                           <span className="rounded-md bg-clay-soft px-2 py-1 text-[10px] font-medium text-clay">
-                            {file.category || 'General'}
+                            {getWorkflowDocumentTypeLabel(file.category ?? null, file.other_document_type)}
                           </span>
                           <span className="text-[11px] text-muted-text">
                             ID: {String(file.id).slice(0, 8)}
@@ -249,6 +251,8 @@ export default function UserFileRegistry() {
                         routeStatus={route?.status ?? null}
                         routeFinalizedAt={route?.finalizedAt}
                         selectedOfficeRole={file.selected_office_role}
+                        initialDestinationRole={route?.initialDestinationRole}
+                        finalDecisionOfficeRole={route?.finalDecisionOfficeRole}
                         auditEvents={[]}
                         routeLoadFailed={route?.loadFailed ?? false}
                       />

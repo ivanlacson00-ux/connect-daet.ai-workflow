@@ -32,7 +32,7 @@ export default function WorkflowLayout({
           .eq('id', user.id)
           .single();
         
-        setRole(profile?.role || 'user');
+        setRole(profile?.role || 'submitter');
         const { count } = await supabase
           .from('workflow_notifications')
           .select('id', { count: 'exact', head: true })
@@ -76,7 +76,7 @@ export default function WorkflowLayout({
   };
 
   const navLinks = () => {
-    if (role === 'user') {
+    if (role === 'submitter') {
       return [
         { href: '/workflow/user', label: 'Dashboard', icon: '◰' },
         { href: '/workflow/user/upload', label: 'Upload', icon: '⊕' },
@@ -84,7 +84,7 @@ export default function WorkflowLayout({
         { href: '/workflow/user/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
       ];
     }
-    if (role === 'approver') {
+    if (role === 'tourism_officer') {
       return [
         { href: '/workflow/approver', label: 'Dashboard', icon: '⎚' },
         { href: '/workflow/approver/file_management', label: 'File Registry', icon: '▤' },
@@ -97,7 +97,7 @@ export default function WorkflowLayout({
         { href: '/workflow/retrieval', label: 'Scan QR Code', icon: '⌗' },
       ];
     }
-    if (role === 'admin') {
+    if (role === 'system_admin') {
       return [
         { href: '/workflow/admin', label: 'Dashboard', icon: '⌬' },
         { href: '/workflow/admin/user_management', label: 'User Registry', icon: '☍' },

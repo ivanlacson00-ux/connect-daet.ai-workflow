@@ -84,7 +84,7 @@ export default function ApproverSubmissionsPage() {
       {/* Header */}
       <div className="mb-8 max-md:mb-5">
         <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
-          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Approver workspace
+          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Tourism Officer workspace
         </p>
         <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>File registry</h1>
         <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">Every submission, including ones you&apos;ve already reviewed.</p>
@@ -196,6 +196,8 @@ export default function ApproverSubmissionsPage() {
                       routeStatus={routesBySubmission[sub.id]?.status ?? null}
                       routeFinalizedAt={routesBySubmission[sub.id]?.finalizedAt}
                       selectedOfficeRole={sub.selected_office_role}
+                      initialDestinationRole={routesBySubmission[sub.id]?.initialDestinationRole}
+                      finalDecisionOfficeRole={routesBySubmission[sub.id]?.finalDecisionOfficeRole}
                       auditEvents={[]}
                       routeLoadFailed={routesBySubmission[sub.id]?.loadFailed ?? false}
                     />

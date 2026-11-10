@@ -170,6 +170,8 @@ function SubmissionCard({
           routeStatus={route?.status ?? null}
           routeFinalizedAt={route?.finalizedAt}
           selectedOfficeRole={sub.selected_office_role}
+          initialDestinationRole={route?.initialDestinationRole}
+          finalDecisionOfficeRole={route?.finalDecisionOfficeRole}
           auditEvents={[]}
           routeLoadFailed={route?.loadFailed ?? false}
         />
@@ -178,7 +180,7 @@ function SubmissionCard({
   );
 }
 
-// ─── Main Approver Dashboard ─────────────────────────────────────────────────
+// ─── Tourism Officer Dashboard ───────────────────────────────────────────────
 export default function ApproverDashboard() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
@@ -257,7 +259,7 @@ export default function ApproverDashboard() {
         <div className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-center max-md:mb-5 max-md:gap-3">
           <div>
             <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Approver workspace
+              <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Tourism Officer workspace
             </p>
             <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>Review queue</h1>
             <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">

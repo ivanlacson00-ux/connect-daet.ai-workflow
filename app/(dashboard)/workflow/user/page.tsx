@@ -166,6 +166,8 @@ function SubmissionCard({
           routeStatus={route?.status ?? null}
           routeFinalizedAt={route?.finalizedAt}
           selectedOfficeRole={sub.selected_office_role}
+          initialDestinationRole={route?.initialDestinationRole}
+          finalDecisionOfficeRole={route?.finalDecisionOfficeRole}
           auditEvents={[]}
           routeLoadFailed={route?.loadFailed ?? false}
         />
