@@ -16,7 +16,7 @@ flowchart LR
 
   subgraph App["Next.js application"]
     UI["Role-specific workflow pages"]
-    EmailAPI["Protected email worker API"]
+    SendGridWebhook["SendGrid delivery webhook"]
   end
 
   subgraph Supabase["Supabase"]
@@ -24,10 +24,11 @@ flowchart LR
     DB[("Postgres<br/>submissions · attachments metadata<br/>routing plans and steps · audit logs<br/>notifications · email outbox")]
     Storage[("Protected file storage")]
     Realtime["Realtime"]
+    Cron["Supabase Cron<br/>every minute"]
+    EmailFunction["Email outbox Edge Function"]
   end
 
-  Actions["GitHub Actions<br/>every 15 minutes or manual"]
-  Resend["Resend"]
+  SendGrid["Twilio SendGrid"]
 
   Submitter --> UI
   Approver --> UI
@@ -39,10 +40,10 @@ flowchart LR
   UI -->|"Subscribe to notification changes"| Realtime
   DB -->|"In-app notifications"| Realtime
   DB -->|"Notification trigger queues email"| DB
-  Actions -->|"CRON_SECRET request"| EmailAPI
-  EmailAPI -->|"Service-role access to pending jobs"| DB
-  EmailAPI -->|"Send queued messages"| Resend
-  EmailAPI -->|"Record sent / retry state"| DB
+  Cron -->|"Invoke processor"| EmailFunction
+  EmailFunction -->|"Claim and update queued jobs"| DB
+  EmailFunction -->|"Send queued messages"| SendGrid
+  SendGrid -->|"Signed delivery events"| SendGridWebhook
 ```
 
 ## Document lifecycle
@@ -130,8 +131,8 @@ outbox.
 Notifications are recorded in the database. Inserts create in-app notifications
 and queue email jobs; clients subscribe to notification and submission-status
 changes, messages, attachments, and read receipts through Supabase Realtime. A
-scheduled GitHub Actions workflow calls the protected Next.js email API, which
-sends pending jobs through Resend and records delivery attempts.
+Supabase Cron job calls the protected email outbox Edge Function, which sends
+pending jobs through Twilio SendGrid and records delivery attempts.
 
 ## Implementation references
 
@@ -150,5 +151,6 @@ sends pending jobs through Resend and records delivery attempts.
 - [Requirements requests from any municipal office](./supabase/migrations/20261106110000_allow_offices_to_request_requirements.sql)
 - [Email outbox](./supabase/migrations/20260925090500_add_email_notification_outbox.sql)
 - [Submission status realtime updates](./supabase/migrations/20261106150000_enable_submission_status_realtime.sql)
-- [Email delivery API](./app/api/notifications/email/route.ts)
-- [Scheduled email processing](./.github/workflows/process-email-outbox.yml)
+- [Email outbox Edge Function](./supabase/functions/process-email-outbox/index.ts)
+- [Supabase Cron schedule](./supabase/migrations/20261110033000_schedule_workflow_email_edge_function.sql)
+- [SendGrid event tracking migration](./supabase/migrations/20261110032000_switch_workflow_email_to_sendgrid.sql)

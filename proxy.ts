@@ -47,9 +47,19 @@ export async function proxy(req: NextRequest) {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('role')
+    .select('role, is_active')
     .eq('id', user.id)
     .single()
+  if (profile?.is_active === false) {
+    await supabase.auth.signOut()
+    const disabledResponse = NextResponse.redirect(
+      new URL('/login?account=disabled', req.url)
+    )
+    res.cookies.getAll().forEach(({ name, value, ...options }) => {
+      disabledResponse.cookies.set(name, value, options)
+    })
+    return disabledResponse
+  }
   const role = profile?.role ?? null
   const pathname = req.nextUrl.pathname
 

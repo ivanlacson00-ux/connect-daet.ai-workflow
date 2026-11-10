@@ -89,6 +89,9 @@ ZIP files are accepted as supporting attachments only.
 Apply `20261106130000_enforce_workflow_upload_file_types.sql` after that to
 enforce matching file extensions and MIME types in the database, disallow ZIP
 as a primary document, and reject unsupported extensions at the Storage policy.
+The `20261110050000_add_active_profile_state.sql` migration enables admin
+account removal by disabling sign-in and hiding the profile while retaining
+workflow history.
 After the preceding workflow migrations, apply
 `20261108080000_add_document_messaging.sql` to enable private, real-time document
 conversations, authorized message attachments, read receipts, and message
@@ -96,20 +99,51 @@ notifications. Message email notifications use the existing email outbox and
 scheduled email processor.
 Apply `20261108170000_harden_workflow_email_delivery.sql` afterward to enable
 leased email-job claiming, bounded retries, attempt history, provider delivery
-events, and administrator inspection/retry access. Configure
-`RESEND_WEBHOOK_SECRET` in the server environment and register
-`https://<your-app-domain>/api/webhooks/resend` in Resend for the
-`email.delivered`, `email.bounced`, `email.complained`, `email.failed`, and
-`email.suppressed` events. The scheduled processor uses the existing
-`CRON_SECRET` and `VERCEL_APP_URL` GitHub Actions secrets. Set `APP_BASE_URL`
-to the canonical application origin in the server environment for secure
-document links in notification emails. Provider API acceptance is recorded as
-`accepted`; only a verified webhook records delivery.
-Apply `20261108180000_add_workflow_email_templates.sql` afterward to add
-branded HTML/text notification emails, document references, recipient
-greetings, and role-appropriate links. Existing workflow notifications,
-including message notifications, are queued automatically; email message
-notices link to the conversation without including private message contents.
+events, and administrator retry access. Apply
+`20261110032000_switch_workflow_email_to_sendgrid.sql` afterward to match
+SendGrid's event format and correlate events to queued jobs. Workflow emails
+are processed by the Supabase Edge Function in
+`supabase/functions/process-email-outbox/`; it sends through Twilio SendGrid
+and preserves the leased queue, retry behavior, and delivery tracking. Deploy it to the test project with
+`supabase functions deploy process-email-outbox --no-verify-jwt`; the function
+validates the `x-cron-secret` header itself. Configure the Edge Function secrets
+`SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `APP_BASE_URL`, and `CRON_SECRET`.
+The sender address must be verified in SendGrid. Configure a signed Event
+Webhook in SendGrid for
+`https://<your-app-domain>/api/webhooks/sendgrid`, enable delivered, bounce,
+spam-report, and dropped events, and store its displayed verification key as
+the app's server-only `SENDGRID_WEBHOOK_PUBLIC_KEY` environment variable.
+Supabase provides `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to Edge
+Functions. Enable Supabase Vault, then create the scheduler secrets using the
+SQL Editor (replace the placeholders with the function URL and the exact same
+random secret configured as `CRON_SECRET`):
+
+```sql
+select vault.create_secret(
+  'https://<project-ref>.supabase.co/functions/v1/process-email-outbox',
+  'workflow_email_function_url'
+);
+select vault.create_secret(
+  '<same-value-as-CRON_SECRET>',
+  'workflow_email_cron_secret'
+);
+```
+
+Apply `20261108180000_add_workflow_email_templates.sql` before the scheduling
+migration to add branded HTML/text notification emails, document references,
+recipient greetings, and role-appropriate links. Existing workflow
+notifications, including message notifications, are queued automatically;
+email message notices link to the conversation without including private
+message contents. Set `APP_BASE_URL` to the canonical application origin for
+secure document links in notification emails. After deploying the function,
+applying the email migrations (including
+`20261110032000_switch_workflow_email_to_sendgrid.sql`) and creating both Vault secrets, apply
+`20261110033000_schedule_workflow_email_edge_function.sql` to run the processor
+every minute. If that migration reports missing Vault secrets, it has not
+scheduled the processor; create the named secrets first, then rerun the
+migration. Provider API acceptance is recorded as `accepted`; only a verified
+webhook records delivery. Password-reset emails continue through Supabase Auth
+and are unaffected by this workflow-email change.
 Set `NEXT_PUBLIC_APP_URL` to the canonical application origin used to build
 retrieval QR links. For local testing from a phone, use a LAN-reachable address
 such as `http://<computer-lan-ip>:3000` and open the application through that
@@ -131,14 +165,13 @@ standard secure recovery link. Recovery requests are issued through the
 server-side `/api/auth/password/request` handler and callback exchange before
 the password-change endpoint accepts an update.
 
-The Admin workspace's Email Monitoring page reads queue status and processing
-attempts through administrator-only database policies and can retry eligible
-failed email jobs. It requires the email-delivery hardening migration to be
-applied; it does not display email bodies.
+Workflow completion emails are sent through the email outbox and scheduled
+SendGrid processor. Email delivery runs automatically and is separate from the
+admin workspace UI.
 
 ## Local checks
 
 Run `npm test` (Node.js 22.6 or newer) for the unit tests covering password
 validation and safe notification-email rendering. Run `npm run build` for the
 production build and TypeScript check. Integration checks that contact Supabase
-or Resend should use a dedicated test project and recipient.
+or SendGrid should use a dedicated test project and recipient.

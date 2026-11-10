@@ -23,6 +23,7 @@ interface UserProfile {
   email: string;
   role: string;
   created_at: string;
+  is_active: boolean;
 }
 
 const ROLES: Role[] = [
@@ -80,20 +81,30 @@ export default function UserManagementPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
+  const [showInactive, setShowInactive] = useState(false);
   const [updating, setUpdating] = useState<string | null>(null);
   const [roleUpdateError, setRoleUpdateError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [userFetchError, setUserFetchError] = useState('');
 
   // ─── Data actions ──────────────────────────────────────────────────────────
   const fetchUsers = useCallback(async () => {
     const { data, error } = await supabase
       .from('profiles')
-      .select('*')
+      .select('id, email, role, created_at, is_active')
+      .eq('is_active', !showInactive)
       .order('created_at', { ascending: false });
 
-    if (error) console.error('Fetch error:', error.message);
+    if (error) {
+      console.error('User registry fetch failed:', error.message);
+      setUserFetchError(`Could not load the user registry: ${error.message}`);
+      setLoading(false);
+      return;
+    }
+    setUserFetchError('');
     setUsers(data ?? []);
     setLoading(false);
-  }, [supabase]);
+  }, [showInactive, supabase]);
 
   const updateRole = async (userId: string, newRole: Role) => {
     setUpdating(userId);
@@ -114,23 +125,36 @@ export default function UserManagementPage() {
 
   const deleteUser = async (userId: string, email: string) => {
     const confirmed = window.confirm(
-      `WARNING: Are you sure you want to delete ${email}? This will remove their profile record.`
+      `Disable ${email}'s sign-in, free this email for a new registration, and anonymize their old workflow history?`
     );
     if (!confirmed) return;
 
     setUpdating(userId);
-    const { error } = await supabase
-      .from('profiles')
-      .delete()
-      .eq('id', userId);
+    setDeleteError('');
+    try {
+      const response = await fetch(`/api/admin/users/${userId}`, {
+        method: 'DELETE',
+      });
+      const result: unknown = await response.json();
+      const errorMessage =
+        typeof result === 'object'
+        && result !== null
+        && 'error' in result
+        && typeof result.error === 'string'
+          ? result.error
+          : 'Could not remove this user.';
 
-    if (error) {
-      console.error('Delete error:', error.message);
-      alert('Failed to delete user profile.');
-    } else {
+      if (!response.ok) {
+        setDeleteError(errorMessage);
+        return;
+      }
       setUsers(prev => prev.filter(u => u.id !== userId));
+    } catch (error) {
+      console.error('User deletion request failed:', error);
+      setDeleteError('Could not reach the server to delete this user. Please try again.');
+    } finally {
+      setUpdating(null);
     }
-    setUpdating(null);
   };
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
@@ -191,6 +215,22 @@ export default function UserManagementPage() {
           Role update failed: {roleUpdateError}
         </p>
       )}
+      {deleteError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text"
+        >
+          Account removal failed: {deleteError}
+        </p>
+      )}
+      {userFetchError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text"
+        >
+          {userFetchError}
+        </p>
+      )}
 
       {/* Toolbar */}
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -207,6 +247,18 @@ export default function UserManagementPage() {
 
         {/* Role filter pills (scroll inside their own row on mobile) */}
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden">
+          <button
+            type="button"
+            onClick={() => setShowInactive((current) => !current)}
+            aria-pressed={showInactive}
+            className={`inline-flex h-10 shrink-0 items-center rounded-full border px-4 text-xs font-medium transition-colors max-md:h-11 ${
+              showInactive
+                ? 'border-clay bg-clay text-white'
+                : 'border-warm-border bg-card text-warm-text hover:bg-sidebar'
+            }`}
+          >
+            {showInactive ? 'Showing removed accounts' : 'Show removed accounts'}
+          </button>
           {FILTERS.map(f => {
             const active = roleFilter === f.key;
             return (
@@ -240,6 +292,10 @@ export default function UserManagementPage() {
       {loading ? (
         <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
           <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Loading users...
+        </div>
+      ) : userFetchError ? (
+        <div className="rounded-2xl border border-rejected-bg bg-card px-5 py-8 text-center text-xs text-rejected-text">
+          The registry could not be loaded. Resolve the error above and try again.
         </div>
       ) : filtered.length === 0 ? (
         <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
@@ -303,7 +359,7 @@ export default function UserManagementPage() {
                       onClick={() => deleteUser(user.id, user.email)}
                       className="inline-flex h-10 items-center justify-center rounded-full border border-rejected-bg px-5 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 max-md:h-11 max-md:w-full"
                     >
-                      Delete
+                      {user.is_active ? 'Remove account' : 'Free email for re-registration'}
                     </button>
                   </>
                 )}
