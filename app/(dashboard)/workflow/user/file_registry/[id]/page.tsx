@@ -7,9 +7,13 @@ import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
 import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
 import {
+  getWorkflowDocumentTypeLabel,
+} from '@/lib/workflow/offices';
+import {
   getWorkflowFileMimeType,
   getWorkflowFilesTypeError,
   WORKFLOW_ATTACHMENT_ACCEPT,
+  WORKFLOW_DOCUMENT_ACCEPT,
 } from '@/lib/workflow/file-types';
 
 // ─── Styles & Fonts (synced with dashboard) ──────────────────────────────────
@@ -28,8 +32,10 @@ interface Submission {
   file_size: number;
   status: string;
   category: string;
+  other_document_type?: string | null;
   description: string;
   intended_recipient?: string | null;
+  initial_destination_role?: string | null;
   selected_office_role?: string | null;
   office_comments?: string | null;
   mayor_comments?: string | null;
@@ -47,6 +53,11 @@ interface Attachment {
   file_path: string;
   file_type: string | null;
   file_size: number;
+}
+
+interface SubmissionVersion extends Attachment {
+  version_number: number;
+  created_at: string;
 }
 
 interface AuditLog {
@@ -69,9 +80,11 @@ export default function UserFileDetail() {
   const router = useRouter();
   const [sub, setSub] = useState<Submission | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [versions, setVersions] = useState<SubmissionVersion[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [senderResponse, setSenderResponse] = useState('');
   const [responseFiles, setResponseFiles] = useState<File[]>([]);
+  const [revisedDocument, setRevisedDocument] = useState<File | null>(null);
   const [savingResponse, setSavingResponse] = useState(false);
   const [actionError, setActionError] = useState('');
   const [retrievalQr, setRetrievalQr] = useState<RetrievalQr | null>(null);
@@ -118,6 +131,7 @@ export default function UserFileDetail() {
         }
         const [
           { data: attachmentRows, error: attachmentError },
+          { data: versionRows, error: versionError },
           { data: logs, error: logsError },
         ] = await Promise.all([
           supabase
@@ -126,14 +140,21 @@ export default function UserFileDetail() {
             .eq('submission_id', id)
             .order('created_at', { ascending: true }),
           supabase
+            .from('workflow_submission_versions')
+            .select('id, version_number, file_name, file_path, file_type, file_size, created_at')
+            .eq('submission_id', id)
+            .order('version_number', { ascending: true }),
+          supabase
             .from('workflow_audit_logs')
             .select('id, action_type, old_status, new_status, comments, created_at')
             .eq('submission_id', id)
             .order('created_at', { ascending: true }),
         ]);
         if (attachmentError) console.error('Attachment load failed:', attachmentError.message);
+        if (versionError) console.error('Submission version load failed:', versionError.message);
         if (logsError) console.error('Workflow history load failed:', logsError.message);
         setAttachments(attachmentRows ?? []);
+        setVersions(versionRows ?? []);
         setAuditLogs(logs ?? []);
       }
     } finally {
@@ -227,11 +248,13 @@ export default function UserFileDetail() {
   };
 
   const submitRequirementsResponse = async () => {
-    if (!sub || !senderResponse.trim()) {
-      setActionError('Enter a response before resubmitting.');
+    if (!sub || !senderResponse.trim() || !revisedDocument) {
+      setActionError('Enter a response and upload a revised document before resubmitting.');
       return;
     }
-    const fileError = getWorkflowFilesTypeError(responseFiles);
+    const fileError =
+      getWorkflowFilesTypeError([revisedDocument], false)
+      || getWorkflowFilesTypeError(responseFiles);
     if (fileError) {
       setActionError(fileError);
       return;
@@ -244,6 +267,22 @@ export default function UserFileDetail() {
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) throw userError ?? new Error('You must sign in to respond.');
+
+      const revisedFileType = getWorkflowFileMimeType(revisedDocument.name);
+      if (!revisedFileType) throw new Error('The revised document type is not supported.');
+      const safeRevisedName = revisedDocument.name.replace(/[^\w.-]/g, '_');
+      const revisedFilePath = `${user.id}/${crypto.randomUUID()}-revised-${safeRevisedName}`;
+      const { error: revisedUploadError } = await supabase.storage
+        .from('workflow_uploads')
+        .upload(revisedFilePath, revisedDocument, {
+          contentType: revisedFileType,
+          upsert: false,
+        });
+      if (revisedUploadError) throw revisedUploadError;
+      uploadedPaths.push(revisedFilePath);
+      const { data: revisedFileUrl } = supabase.storage
+        .from('workflow_uploads')
+        .getPublicUrl(revisedFilePath);
 
       const newAttachments = [];
       for (const [index, file] of responseFiles.entries()) {
@@ -276,53 +315,23 @@ export default function UserFileDetail() {
         insertedAttachmentIds.push(...(data ?? []).map((item) => item.id));
       }
 
-      const { data: currentRoute, error: routeError } = await supabase
-        .from('workflow_routing_plans')
-        .select('id, status')
-        .eq('submission_id', sub.id)
-        .eq('is_current', true)
-        .maybeSingle();
-      if (routeError) throw routeError;
-
-      let isOfficeRouteRequirements = false;
-      if (currentRoute?.status === 'finalized') {
-        const { data: activeStep, error: stepError } = await supabase
-          .from('workflow_routing_steps')
-          .select('office_role, requirements_requested_at, requirements_resubmitted_at')
-          .eq('routing_plan_id', currentRoute.id)
-          .eq('status', 'in_progress')
-          .not('requirements_requested_at', 'is', null)
-          .maybeSingle();
-        if (stepError) throw stepError;
-        if (!activeStep) {
-          throw new Error('No active office requirements request could be found.');
-        }
-        isOfficeRouteRequirements =
-          !activeStep.requirements_resubmitted_at
-          || new Date(activeStep.requirements_resubmitted_at).getTime()
-            < new Date(activeStep.requirements_requested_at).getTime();
-      }
-
-      if (isOfficeRouteRequirements) {
-        const { error: responseError } = await supabase.rpc('respond_to_workflow_route_requirements', {
+      const { error: responseError } = await supabase.rpc(
+        'respond_to_workflow_submission_changes',
+        {
           target_submission_id: sub.id,
           sender_comments: senderResponse.trim(),
-        });
-        if (responseError) throw responseError;
-      } else {
-        const { error: updateError } = await supabase
-          .from('workflow_submissions')
-          .update({
-            status: 'pending_mayor',
-            sender_response: senderResponse.trim(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', sub.id);
-        if (updateError) throw updateError;
-      }
+          revised_file_path: revisedFilePath,
+          revised_file_url: revisedFileUrl.publicUrl,
+          revised_file_name: revisedDocument.name,
+          revised_file_type: revisedFileType,
+          revised_file_size: revisedDocument.size,
+        }
+      );
+      if (responseError) throw responseError;
 
       await fetchSubmission();
       setResponseFiles([]);
+      setRevisedDocument(null);
     } catch (error) {
       console.error('Requirements response failed:', error);
       if (insertedAttachmentIds.length) {
@@ -370,11 +379,17 @@ export default function UserFileDetail() {
 
   const getWorkflowActionLabel = (actionType: string) => {
     switch (actionType) {
-      case 'ROUTE_PROPOSED': return 'Approver proposed office route';
+      case 'ROUTE_PROPOSED': return 'Tourism Officer proposed office route';
       case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Assigned to municipal office';
       case 'OFFICE_ROUTE_STEP_APPROVED': return 'Municipal office approved';
+      case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Forwarded for Tourism Officer review';
+      case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer assigned additional offices';
+      case 'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED': return 'Additional office assignments completed';
+      case 'OFFICE_FINAL_DECISION': return 'Final decision by authorized office';
       case 'ROUTE_RETURNED_TO_ADMIN': return 'All routed offices approved; returned to Admin';
       case 'ROUTE_REQUIREMENTS_REQUESTED': return 'Municipal office requested additional requirements';
+      case 'REQUIREMENTS_RESUBMITTED': return 'Response to requested changes submitted';
+      case 'REVISED_DOCUMENT_SUBMITTED': return 'Revised document uploaded';
       case 'WORKFLOW_COMPLETED': return 'Request completed';
       case 'RETRIEVAL_QR_SCANNED': return 'Retrieval QR code scanned';
       case 'RETRIEVAL_LOCATION_UPDATED': return 'Physical storage location updated';
@@ -424,6 +439,18 @@ export default function UserFileDetail() {
       return;
     }
     await downloadFile(data.signedUrl, attachment.file_name);
+  };
+
+  const downloadVersion = async (version: SubmissionVersion) => {
+    const { data, error } = await supabase.storage
+      .from('workflow_uploads')
+      .createSignedUrl(version.file_path, 300);
+    if (error || !data?.signedUrl) {
+      console.error('Could not authorize document version download:', error?.message);
+      setActionError('Could not open this document version. Please try again.');
+      return;
+    }
+    await downloadFile(data.signedUrl, version.file_name);
   };
 
   return (
@@ -542,7 +569,9 @@ export default function UserFileDetail() {
           <section className="space-y-5 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
             <div>
               <p className="mb-1 text-[11px] font-medium text-muted-text">Category</p>
-              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">{sub.category || 'Unassigned'}</p>
+              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">
+                {getWorkflowDocumentTypeLabel(sub.category, sub.other_document_type)}
+              </p>
             </div>
             <div>
               <p className="mb-1.5 text-[11px] font-medium text-muted-text">Description</p>
@@ -554,11 +583,11 @@ export default function UserFileDetail() {
               <p className="mb-1.5 text-[11px] font-medium text-muted-text">Intended recipient</p>
               <p className="text-xs leading-relaxed text-warm-text">{sub.intended_recipient || 'Not specified.'}</p>
             </div>
-            {sub.selected_office_role && (
+            {(sub.initial_destination_role || sub.selected_office_role) && (
               <div>
-                <p className="mb-1.5 text-[11px] font-medium text-muted-text">Assigned municipal office</p>
+                <p className="mb-1.5 text-[11px] font-medium text-muted-text">Submitter-selected destination</p>
                 <p className="text-xs font-semibold text-warm-text">
-                  {sub.selected_office_role.replaceAll('_', ' ')}
+                  {(sub.initial_destination_role || sub.selected_office_role || '').replaceAll('_', ' ')}
                 </p>
               </div>
             )}
@@ -593,6 +622,36 @@ export default function UserFileDetail() {
                   </li>
                 ))}
               </ul>
+            )}
+          </section>
+
+          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+            <h2 className="mb-3 text-xs font-semibold text-warm-text">Document version history</h2>
+            {versions.length === 0 ? (
+              <p className="text-[11px] text-muted-text">No document versions are available.</p>
+            ) : (
+              <ol className="space-y-2">
+                {versions.map((version) => (
+                  <li
+                    key={version.id}
+                    className="flex items-center justify-between gap-3 text-[11px]"
+                  >
+                    <span className="min-w-0 truncate text-warm-text">
+                      Version {version.version_number}: {version.file_name}
+                      <span className="ml-2 text-muted-text">
+                        {new Date(version.created_at).toLocaleDateString()}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void downloadVersion(version)}
+                      className="shrink-0 font-semibold text-clay underline"
+                    >
+                      Download
+                    </button>
+                  </li>
+                ))}
+              </ol>
             )}
           </section>
 
@@ -641,6 +700,29 @@ export default function UserFileDetail() {
                 className="w-full rounded-xl border border-warm-border bg-card px-3 py-2 text-xs text-warm-text outline-none focus:border-clay"
                 placeholder="Explain how you addressed the requested requirements."
               />
+              <label className="block text-[11px] font-medium text-warm-text" htmlFor="revised-document">
+                Revised document (required)
+              </label>
+              <input
+                id="revised-document"
+                type="file"
+                accept={WORKFLOW_DOCUMENT_ACCEPT}
+                onChange={(event) => {
+                  const selectedFile = event.target.files?.[0] ?? null;
+                  const fileError = selectedFile
+                    ? getWorkflowFilesTypeError([selectedFile], false)
+                    : null;
+                  if (fileError) {
+                    setRevisedDocument(null);
+                    setActionError(fileError);
+                    event.target.value = '';
+                    return;
+                  }
+                  setRevisedDocument(selectedFile);
+                  setActionError('');
+                }}
+                className="block w-full text-[11px] text-muted-text file:mr-3 file:rounded-full file:border-0 file:bg-card file:px-3 file:py-2 file:text-[11px] file:font-semibold file:text-clay"
+              />
               <label className="block text-[11px] font-medium text-warm-text" htmlFor="response-attachments">
                 Additional supporting files (optional)
               </label>
@@ -670,7 +752,7 @@ export default function UserFileDetail() {
               <button
                 type="button"
                 onClick={() => void submitRequirementsResponse()}
-                disabled={savingResponse || !senderResponse.trim()}
+                disabled={savingResponse || !senderResponse.trim() || !revisedDocument}
                 className="inline-flex h-10 w-full items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {savingResponse ? 'Submitting response...' : 'Send response to office'}

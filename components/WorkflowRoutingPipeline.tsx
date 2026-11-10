@@ -1,4 +1,12 @@
-import { OFFICE_CONFIG, isOfficeRole, type OfficeRole } from '@/lib/workflow/offices';
+import {
+  OFFICE_CONFIG,
+  OFFICE_RESPONSIBILITIES,
+  TOURISM_OFFICE_LABEL,
+  TOURISM_OFFICE_ROLE,
+  isOfficeRole,
+  type OfficeRole,
+  type OfficeResponsibility,
+} from '@/lib/workflow/offices';
 
 type PipelineState = 'complete' | 'active' | 'pending' | 'rejected' | 'skipped';
 
@@ -6,6 +14,8 @@ interface PipelineRouteStep {
   sequence_number: number;
   office_role: string;
   status: string;
+  responsibility?: OfficeResponsibility | string;
+  assignment_source?: string;
   started_at?: string | null;
   decided_at?: string | null;
   requirements_requested_at?: string | null;
@@ -23,6 +33,8 @@ interface WorkflowRoutingPipelineProps {
   routeStatus: string | null;
   routeFinalizedAt?: string | null;
   selectedOfficeRole?: string | null;
+  initialDestinationRole?: string | null;
+  finalDecisionOfficeRole?: string | null;
   auditEvents: PipelineAuditEvent[];
   routeLoadFailed?: boolean;
   variant?: 'full' | 'compact';
@@ -61,6 +73,8 @@ export default function WorkflowRoutingPipeline({
   routeStatus,
   routeFinalizedAt,
   selectedOfficeRole,
+  initialDestinationRole,
+  finalDecisionOfficeRole,
   auditEvents,
   routeLoadFailed = false,
   variant = 'full',
@@ -72,26 +86,30 @@ export default function WorkflowRoutingPipeline({
   );
   const eventTime = (...actionTypes: string[]) =>
     sortedEvents.find((event) => actionTypes.includes(event.action_type))?.created_at;
-
-  const approverRejected = status === 'declined_by_approver';
-  const adminRejected = status === 'declined_by_admin';
-  const officeRejected = status === 'declined_by_office' || status === 'declined_by_mayor';
-  const hasPassedApprover =
-    !!routeStatus ||
-    [
-      'pending_admin',
-      'pending_office',
-      'pending_mayor',
-      'returned_for_requirements',
-      'approved',
-      'completed',
-      'declined_by_admin',
-      'declined_by_office',
-      'declined_by_mayor',
-    ].includes(status);
-  const hasFinalizedRoute = routeStatus === 'finalized';
-  const routeIsProposed = routeStatus === 'proposed';
-  const isLegacyRoute = !routeStatus && isOfficeRole(selectedOfficeRole ?? null);
+  const initialRoleValue = initialDestinationRole ?? selectedOfficeRole ?? null;
+  const initialOfficeRole = isOfficeRole(initialRoleValue) ? initialRoleValue : null;
+  const tourismOfficeWasSelected = initialDestinationRole === TOURISM_OFFICE_ROLE;
+  const finalRoleValue = finalDecisionOfficeRole ?? null;
+  const finalOfficeRole = isOfficeRole(finalRoleValue)
+    ? finalRoleValue
+    : initialOfficeRole;
+  const tourismForwarded = sortedEvents.some(
+    (event) => event.action_type === 'OFFICE_FORWARDED_TO_TOURISM_OFFICER'
+  );
+  const declined = isDeclined(status);
+  const routeForDisplay: PipelineRouteStep[] = routeSteps.length
+    ? [...routeSteps].sort(
+        (first, second) =>
+          first.sequence_number - second.sequence_number
+          || first.office_role.localeCompare(second.office_role)
+      )
+    : [];
+  const activeAssignments = routeForDisplay.some((step) => step.status === 'in_progress');
+  const allAssignmentsComplete = routeForDisplay.length > 0
+    && routeForDisplay.every((step) => step.status === 'approved');
+  const legacyAdminReview =
+    !initialOfficeRole
+    && (status === 'pending_admin' || routeStatus === 'proposed');
 
   const pipelineSteps: PipelineStep[] = [
     {
@@ -102,155 +120,178 @@ export default function WorkflowRoutingPipeline({
       detail: 'Received',
       timestamp: submittedAt,
     },
-    {
-      key: 'approver',
-      title: 'Approver review',
-      subtitle: approverRejected
-        ? 'Request declined'
-        : hasPassedApprover
-          ? 'Route proposed'
-          : 'Initial review',
-      state: approverRejected
-        ? 'rejected'
-        : hasPassedApprover
-          ? 'complete'
-          : status === 'pending' || status === 'pending_approver'
-            ? 'active'
-            : 'pending',
-      timestamp: eventTime('ROUTE_PROPOSED', 'APPROVER_REJECTED', 'STAGE_1_AUTHORIZED'),
-    },
-    {
-      key: 'admin-route',
-      title: 'Administrator',
-      subtitle: adminRejected
-        ? 'Route declined'
-        : hasFinalizedRoute
-          ? 'Route finalized'
-          : routeIsProposed || status === 'pending_admin'
-            ? 'Review proposed route'
-            : 'Route approval',
-      state: adminRejected
-        ? 'rejected'
-        : hasFinalizedRoute
-          ? 'complete'
-          : routeIsProposed || status === 'pending_admin'
-            ? 'active'
-            : approverRejected || officeRejected || status === 'completed'
-              ? 'skipped'
-              : 'pending',
-      timestamp: routeFinalizedAt ?? eventTime('ROUTE_FINALIZED', 'OFFICE_ROUTE_FINALIZED'),
-    },
   ];
 
-  const routeForDisplay: PipelineRouteStep[] = routeSteps.length
-    ? [...routeSteps].sort((first, second) => first.sequence_number - second.sequence_number)
-    : isLegacyRoute
-      ? [{
-          sequence_number: 1,
-          office_role: selectedOfficeRole as OfficeRole,
-          status:
-            status === 'pending_office' || status === 'pending_mayor'
-              ? 'in_progress'
-              : status === 'completed' || status === 'approved'
-                ? 'approved'
-                : status === 'declined_by_office' || status === 'declined_by_mayor'
-                  ? 'rejected'
-                  : 'pending',
-        }]
-      : [];
-
-  let earlierOfficeRejected = false;
-  for (const step of routeForDisplay) {
-    if (!isOfficeRole(step.office_role)) continue;
-    const stepIsRejected =
-      step.status === 'rejected' || (officeRejected && step.status === 'in_progress');
-    const stepIsSkipped =
-      approverRejected ||
-      adminRejected ||
-      earlierOfficeRejected ||
-      step.status === 'skipped';
-    const stepIsComplete = step.status === 'approved';
-    const stepIsActive = step.status === 'in_progress';
-    const waitingOnSubmitter =
-      status === 'returned_for_requirements' &&
-      stepIsActive &&
-      !!step.requirements_requested_at;
-
+  if (initialOfficeRole) {
+    const officeHasReceived = tourismForwarded || routeForDisplay.length > 0 || status === 'completed';
+    const officeIsActive =
+      status === 'pending_office'
+      && selectedOfficeRole === initialOfficeRole
+      && !activeAssignments;
     pipelineSteps.push({
-      key: `office-${step.sequence_number}-${step.office_role}`,
-      title: `Office ${step.sequence_number}`,
-      subtitle: OFFICE_CONFIG[step.office_role].label,
-      state: stepIsRejected
+      key: 'initial-destination',
+      title: 'Selected office',
+      subtitle: OFFICE_CONFIG[initialOfficeRole].label,
+      state: declined && !routeForDisplay.length
         ? 'rejected'
-        : stepIsSkipped
-          ? 'skipped'
-        : stepIsComplete
+        : status === 'completed' || officeHasReceived
           ? 'complete'
-          : stepIsActive && hasFinalizedRoute
+          : officeIsActive || status === 'returned_for_requirements'
             ? 'active'
             : 'pending',
-      detail: waitingOnSubmitter
-        ? 'Waiting for submitter'
-        : step.status === 'approved'
-          ? 'Approved'
-          : step.status === 'rejected'
-            ? 'Declined'
-            : routeIsProposed
-              ? 'Awaiting route approval'
-              : step.status === 'in_progress'
+      detail: status === 'completed'
+        ? 'Final decision recorded'
+        : status === 'returned_for_requirements'
+          ? 'Waiting for submitter'
+          : officeHasReceived
+            ? 'Reviewed'
+            : officeIsActive
+              ? 'Reviewing submission'
+              : 'Directly routed by submitter',
+      timestamp: eventTime('SUBMITTED', 'OFFICE_ROUTE_STEP_ASSIGNED'),
+    });
+  } else if (tourismOfficeWasSelected) {
+    pipelineSteps.push({
+      key: 'initial-destination-tourism',
+      title: 'Selected destination',
+      subtitle: TOURISM_OFFICE_LABEL,
+      state: declined && !routeForDisplay.length
+        ? 'rejected'
+        : status === 'pending_approver'
+          ? 'active'
+          : 'complete',
+      detail: status === 'pending_approver'
+        ? 'Tourism Officer review and municipal-office selection'
+        : finalOfficeRole
+          ? `Final decision assigned to ${OFFICE_CONFIG[finalOfficeRole].label}`
+          : 'Tourism Officer review completed',
+      timestamp: eventTime('SUBMISSION_ROUTED_TO_TOURISM_OFFICER', 'TOURISM_OFFICER_ASSIGNMENTS_CREATED'),
+    });
+  }
+
+  const tourismInvolved =
+    status === 'pending_approver'
+    || tourismForwarded
+    || routeForDisplay.some((step) => step.assignment_source === 'tourism_officer');
+  if (!tourismOfficeWasSelected) {
+    pipelineSteps.push({
+      key: 'tourism-officer',
+      title: 'Tourism Officer',
+      subtitle: 'Optional review',
+      state: status === 'pending_approver'
+        ? 'active'
+        : tourismInvolved
+          ? 'complete'
+          : 'skipped',
+      detail: status === 'pending_approver'
+        ? 'Reviewing forwarded submission'
+        : tourismInvolved
+          ? 'Reviewed; additional assignments created'
+          : 'Not involved',
+      timestamp: eventTime(
+        'OFFICE_FORWARDED_TO_TOURISM_OFFICER',
+        'TOURISM_OFFICER_ASSIGNMENTS_CREATED'
+      ),
+    });
+  }
+
+  if (routeForDisplay.length > 0) {
+    for (const step of routeForDisplay) {
+      if (!isOfficeRole(step.office_role)) continue;
+      const stepIsActive = step.status === 'in_progress';
+      const stepIsRejected = step.status === 'rejected';
+      const waitingOnSubmitter =
+        status === 'returned_for_requirements'
+        && stepIsActive
+        && !!step.requirements_requested_at;
+      const responsibility = step.responsibility
+        && step.responsibility in OFFICE_RESPONSIBILITIES
+        ? OFFICE_RESPONSIBILITIES[step.responsibility as OfficeResponsibility]
+        : 'Office assignment';
+
+      pipelineSteps.push({
+        key: `office-${step.sequence_number}-${step.office_role}`,
+        title: `Additional office ${step.sequence_number}`,
+        subtitle: `${OFFICE_CONFIG[step.office_role].label} — ${responsibility}`,
+        state: stepIsRejected
+          ? 'rejected'
+          : step.status === 'skipped'
+            ? 'skipped'
+            : step.status === 'approved'
+              ? 'complete'
+              : stepIsActive
+                ? 'active'
+                : 'pending',
+        detail: waitingOnSubmitter
+          ? 'Waiting for submitter'
+          : step.status === 'approved'
+            ? 'Assignment complete'
+            : step.status === 'rejected'
+              ? 'Declined'
+              : stepIsActive
                 ? 'Under review'
                 : step.status === 'skipped'
                   ? 'Skipped'
                   : 'Pending',
-      timestamp: step.decided_at ?? step.started_at,
-    });
-    earlierOfficeRejected ||= stepIsRejected;
-  }
-
-  if (routeForDisplay.length === 0) {
+        timestamp: step.decided_at ?? step.started_at,
+      });
+    }
+  } else {
+    const additionalAssignmentsPending = status === 'pending_approver';
     pipelineSteps.push({
-      key: 'offices',
-      title: 'Municipal offices',
-      subtitle: 'Office route',
-      state: approverRejected || adminRejected ? 'skipped' : 'pending',
-      detail: routeIsProposed
-        ? 'Awaiting route approval'
-        : status === 'pending_office' || status === 'pending_mayor'
-          ? 'Route details unavailable'
-          : 'Route not yet defined',
+      key: 'additional-offices',
+      title: 'Additional offices',
+      subtitle: 'Tourism Officer assignments',
+      state: additionalAssignmentsPending ? 'pending' : 'skipped',
+      detail: additionalAssignmentsPending
+        ? 'No additional assignments yet'
+        : 'None assigned',
     });
   }
 
+  if (legacyAdminReview) {
+    pipelineSteps.push({
+      key: 'legacy-admin',
+      title: 'Legacy administrative review',
+      subtitle: 'Existing submission route',
+      state: 'active',
+      detail: 'Awaiting administrator review',
+      timestamp: routeFinalizedAt,
+    });
+  }
+
+  const finalOfficeIsActive =
+    status === 'pending_office'
+    && finalOfficeRole !== null
+    && selectedOfficeRole === finalOfficeRole
+    && (!routeForDisplay.length || allAssignmentsComplete);
   pipelineSteps.push({
     key: 'completion',
     title: 'Final decision',
-    subtitle: 'Administrator completion',
-    state:
-      status === 'completed'
-        ? 'complete'
-        : status === 'approved' ||
-            (status === 'pending_admin' &&
-              hasFinalizedRoute &&
-              routeForDisplay.length > 0 &&
-              routeForDisplay.every((step) => step.status === 'approved'))
+    subtitle: finalOfficeRole
+      ? `${OFFICE_CONFIG[finalOfficeRole].label} authorized decision-maker`
+      : tourismOfficeWasSelected
+        ? 'Municipal office designated by Tourism Officer'
+      : legacyAdminReview
+        ? 'Existing administrator route'
+        : 'Authorized office decision-maker',
+    state: status === 'completed'
+      ? 'complete'
+      : declined
+        ? 'skipped'
+        : finalOfficeIsActive || status === 'returned_for_requirements'
           ? 'active'
-          : isDeclined(status)
-            ? 'skipped'
-            : 'pending',
-    detail:
-      status === 'completed'
-        ? 'Request completed'
-        : status === 'approved'
-          ? 'Ready to complete'
-          : status === 'pending_admin' &&
-              hasFinalizedRoute &&
-              routeForDisplay.length > 0 &&
-              routeForDisplay.every((step) => step.status === 'approved')
-            ? 'Awaiting final decision'
-            : isDeclined(status)
-              ? 'Not reached'
-              : 'Pending',
-    timestamp: eventTime('WORKFLOW_COMPLETED', 'FINAL_AUTHORIZATION'),
+          : 'pending',
+    detail: status === 'completed'
+      ? 'Final decision recorded'
+      : status === 'returned_for_requirements'
+        ? 'Waiting for submitter response'
+        : finalOfficeIsActive
+          ? 'Awaiting authorized office decision'
+          : declined
+            ? 'Not reached'
+            : 'Pending',
+    timestamp: eventTime('OFFICE_FINAL_DECISION', 'WORKFLOW_COMPLETED', 'FINAL_AUTHORIZATION'),
   });
 
   const statusLabel = getSubmissionStatusLabel(status);

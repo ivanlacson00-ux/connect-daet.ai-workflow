@@ -54,7 +54,7 @@ export default function RegisterPage() {
         emailRedirectTo: `${window.location.origin}/auth/callback`,
         data: {
           full_name: trimmedName,
-          role: 'user',
+          role: 'submitter',
         },
       },
     });

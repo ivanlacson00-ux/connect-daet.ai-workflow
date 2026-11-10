@@ -5,7 +5,6 @@ import Link from 'next/link';
 import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
 import { useSubmissions } from '@/hooks/useSubmissions';
 import { getWorkflowTiming, workflowTimingClasses } from '@/lib/workflow/timing';
-import { OFFICE_CONFIG } from '@/lib/workflow/offices';
 import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
@@ -14,8 +13,6 @@ const fonts = {
 };
 
 type FilterStatus = 'all' | 'pending' | 'approved' | 'declined';
-
-const CATEGORIES = [...new Set(Object.values(OFFICE_CONFIG).flatMap((office) => office.categories))];
 
 const STATUS_FILTERS: { value: FilterStatus; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -83,6 +80,12 @@ export default function SubmissionsPage() {
 
   const fileTypes = useMemo(
     () => [...new Set(submissions.map((s) => s.file_type).filter(Boolean))],
+    [submissions]
+  );
+  const categories = useMemo(
+    () => [...new Set(submissions.map((submission) => submission.category).filter(
+      (category): category is string => Boolean(category)
+    ))].sort(),
     [submissions]
   );
 
@@ -163,7 +166,7 @@ export default function SubmissionsPage() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label="Category" className={fieldClasses}>
             <option value="all">All categories</option>
-            {CATEGORIES.map((c) => (
+            {categories.map((c) => (
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
@@ -284,6 +287,8 @@ export default function SubmissionsPage() {
                     routeStatus={routesBySubmission[sub.id]?.status ?? null}
                     routeFinalizedAt={routesBySubmission[sub.id]?.finalizedAt}
                     selectedOfficeRole={sub.selected_office_role}
+                    initialDestinationRole={routesBySubmission[sub.id]?.initialDestinationRole}
+                    finalDecisionOfficeRole={routesBySubmission[sub.id]?.finalDecisionOfficeRole}
                     auditEvents={[]}
                     routeLoadFailed={routesBySubmission[sub.id]?.loadFailed ?? false}
                   />

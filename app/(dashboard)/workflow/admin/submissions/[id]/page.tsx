@@ -5,7 +5,12 @@ import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
 import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
-import { isOfficeRole, OFFICE_CONFIG, type OfficeRole } from '@/lib/workflow/offices';
+import {
+  getWorkflowDocumentTypeLabel,
+  isOfficeRole,
+  OFFICE_CONFIG,
+  type OfficeRole,
+} from '@/lib/workflow/offices';
 
 // ─── Styles & Fonts (synced with the approver and user file pages) ───────────
 const fonts = {
@@ -27,6 +32,7 @@ interface Submission extends PreviewableFile {
   file_size: number;
   status: string;
   category?: string | null;
+  other_document_type?: string | null;
   description?: string | null;
   purpose?: string | null;
   requested_action?: string | null;
@@ -99,7 +105,13 @@ const getActionLabel = (type: string) => {
     case 'RETURNED_FOR_CORRECTION': return 'Returned for correction';
     case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Office route step assigned';
     case 'OFFICE_ROUTE_STEP_APPROVED': return 'Office route step approved';
-    case 'ROUTE_PROPOSED': return 'Approver proposed office route';
+    case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Municipal office forwarded for Tourism Officer review';
+    case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer assigned additional offices';
+    case 'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED': return 'Additional office assignments completed';
+    case 'OFFICE_FINAL_DECISION': return 'Final decision by authorized office';
+    case 'REQUIREMENTS_RESUBMITTED': return 'Submitter responded to requested changes';
+    case 'REVISED_DOCUMENT_SUBMITTED': return 'Submitter uploaded a revised document';
+    case 'ROUTE_PROPOSED': return 'Tourism Officer proposed office route';
     case 'ROUTE_REQUIREMENTS_REQUESTED': return 'Mayor requested additional requirements';
     case 'ROUTE_RETURNED_TO_ADMIN': return 'All routed offices approved; returned to Admin';
     case 'WORKFLOW_COMPLETED': return 'Workflow completed';
@@ -437,7 +449,9 @@ export default function AdminManagePage() {
           <section className="space-y-5 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
             <div>
               <p className="mb-1 text-[11px] font-medium text-muted-text">Document type</p>
-              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">{sub.category || 'General'}</p>
+              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">
+                {getWorkflowDocumentTypeLabel(sub.category ?? null, sub.other_document_type)}
+              </p>
             </div>
             <div>
               <p className="mb-1 text-[11px] font-medium text-muted-text">Municipal office route</p>

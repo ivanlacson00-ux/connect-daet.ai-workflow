@@ -6,10 +6,12 @@ import { createClient } from '@/lib/supabase/client';
 import {
   getWorkflowFileMimeType,
   getWorkflowFilesTypeError,
-  WORKFLOW_ATTACHMENT_ACCEPT,
-  WORKFLOW_DOCUMENT_ACCEPT,
 } from '@/lib/workflow/file-types';
-import { OFFICE_CONFIG } from '@/lib/workflow/offices';
+import {
+  SUBMISSION_DESTINATION_CONFIG,
+  TOURISM_OFFICE_ROLE,
+  type SubmissionDestinationRole,
+} from '@/lib/workflow/offices';
 import { useRouter } from 'next/navigation';
 
 type UploadMessage = {
@@ -22,14 +24,15 @@ export default function UploadPage() {
   const supabase = useMemo(() => createClient(), []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const otherDocumentTypeRef = useRef<HTMLTextAreaElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [intendedRecipient, setIntendedRecipient] = useState('');
-  const [category, setCategory] = useState<string>(
-    OFFICE_CONFIG.municipal_treasurer.categories[0]
-  );
+  const [selectedOfficeRole, setSelectedOfficeRole] = useState<SubmissionDestinationRole | ''>('');
+  const [category, setCategory] = useState('');
+  const [otherDocumentType, setOtherDocumentType] = useState('');
+  const [selectionNotice, setSelectionNotice] = useState('');
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -41,6 +44,9 @@ export default function UploadPage() {
   );
   const extension = file?.name.split('.').pop()?.toLowerCase() ?? '';
   const mimeType = file ? getWorkflowFileMimeType(file.name) : null;
+  const availableDocumentTypes: readonly string[] = selectedOfficeRole
+    ? SUBMISSION_DESTINATION_CONFIG[selectedOfficeRole].categories
+    : [];
 
   useEffect(() => {
     return () => {
@@ -51,6 +57,13 @@ export default function UploadPage() {
   useEffect(() => {
     if (!file) setShowPreview(false);
   }, [file]);
+
+  useEffect(() => {
+    const textarea = otherDocumentTypeRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [category, otherDocumentType]);
 
   useEffect(() => {
     if (!showPreview) return;
@@ -96,9 +109,17 @@ export default function UploadPage() {
 
   const handleUpload = async () => {
     if (uploading) return;
-    if (!file || !title.trim() || !description.trim()) {
+    if (
+      !file
+      || !title.trim()
+      || !description.trim()
+      || !selectedOfficeRole
+      || !category
+      || !availableDocumentTypes.includes(category)
+      || (category === 'Other' && !otherDocumentType.trim())
+    ) {
       setMessage({
-        text: 'Complete the document title, request summary, and main document before submitting.',
+        text: 'Complete the destination, classification, document title, request summary, and main document before submitting.',
         type: 'error',
       });
       return;
@@ -192,8 +213,12 @@ export default function UploadPage() {
           submission_description: description.trim(),
           submission_purpose: null,
           submission_requested_action: null,
-          submission_intended_recipient: intendedRecipient.trim() || null,
+          submission_intended_recipient: null,
+          submission_office_role: selectedOfficeRole,
           attachment_records: attachmentRecords,
+          ...(category === 'Other'
+            ? { submission_other_document_type: otherDocumentType.trim() }
+            : {}),
         }
       );
       if (submissionError) throw submissionError;
@@ -239,6 +264,16 @@ export default function UploadPage() {
     'mb-2 block text-[11px] font-semibold uppercase tracking-wide text-warm-text';
   const fieldClass =
     'h-11 w-full rounded-xl border border-warm-border bg-card px-4 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/70 focus:border-clay focus:ring-2 focus:ring-clay/10';
+  const handleDestinationChange = (nextOfficeRole: SubmissionDestinationRole | '') => {
+    setSelectedOfficeRole(nextOfficeRole);
+    if (category || otherDocumentType) {
+      setSelectionNotice('The document type was cleared because it depends on the selected office.');
+    } else {
+      setSelectionNotice('');
+    }
+    setCategory('');
+    setOtherDocumentType('');
+  };
 
   return (
     <div className="mx-auto w-full max-w-5xl rounded-2xl border border-warm-border bg-card p-5 shadow-sm sm:p-8">
@@ -265,6 +300,85 @@ export default function UploadPage() {
 
       <div className="grid grid-cols-1 gap-x-4 gap-y-5 md:grid-cols-2">
         <div>
+          <label className={labelClass} htmlFor="submission-destination">
+            Destination office
+          </label>
+          <select
+            id="submission-destination"
+            value={selectedOfficeRole}
+            onChange={(event) => handleDestinationChange(event.target.value as SubmissionDestinationRole | '')}
+            className={`${fieldClass} cursor-pointer`}
+            required
+          >
+            <option value="" disabled>Select the office that should receive this submission</option>
+            {Object.entries(SUBMISSION_DESTINATION_CONFIG).map(([officeRole, office]) => (
+              <option key={officeRole} value={officeRole}>{office.label}</option>
+            ))}
+          </select>
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-text">
+            {selectedOfficeRole === TOURISM_OFFICE_ROLE
+              ? 'Your submission goes directly to the Daet Tourism Office for review and municipal-office assignment.'
+              : 'Your submission goes directly to this office. It does not need Tourism Officer review first.'}
+          </p>
+          {selectionNotice && (
+            <p role="status" className="mt-2 text-[11px] text-pending-text">
+              {selectionNotice}
+            </p>
+          )}
+        </div>
+
+        <div>
+          <label className={labelClass} htmlFor="submission-category">
+            Classification / document type
+          </label>
+          <select
+            id="submission-category"
+            value={category}
+            onChange={(event) => {
+              setCategory(event.target.value);
+              if (event.target.value !== 'Other') setOtherDocumentType('');
+            }}
+            className={`${fieldClass} cursor-pointer`}
+            disabled={!selectedOfficeRole}
+            required
+          >
+            <option value="">
+              {!selectedOfficeRole
+                ? 'Select a destination office first'
+                : 'Select a classification / document type'}
+            </option>
+            {availableDocumentTypes.map((documentType) => (
+              <option key={documentType} value={documentType}>{documentType}</option>
+            ))}
+          </select>
+          {selectedOfficeRole ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-text">
+              Options are specific to {SUBMISSION_DESTINATION_CONFIG[selectedOfficeRole].label}.
+            </p>
+          ) : null}
+        </div>
+
+        {category === 'Other' && (
+          <div className="md:col-span-2">
+            <label className={labelClass} htmlFor="other-document-type">
+              Please specify the document type
+            </label>
+            <textarea
+              id="other-document-type"
+              ref={otherDocumentTypeRef}
+              value={otherDocumentType}
+              onChange={(event) => setOtherDocumentType(event.target.value)}
+              maxLength={120}
+              placeholder="Enter the document type"
+              rows={2}
+              className={`${fieldClass} h-auto min-h-20 resize-none overflow-hidden py-3 leading-relaxed`}
+              required
+            />
+            <p className="mt-1 text-[10px] text-muted-text">Up to 120 characters; the field expands as you type.</p>
+          </div>
+        )}
+
+        <div>
           <label className={labelClass} htmlFor="submission-title">
             Document title / subject
           </label>
@@ -277,28 +391,6 @@ export default function UploadPage() {
             className={fieldClass}
             required
           />
-        </div>
-
-        <div>
-          <label className={labelClass} htmlFor="submission-category">
-            Classification / document type
-          </label>
-          <select
-            id="submission-category"
-            value={category}
-            onChange={(event) => setCategory(event.target.value)}
-            className={`${fieldClass} cursor-pointer`}
-          >
-            {Object.values(OFFICE_CONFIG).map((office) => (
-              <optgroup key={office.label} label={office.label}>
-                {office.categories.map((officeCategory) => (
-                  <option key={officeCategory} value={officeCategory}>
-                    {officeCategory}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
         </div>
 
         <div>
@@ -316,35 +408,15 @@ export default function UploadPage() {
           />
         </div>
 
-        <div>
-          <label className={labelClass} htmlFor="intended-recipient">
-            Intended recipient (optional)
-          </label>
-          <input
-            id="intended-recipient"
-            type="text"
-            value={intendedRecipient}
-            onChange={(event) => setIntendedRecipient(event.target.value)}
-            placeholder="Office or recipient, if known"
-            className={fieldClass}
-          />
-          <p className="mt-2 text-[11px] leading-relaxed text-muted-text">
-            The approver will confirm the appropriate municipal office during review.
-          </p>
-        </div>
       </div>
 
       <section className="mt-6">
         <label className={`${labelClass} mb-1`} htmlFor="main-document">
           Main document
         </label>
-        <p className="mb-3 text-[11px] text-muted-text">
-          PDF, DOC/DOCX, XLS/XLSX, CSV, PPT/PPTX, JPG/JPEG, or PNG.
-        </p>
         <input
           id="main-document"
           type="file"
-          accept={WORKFLOW_DOCUMENT_ACCEPT}
           ref={fileInputRef}
           onChange={handleFileChange}
           className="sr-only"
@@ -458,14 +530,10 @@ export default function UploadPage() {
         <label className={`${labelClass} mb-1`} htmlFor="supporting-attachments">
           Supporting attachments (optional)
         </label>
-        <p className="mb-3 text-[11px] text-muted-text">
-          PDF, DOC/DOCX, XLS/XLSX, CSV, PPT/PPTX, JPG/JPEG, PNG, or ZIP.
-        </p>
         <input
           id="supporting-attachments"
           ref={attachmentInputRef}
           type="file"
-          accept={WORKFLOW_ATTACHMENT_ACCEPT}
           multiple
           onChange={handleAttachmentChange}
           className="block w-full text-xs text-muted-text file:mr-3 file:rounded-full file:border-0 file:bg-clay-soft file:px-4 file:py-2 file:text-xs file:font-semibold file:text-clay"
@@ -528,7 +596,7 @@ export default function UploadPage() {
 
       {message && (
         <div
-          role="status"
+          role={message.type === 'error' ? 'alert' : 'status'}
           className={`mt-4 rounded-xl border p-4 ${
             message.type === 'success'
               ? 'border-approved-bg bg-approved-bg/50 text-approved-text'

@@ -53,11 +53,11 @@ export async function proxy(req: NextRequest) {
   const role = profile?.role ?? null
   const pathname = req.nextUrl.pathname
 
-  if (pathname.startsWith('/workflow/user') && role !== 'user') {
+  if (pathname.startsWith('/workflow/user') && role !== 'submitter') {
     return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
   }
 
-  if (pathname.startsWith('/workflow/admin') && role !== 'admin') {
+  if (pathname.startsWith('/workflow/admin') && role !== 'system_admin') {
     return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
   }
 
@@ -76,7 +76,7 @@ export async function proxy(req: NextRequest) {
     const officeReviewPage =
       pathname.startsWith('/workflow/approver/file_management/')
 
-    if (role !== 'approver' && role !== 'admin') {
+    if (role !== 'tourism_officer' && role !== 'system_admin') {
       if (officeReviewPage && isOfficeRole(role)) {
         return res
       }

@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
-import { OFFICE_CONFIG, type OfficeRole } from '@/lib/workflow/offices';
+import {
+  getWorkflowDocumentTypeLabel,
+  OFFICE_CONFIG,
+  type OfficeRole,
+} from '@/lib/workflow/offices';
 import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
 import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
@@ -13,6 +17,7 @@ interface Submission {
   file_name: string;
   file_type: string | null;
   category: string | null;
+  other_document_type: string | null;
   status: string;
   created_at: string;
   selected_office_role: string | null;
@@ -38,7 +43,8 @@ function matchesFilter(submission: Submission, filter: Filter, role: OfficeRole)
   switch (filter) {
     case 'needs_review':
       return submission.status === 'pending_office'
-        && submission.selected_office_role === role;
+        && (submission.selected_office_role === role
+          || submission.officeRecord?.status === 'in_progress');
     case 'with_mayor':
       return submission.status === 'pending_mayor'
         || (role === 'mayor_office'
@@ -73,7 +79,7 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
   const fetchSubmissions = useCallback(async () => {
     const { data: plans, error: plansError } = await supabase
       .from('workflow_routing_plans')
-      .select('id, submission_id, version')
+      .select('id, submission_id, version, is_current')
       .in('status', ['finalized', 'superseded'])
       .order('created_at', { ascending: false })
       .limit(500);
@@ -131,6 +137,11 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
         });
       }
     }
+    const activeRouteSubmissionIds = routeSteps
+      .filter((step) => step.status === 'in_progress')
+      .map((step) => planById.get(step.routing_plan_id))
+      .filter((plan): plan is NonNullable<typeof plan> => Boolean(plan?.is_current))
+      .map((plan) => plan.submission_id);
 
     let currentAssignmentsQuery = supabase
       .from('workflow_submissions')
@@ -151,6 +162,7 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
 
     const submissionIds = Array.from(new Set([
       ...officeRecords.keys(),
+      ...activeRouteSubmissionIds,
       ...(currentAssignments ?? []).map((submission) => submission.id),
     ]));
 
@@ -162,7 +174,7 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
 
     const { data, error: fetchError } = await supabase
       .from('workflow_submissions')
-      .select('id, tracking_number, file_name, file_type, category, status, created_at, selected_office_role')
+      .select('id, tracking_number, file_name, file_type, category, other_document_type, status, created_at, selected_office_role')
       .in('id', submissionIds)
       .order('created_at', { ascending: false })
       .limit(200);
@@ -178,7 +190,8 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
       const officeRecord = officeRecords.get(submission.id);
       const isCurrentlyAssigned =
         submission.status === 'pending_office'
-        && submission.selected_office_role === role;
+        && (submission.selected_office_role === role
+          || officeRecord?.status === 'in_progress');
       const isMayorFinalReview =
         role === 'mayor_office' && submission.status === 'pending_mayor';
       return {
@@ -353,7 +366,10 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
                     <p className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-muted-text">
                       <span>{submission.tracking_number || 'Tracking number pending'}</span>
                       <span aria-hidden="true">·</span>
-                      <span>{submission.category || 'Uncategorized'}</span>
+                      <span>{getWorkflowDocumentTypeLabel(
+                        submission.category,
+                        submission.other_document_type
+                      )}</span>
                       <span aria-hidden="true">·</span>
                       <span>{new Date(submission.created_at).toLocaleDateString()}</span>
                     </p>
@@ -398,6 +414,8 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
                       routeStatus={routesBySubmission[submission.id]?.status ?? null}
                       routeFinalizedAt={routesBySubmission[submission.id]?.finalizedAt}
                       selectedOfficeRole={submission.selected_office_role}
+                      initialDestinationRole={routesBySubmission[submission.id]?.initialDestinationRole}
+                      finalDecisionOfficeRole={routesBySubmission[submission.id]?.finalDecisionOfficeRole}
                       auditEvents={[]}
                       routeLoadFailed={routesBySubmission[submission.id]?.loadFailed ?? false}
                     />

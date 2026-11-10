@@ -88,6 +88,8 @@ export default function PendingPage() {
                         routeStatus={routesBySubmission[sub.id]?.status ?? null}
                         routeFinalizedAt={routesBySubmission[sub.id]?.finalizedAt}
                         selectedOfficeRole={sub.selected_office_role}
+                        initialDestinationRole={routesBySubmission[sub.id]?.initialDestinationRole}
+                        finalDecisionOfficeRole={routesBySubmission[sub.id]?.finalDecisionOfficeRole}
                         auditEvents={[]}
                         routeLoadFailed={routesBySubmission[sub.id]?.loadFailed ?? false}
                       />
