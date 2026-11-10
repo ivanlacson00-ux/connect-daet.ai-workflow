@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
-import { getRoleHomePath } from '@/lib/workflow/offices';
+import { getCurrentWorkflowAccess, getPrimaryWorkflowRole, getWorkflowHomePath } from '@/lib/auth/access';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -72,28 +72,24 @@ export default function LoginPage() {
       return;
     }
 
-    const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+    try {
+      const access = await getCurrentWorkflowAccess(supabase);
+      if (!access) throw new Error('Your sign-in session could not be verified.');
+      const role = getPrimaryWorkflowRole(access.roles);
+      if (!role || (role === 'external_approver' && access.officeIds.length === 0)) {
+        await supabase.auth.signOut();
+        setError('Your account does not have an active workflow role or office assignment. Contact the system administrator.');
+        setLoading(false);
+        return;
+      }
 
-    if (refreshError || !refreshed.user) {
-      setError('Session error. Please try again.');
-      setLoading(false);
-      return;
-    }
-
-    const { data: role, error: profileError } = await supabase.rpc(
-      'ensure_current_user_profile'
-    );
-
-    if (profileError || typeof role !== 'string') {
+      window.location.href = getWorkflowHomePath(role);
+    } catch (accessError) {
+      console.error('Workflow access lookup failed:', accessError);
       await supabase.auth.signOut();
-      setError(
-        'We could not set up your account profile. Please try again; if the problem continues, contact an administrator to check the database migration and your account role.'
-      );
+      setError('We could not verify your workflow access. Please try again; if the problem continues, contact the system administrator.');
       setLoading(false);
-      return;
     }
-
-    window.location.href = getRoleHomePath(role);
   };
 
   const handleResendConfirmation = async () => {

@@ -1,0 +1,131 @@
+M	.env.example
+M	.github/workflows/process-email-outbox.yml
+M	README.md
+A	SYSTEM-TEST-CHECKLIST.md
+A	WORKFLOW-ARCHITECTURE.md
+A	WORKFLOW-TEST-CHECKLIST.md
+A	app/(auth)/forgot-password/page.tsx
+M	app/(auth)/login/page.tsx
+M	app/(auth)/register/page.tsx
+A	app/(auth)/reset-password/page.tsx
+A	app/(auth)/setup-password/page.tsx
+M	app/(dashboard)/workflow/admin/archive/page.tsx
+A	app/(dashboard)/workflow/admin/email-monitoring/page.tsx
+M	app/(dashboard)/workflow/admin/notifications/page.tsx
+M	app/(dashboard)/workflow/admin/page.tsx
+M	app/(dashboard)/workflow/admin/pending/page.tsx
+M	app/(dashboard)/workflow/admin/reports/page.tsx
+M	app/(dashboard)/workflow/admin/submissions/[id]/page.tsx
+M	app/(dashboard)/workflow/admin/submissions/page.tsx
+M	app/(dashboard)/workflow/admin/user_management/page.tsx
+M	app/(dashboard)/workflow/approver/file_management/[id]/page.tsx
+M	app/(dashboard)/workflow/approver/file_management/page.tsx
+M	app/(dashboard)/workflow/approver/notifications/page.tsx
+M	app/(dashboard)/workflow/approver/page.tsx
+M	app/(dashboard)/workflow/layout.tsx
+A	app/(dashboard)/workflow/mayor/page.tsx
+A	app/(dashboard)/workflow/municipal-treasurer/page.tsx
+M	app/(dashboard)/workflow/page.tsx
+A	app/(dashboard)/workflow/retrieval/page.tsx
+A	app/(dashboard)/workflow/sangguniang-bayan/page.tsx
+M	app/(dashboard)/workflow/user/file_registry/[id]/page.tsx
+M	app/(dashboard)/workflow/user/file_registry/page.tsx
+M	app/(dashboard)/workflow/user/notifications/page.tsx
+M	app/(dashboard)/workflow/user/page.tsx
+M	app/(dashboard)/workflow/user/upload/page.tsx
+A	app/api/admin/accounts/route.ts
+A	app/api/auth/password/request/route.ts
+A	app/api/auth/password/route.ts
+M	app/api/notifications/email/route.ts
+A	app/api/webhooks/resend/route.ts
+M	app/api/workflow/files/[id]/route.ts
+M	app/auth/callback/route.ts
+A	app/auth/confirm/route.ts
+M	app/globals.css
+M	app/page.tsx
+A	components/DocumentMessaging.tsx
+M	components/FilePreview.tsx
+A	components/OfficeDashboard.tsx
+A	components/WorkflowRoutingPipeline.tsx
+D	docs/CLEAN_TEST_ENVIRONMENT_PREPARATION_CHECKLIST.md
+R089	docs/prompts/COPILOT_AUDIT_PROMPT.txt	docs/COPILOT_AUDIT_PROMPT.txt
+R100	docs/security/DATABASE_SECURITY_STATUS.md	docs/DATABASE_SECURITY_STATUS.md
+D	docs/PHASE_2_IMPLEMENTATION_ROADMAP.md
+D	docs/PHASE_2_WORKFLOW_DECISION_MAPPING.md
+D	docs/PHASE_2_WORKFLOW_GAP_ANALYSIS.md
+D	docs/PHASE_3_RELATIONAL_MODEL_AND_INTEGRITY_SPECIFICATION.md
+D	docs/PHASE_4_AUTHORIZATION_AND_RLS_DESIGN.md
+D	docs/PHASE_5_DATABASE_OPERATIONS_AND_TRANSACTION_INTEGRITY_DESIGN.md
+D	docs/PHASE_6_TESTING_AND_VALIDATION_STRATEGY.md
+D	docs/PHASE_7_VERIFICATION_AND_CONTROLLED_ROLLOUT_PLAN.md
+D	docs/README.md
+M	docs/REVISED_WORKFLOW_PLAN.md
+R098	docs/proposed-migrations/reference/20261105_01_test_workflow_security_hardening.md	docs/proposed-migrations/20261105_01_test_workflow_security_hardening.md
+R100	docs/proposed-migrations/reference/20261105_01_test_workflow_security_hardening.sql	docs/proposed-migrations/20261105_01_test_workflow_security_hardening.sql
+R100	docs/proposed-migrations/reference/20261105_02_test_workflow_security_hardening_revised.sql	docs/proposed-migrations/20261105_02_test_workflow_security_hardening_revised.sql
+D	docs/proposed-migrations/post-deployment/002_clean_schema_security_verification.sql
+D	docs/proposed-migrations/preflight/002_clean_schema_deployment_preflight.sql
+M	docs/proposed-migrations/reference/20261105_02_test_workflow_security_hardening_revised.md
+M	hooks/useAdminStats.ts
+M	hooks/useSubmissions.ts
+M	hooks/useUsers.ts
+A	lib/auth/password.ts
+A	lib/email/templates.ts
+A	lib/workflow/file-types.ts
+A	lib/workflow/offices.ts
+A	lib/workflow/useRoutePreviews.ts
+D	middleware.ts
+M	package-lock.json
+M	package.json
+A	proxy.ts
+A	public/workflow-overview.svg
+D	supabase/.temp/cli-latest
+R100	supabase/legacy-migrations-archive/20260914181500_add_tracking_number.sql	supabase/migrations/20260914181500_add_tracking_number.sql
+R100	supabase/legacy-migrations-archive/20260914182000_generate_tracking_numbers.sql	supabase/migrations/20260914182000_generate_tracking_numbers.sql
+R100	supabase/legacy-migrations-archive/20260914182500_backfill_tracking_numbers.sql	supabase/migrations/20260914182500_backfill_tracking_numbers.sql
+R100	supabase/legacy-migrations-archive/20260921211000_enforce_workflow_transitions.sql	supabase/migrations/20260921211000_enforce_workflow_transitions.sql
+R100	supabase/legacy-migrations-archive/20260921212500_add_workflow_audit_logging.sql	supabase/migrations/20260921212500_add_workflow_audit_logging.sql
+R100	supabase/legacy-migrations-archive/20260921231500_enable_workflow_rls.sql	supabase/migrations/20260921231500_enable_workflow_rls.sql
+R100	supabase/legacy-migrations-archive/20260923121500_add_document_assignment_routing.sql	supabase/migrations/20260923121500_add_document_assignment_routing.sql
+R100	supabase/legacy-migrations-archive/20260923133000_add_workflow_notifications.sql	supabase/migrations/20260923133000_add_workflow_notifications.sql
+R100	supabase/legacy-migrations-archive/20260923153000_restore_unassigned_approver_workflow.sql	supabase/migrations/20260923153000_restore_unassigned_approver_workflow.sql
+R100	supabase/legacy-migrations-archive/20260923154500_enable_notification_realtime.sql	supabase/migrations/20260923154500_enable_notification_realtime.sql
+R100	supabase/legacy-migrations-archive/20260923160000_restore_approver_notifications.sql	supabase/migrations/20260923160000_restore_approver_notifications.sql
+R100	supabase/legacy-migrations-archive/20260923162500_add_secure_archive_controls.sql	supabase/migrations/20260923162500_add_secure_archive_controls.sql
+R100	supabase/legacy-migrations-archive/20260925090500_add_email_notification_outbox.sql	supabase/migrations/20260925090500_add_email_notification_outbox.sql
+R100	supabase/legacy-migrations-archive/20260925120000_add_workflow_stage_timing.sql	supabase/migrations/20260925120000_add_workflow_stage_timing.sql
+R100	supabase/legacy-migrations-archive/20260925133000_harden_workflow_file_storage.sql	supabase/migrations/20260925133000_harden_workflow_file_storage.sql
+A	supabase/migrations/20261105150000_add_office_review_workspaces.sql
+A	supabase/migrations/20261105151500_allow_office_roles_in_profiles.sql
+A	supabase/migrations/20261105153000_add_admin_profile_role_rpc.sql
+A	supabase/migrations/20261105160000_implement_five_stage_document_workflow.sql
+A	supabase/migrations/20261105170000_fix_profiles_role_check.sql
+A	supabase/migrations/20261105180000_add_workflow_decision_rpc.sql
+A	supabase/migrations/20261105210000_fix_workflow_decision_role_lookup.sql
+A	supabase/migrations/20261105220000_route_admin_decisions_through_rpc.sql
+A	supabase/migrations/20261105230000_add_versioned_workflow_routing.sql
+A	supabase/migrations/20261106000000_enable_dynamic_workflow_routes.sql
+A	supabase/migrations/20261106010000_notify_first_office_on_route_finalization.sql
+A	supabase/migrations/20261106020000_notify_admin_of_proposed_route.sql
+A	supabase/migrations/20261106100000_restore_approver_submission_notifications.sql
+A	supabase/migrations/20261106110000_allow_offices_to_request_requirements.sql
+A	supabase/migrations/20261106120000_restrict_workflow_upload_file_types.sql
+A	supabase/migrations/20261106130000_enforce_workflow_upload_file_types.sql
+A	supabase/migrations/20261106140000_preserve_office_document_history.sql
+A	supabase/migrations/20261106150000_enable_submission_status_realtime.sql
+A	supabase/migrations/20261106160000_make_submission_purpose_and_action_optional.sql
+A	supabase/migrations/20261108080000_add_document_messaging.sql
+A	supabase/migrations/20261108170000_harden_workflow_email_delivery.sql
+A	supabase/migrations/20261108173000_add_profile_demographic_details.sql
+A	supabase/migrations/20261108180000_add_workflow_email_templates.sql
+D	supabase/migrations/20261109170834_create_identity_and_authority_model.sql
+D	supabase/migrations/20261109170923_create_submission_version_and_routing_model.sql
+D	supabase/migrations/20261109171000_create_review_and_reassessment_model.sql
+D	supabase/migrations/20261109171035_create_decisions_history_and_supporting_model.sql
+D	supabase/migrations/20261109171148_enable_least_privilege_rls_and_history_guards.sql
+D	supabase/migrations/20261109171426_add_checked_workflow_operations.sql
+D	supabase/migrations/20261109173844_restrict_workflow_function_execute_privileges.sql
+A	supabase/migrations/20261109220000_add_qr_document_retrieval.sql
+A	supabase/migrations/20261110014500_repair_missing_current_user_profile.sql
+A	tests/auth-password.test.mjs
+A	tests/email-template.test.mjs

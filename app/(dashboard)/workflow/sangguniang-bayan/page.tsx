@@ -1,5 +1,5 @@
-import OfficeDashboard from '@/components/OfficeDashboard';
+import { redirect } from 'next/navigation';
 
-export default function SangguniangBayanDashboard() {
-  return <OfficeDashboard role="sangguniang_bayan" />;
+export default function LegacySangguniangBayanPage() {
+  redirect('/workflow/office');
 }

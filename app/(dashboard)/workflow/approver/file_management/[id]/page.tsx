@@ -1,899 +1,463 @@
 'use client';
 
+import Link from 'next/link';
+import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { downloadWorkflowAttachment, saveDownload } from '@/lib/workflow/attachments';
 import DocumentMessaging from '@/components/DocumentMessaging';
-import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
-import { getRoleHomePath, isOfficeRole, OFFICE_CONFIG, type OfficeRole } from '@/lib/workflow/offices';
 
-// ─── Styles & Fonts (synced with the user file page) ─────────────────────────
-const fonts = {
-  serif: 'font-serif',
+type Submission = {
+  id: string;
+  tracking_number: string;
+  title: string;
+  description: string | null;
+  state: string;
+  current_version_id: string;
+  created_at: string;
+  destination_department: string | null;
 };
 
-interface Submission extends PreviewableFile {
+type Attachment = {
   id: string;
-  user_id: string;
-  tracking_number?: string | null;
-  file_name: string;
-  file_url: string;
-  file_path?: string | null;
-  file_type: string;
-  file_size: number;
-  status: string;
-  category?: string | null;
-  description?: string | null;
-  purpose?: string | null;
-  requested_action?: string | null;
-  intended_recipient?: string | null;
-  selected_office_role?: string | null;
-  approver_comments?: string | null;
-  office_comments?: string | null;
-  admin_comments?: string | null;
-  mayor_comments?: string | null;
-  sender_response?: string | null;
+  original_filename: string;
+  content_type: string | null;
+  byte_size: number | null;
   created_at: string;
-  updated_at: string;
-}
-
-interface SupportingAttachment {
-  id: string;
-  file_name: string;
-  file_path: string;
-  file_type: string | null;
-  file_size: number;
-}
-
-interface RouteStep {
-  sequence_number: number;
-  office_role: OfficeRole;
-  status: string;
-  started_at: string | null;
-  decided_at: string | null;
-  requirements_requested_at: string | null;
-  requirements_comments: string | null;
-}
-
-interface SenderProfile {
-  email: string | null;
-  full_name: string | null;
-  role: string | null;
-}
-
-interface AuditLog {
-  id: string;
-  action_type: string;
-  created_at: string;
-  comments: string | null;
-  profiles: SenderProfile | null;
-}
-
-// ─── Status groups ───────────────────────────────────────────────────────────
-// Approving a file passes it to the admin, so 'pending_admin' reads as approved here
-const QUEUE_STATUSES = ['pending', 'pending_approver'];
-const DECLINED_STATUSES = [
-  'declined_by_approver',
-  'declined_by_admin',
-  'declined_by_office',
-  'declined_by_mayor',
-  'rejected',
-];
-
-const getStatusStyles = (status: string) => {
-  const s = (status || '').toLowerCase();
-  if (QUEUE_STATUSES.includes(s)) return { label: 'Awaiting approver review', classes: 'bg-pending-bg text-pending-text' };
-  if (s === 'pending_admin') return { label: 'Administrative review', classes: 'bg-review-bg text-review-text' };
-  if (s === 'pending_office') return { label: 'Municipal office review', classes: 'bg-review-bg text-review-text' };
-  if (s === 'pending_mayor') return { label: "Mayor's final review", classes: 'bg-review-bg text-review-text' };
-  if (s === 'returned_for_requirements') return { label: 'Additional requirements requested', classes: 'bg-pending-bg text-pending-text' };
-  if (s === 'completed' || s === 'approved') return { label: 'Approved and completed', classes: 'bg-approved-bg text-approved-text' };
-  if (DECLINED_STATUSES.includes(s)) return { label: 'Rejected', classes: 'bg-rejected-bg text-rejected-text' };
-  return { label: s.replaceAll('_', ' ') || 'Unknown', classes: 'bg-sidebar text-muted-text' };
 };
 
-const getActionLabel = (type: string) => {
-  switch (type) {
-    case 'STAGE_1_AUTHORIZED': return 'Stage 1 approved';
-    case 'STAGE_1_REJECTED': return 'Stage 1 rejected';
-    case 'FINAL_AUTHORIZATION': return 'Final approval';
-    case 'FINAL_REJECTION': return 'Final rejection';
-    case 'VERIFICATION_PASSED': return 'Verification passed';
-    case 'RETURNED_FOR_CORRECTION': return 'Returned for correction';
-    case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Office route step assigned';
-    case 'OFFICE_ROUTE_STEP_APPROVED': return 'Office route step approved';
-    case 'ROUTE_PROPOSED': return 'Approver proposed office route';
-    case 'ROUTE_REQUIREMENTS_REQUESTED': return 'Municipal office requested additional requirements';
-    case 'ROUTE_RETURNED_TO_ADMIN': return 'All routed offices approved; returned to Admin';
-    case 'APPROVER_REJECTED': return 'Approver rejected request';
-    case 'ADMIN_REJECTED': return 'Administrator rejected request';
-    case 'OFFICE_REJECTED': return 'Municipal office rejected request';
-    case 'MAYOR_REJECTED': return 'Mayor rejected request';
-    case 'WORKFLOW_COMPLETED': return 'Workflow completed';
-    case 'SUBMITTED': return 'Submitted by';
-    default: return 'Action by';
-  }
+type Office = { id: string; name: string; code: string };
+type Assignment = { id: string; office_id: string; instructions: string | null; cancelled_at: string | null };
+type Responsibility = { id: string; assignment_id: string; responsibility_key: string | null };
+type Revision = { id: string; responsibility_id: string; revision_number: number; responsibility_type: string; scope: string; instructions: string | null };
+type ReviewCycle = { id: string; responsibility_id: string; submission_version_id: string };
+type ReviewResponse = { id: string; review_cycle_id: string; outcome: string; findings: string | null; remarks: string | null; submitted_at: string; submitted_by_profile_id: string };
+type OfficerReview = { review_response_id: string; disposition: string; reason: string | null; notes: string | null; created_at: string };
+type ResponsibilityType = 'mandatory_approval' | 'evaluation' | 'recommendation';
+type Decision = 'approved' | 'returned' | 'rejected';
+
+const RESPONSIBILITY_LABELS: Record<ResponsibilityType, string> = {
+  mandatory_approval: 'Mandatory approval / clearance',
+  evaluation: 'Evaluation / verification',
+  recommendation: 'Recommendation',
 };
 
 export default function ApproverManagePage() {
-  const { id } = useParams();
-  const router = useRouter();
+  const { id: routeId } = useParams<{ id: string }>();
+  const submissionId = Array.isArray(routeId) ? routeId[0] : routeId;
   const supabase = useMemo(() => createClient(), []);
-
-  const [sub, setSub] = useState<Submission | null>(null);
-  const [sender, setSender] = useState<SenderProfile | null>(null);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [attachments, setAttachments] = useState<SupportingAttachment[]>([]);
+  const [submission, setSubmission] = useState<Submission | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [offices, setOffices] = useState<Office[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [responsibilities, setResponsibilities] = useState<Responsibility[]>([]);
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  const [cycles, setCycles] = useState<ReviewCycle[]>([]);
+  const [responses, setResponses] = useState<ReviewResponse[]>([]);
+  const [officerReviews, setOfficerReviews] = useState<OfficerReview[]>([]);
+  const [selectedOfficeIds, setSelectedOfficeIds] = useState<string[]>([]);
+  const [routingMode, setRoutingMode] = useState<'simultaneous' | 'one_at_a_time'>('simultaneous');
+  const [responsibilityType, setResponsibilityType] = useState<ResponsibilityType>('mandatory_approval');
+  const [scope, setScope] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const [routingReason, setRoutingReason] = useState('');
+  const [decisionReason, setDecisionReason] = useState('');
+  const [decision, setDecision] = useState<Decision>('approved');
+  const [correctionInstructions, setCorrectionInstructions] = useState('');
   const [loading, setLoading] = useState(true);
-  const [updating, setUpdating] = useState(false);
-  const [actionError, setActionError] = useState('');
-  const [comment, setComment] = useState('');
-  const [proposedOffices, setProposedOffices] = useState<OfficeRole[]>([]);
-  const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
-  const [routeStatus, setRouteStatus] = useState<string | null>(null);
-  const [hasFinalizedRoute, setHasFinalizedRoute] = useState(false);
-  const [routeStateError, setRouteStateError] = useState(false);
-  const [role, setRole] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
-  const toggleProposedOffice = (officeRole: OfficeRole) => {
-    setProposedOffices((current) => {
-      if (current.includes(officeRole)) return current.filter((entry) => entry !== officeRole);
-      if (officeRole === 'mayor_office') return [...current, officeRole];
-      return current.includes('mayor_office')
-        ? [...current.filter((entry) => entry !== 'mayor_office'), officeRole, 'mayor_office']
-        : [...current, officeRole];
-    });
-  };
-
-  const moveProposedOffice = (index: number, offset: -1 | 1) => {
-    setProposedOffices((current) => {
-      const target = index + offset;
-      if (
-        target < 0
-        || target >= current.length
-        || current[index] === 'mayor_office'
-        || current[target] === 'mayor_office'
-      ) return current;
-      const updated = [...current];
-      [updated[index], updated[target]] = [updated[target], updated[index]];
-      return updated;
-    });
-  };
-
-  const fetchDetails = useCallback(async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      let currentRole: string | null = null;
-      if (user) {
-        const { data: currentProfile } = await supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', user.id)
-          .single();
-        currentRole = currentProfile?.role ?? null;
-        setRole(currentRole);
-      }
-
-      const { data: submission } = await supabase
-        .from('workflow_submissions')
-        .select('*')
-        .eq('id', id)
-        .single();
-
-      if (submission) {
-        setSub(submission);
-        setComment(
-          currentRole === 'mayor_office' && submission.status === 'pending_mayor'
-            ? submission.mayor_comments || ''
-            : currentRole === 'mayor_office'
-              && submission.status === 'pending_office'
-              && submission.selected_office_role === 'mayor_office'
-              ? ''
-            : isOfficeRole(currentRole) && submission.status === 'pending_office'
-              ? submission.office_comments || ''
-              : submission.approver_comments || ''
-        );
-
-        const { data: currentRoute, error: routeError } = await supabase
-          .from('workflow_routing_plans')
-          .select('id, status')
-          .eq('submission_id', submission.id)
-          .eq('is_current', true)
-          .maybeSingle();
-        if (routeError) {
-          console.error('Could not load workflow route state:', routeError.message);
-          setActionError('Could not load the routing state. Refresh and try again.');
-          setRouteStateError(true);
-          setRouteSteps([]);
-          setRouteStatus(null);
-        } else {
-          if (currentRoute) {
-            const { data: steps, error: stepsError } = await supabase
-              .from('workflow_routing_steps')
-              .select('sequence_number, office_role, status, started_at, decided_at, requirements_requested_at, requirements_comments')
-              .eq('routing_plan_id', currentRoute.id)
-              .order('sequence_number', { ascending: true });
-
-            if (stepsError) {
-              console.error('Could not load workflow route steps:', stepsError.message);
-              setActionError('Could not load the office route. Refresh and try again.');
-              setRouteStateError(true);
-              setRouteSteps([]);
-              setRouteStatus(null);
-            } else {
-              const validSteps = (steps ?? []).filter(
-                (step): step is RouteStep => isOfficeRole(step.office_role)
-              );
-              setRouteSteps(validSteps);
-              setRouteStatus(currentRoute.status);
-              setHasFinalizedRoute(currentRoute.status === 'finalized');
-              setRouteStateError(false);
-            }
-          } else {
-            setRouteSteps([]);
-            setRouteStatus(null);
-            setHasFinalizedRoute(false);
-            setRouteStateError(false);
-          }
-        }
-
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('email, full_name, role')
-          .eq('id', submission.user_id)
-          .single();
-        if (profile) setSender(profile);
-
-        const { data: logs } = await supabase
-          .from('workflow_audit_logs')
-          .select('*, profiles:action_by (full_name, email, role)')
-          .eq('submission_id', id)
-          .order('created_at', { ascending: false });
-        if (logs) setAuditLogs(logs);
-
-        const { data: supportingFiles, error: attachmentError } = await supabase
-          .from('workflow_submission_attachments')
-          .select('id, file_name, file_path, file_type, file_size')
-          .eq('submission_id', id)
-          .order('created_at', { ascending: true });
-        if (attachmentError) console.error('Could not load supporting attachments:', attachmentError.message);
-        setAttachments(supportingFiles ?? []);
-      }
-    } catch (err) {
-      console.error('Failed to load submission:', err);
-    } finally {
+  const loadDetails = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    const { data: current, error: submissionError } = await supabase
+      .from('submissions')
+      .select('id, tracking_number, title, description, state, current_version_id, created_at, destination_department')
+      .eq('id', submissionId)
+      .single();
+    if (submissionError) {
+      console.error('Could not load clean submission:', submissionError);
+      setError('This submission could not be loaded or is not available to your role.');
       setLoading(false);
-    }
-  }, [id, supabase]);
-
-  useEffect(() => { fetchDetails(); }, [fetchDetails]);
-
-  const downloadAttachment = async (attachment: SupportingAttachment) => {
-    const { data, error } = await supabase.storage
-      .from('workflow_uploads')
-      .createSignedUrl(attachment.file_path, 300);
-    if (error || !data?.signedUrl) {
-      console.error('Could not authorize attachment download:', error?.message);
-      setActionError('Could not open this supporting attachment. Please try again.');
       return;
     }
-    await downloadFile(data.signedUrl, attachment.file_name);
+
+    const [
+      attachmentResult,
+      officeResult,
+      assignmentResult,
+      responsibilityResult,
+      cycleResult,
+      responseResult,
+      officerReviewResult,
+    ] = await Promise.all([
+      supabase.from('attachments')
+        .select('id, original_filename, content_type, byte_size, created_at')
+        .eq('submission_id', submissionId)
+        .order('created_at'),
+      supabase.from('offices').select('id, name, code').eq('is_active', true).order('name'),
+      supabase.from('office_assignments')
+        .select('id, office_id, instructions, cancelled_at')
+        .eq('submission_id', submissionId)
+        .order('created_at'),
+      supabase.from('office_responsibilities')
+        .select('id, assignment_id, responsibility_key')
+        .eq('submission_id', submissionId),
+      supabase.from('review_cycles')
+        .select('id, responsibility_id, submission_version_id')
+        .eq('submission_id', submissionId),
+      supabase.from('review_responses')
+        .select('id, review_cycle_id, outcome, findings, remarks, submitted_at, submitted_by_profile_id')
+        .eq('submission_id', submissionId)
+        .order('submitted_at'),
+      supabase.from('tourism_officer_response_reviews')
+        .select('review_response_id, disposition, reason, notes, created_at')
+        .eq('submission_id', submissionId)
+        .order('created_at'),
+    ]);
+
+    const queryErrors = [
+      attachmentResult.error,
+      officeResult.error,
+      assignmentResult.error,
+      responsibilityResult.error,
+      cycleResult.error,
+      responseResult.error,
+      officerReviewResult.error,
+    ].filter(Boolean);
+    if (queryErrors.length) {
+      console.error('Could not load submission workflow history:', queryErrors);
+      setError('Some workflow history could not be loaded. Verify your database access and refresh.');
+      setLoading(false);
+      return;
+    }
+
+    const loadedResponsibilities = responsibilityResult.data ?? [];
+    const [revisionResult] = loadedResponsibilities.length
+      ? await Promise.all([
+          supabase.from('office_responsibility_revisions')
+            .select('id, responsibility_id, revision_number, responsibility_type, scope, instructions')
+            .in('responsibility_id', loadedResponsibilities.map((item) => item.id))
+            .order('revision_number'),
+        ])
+      : [{ data: [], error: null }];
+    if (revisionResult.error) {
+      console.error('Could not load responsibility revisions:', revisionResult.error);
+      setError('Office responsibility history could not be loaded.');
+      setLoading(false);
+      return;
+    }
+
+    setSubmission(current);
+    setAttachments(attachmentResult.data ?? []);
+    setOffices(officeResult.data ?? []);
+    setAssignments(assignmentResult.data ?? []);
+    setResponsibilities(loadedResponsibilities);
+    setRevisions(revisionResult.data ?? []);
+    setCycles(cycleResult.data ?? []);
+    setResponses(responseResult.data ?? []);
+    setOfficerReviews(officerReviewResult.data ?? []);
+    setLoading(false);
+  }, [submissionId, supabase]);
+
+  useEffect(() => {
+    void loadDetails();
+  }, [loadDetails]);
+
+  const downloadAttachment = async (attachment: Attachment) => {
+    try {
+      const file = await downloadWorkflowAttachment(supabase, attachment.id);
+      saveDownload(file, attachment.original_filename);
+    } catch (downloadError) {
+      console.error('Attachment download failed:', downloadError);
+      setError('The attachment could not be downloaded with your current access.');
+    }
   };
 
-  const handleWorkflowAction = async (
-    decision: 'approve' | 'reject' | 'return'
-  ) => {
-    if (!sub) return;
-    setUpdating(true);
-    setActionError('');
-
-    if (role === 'approver' && QUEUE_STATUSES.includes(sub.status) && decision === 'approve') {
-      if (proposedOffices.length === 0) {
-        setActionError('Select at least one municipal office for the proposed route.');
-        setUpdating(false);
-        return;
-      }
-
-      const { error } = await supabase.rpc('propose_workflow_route', {
-        target_submission_id: sub.id,
-        proposed_office_roles: proposedOffices,
-        proposal_comments: comment.trim() || null,
-      });
-      if (error) {
-        setActionError(error.message || 'Could not save the proposed office route.');
-      } else {
-        await fetchDetails();
-      }
-      setUpdating(false);
+  const recordDecision = async () => {
+    if (!submission || saving) return;
+    const stage = submission.state === 'initial_review' && decision !== 'approved'
+      ? 'initial_review'
+      : 'final_review';
+    if (decision !== 'approved' && !decisionReason.trim()) {
+      setError('A reason is required for a return or rejection.');
+      return;
+    }
+    if (decision === 'returned' && !correctionInstructions.trim()) {
+      setError('Provide the correction instructions for the submitter.');
       return;
     }
 
-    if (isOfficeRole(role) && role === sub.selected_office_role && sub.status === 'pending_office') {
-      if (routeStateError) {
-        setActionError('Could not verify the finalized route. Refresh and try again.');
-        setUpdating(false);
-        return;
-      }
-      if (hasFinalizedRoute) {
-        if (decision === 'return') {
-          if (!comment.trim()) {
-            setActionError('Explain the additional requirements before returning this request.');
-            setUpdating(false);
-            return;
-          }
-          try {
-            const { error } = await supabase.rpc('request_workflow_route_requirements', {
-              target_submission_id: sub.id,
-              request_comments: comment.trim(),
-            });
-            if (error) {
-              console.error('Office requirements request failed:', error.message);
-              setActionError([
-                error.message,
-                error.details,
-                error.hint,
-                error.code ? `Database code: ${error.code}` : '',
-              ].filter(Boolean).join('\n') || 'Could not return this request for requirements.');
-            } else {
-              await fetchDetails();
-            }
-          } catch (error) {
-            console.error('Office requirements request failed:', error);
-            setActionError(
-              error instanceof Error
-                ? error.message
-                : 'Could not return this request for requirements.'
-            );
-          } finally {
-            setUpdating(false);
-          }
-          return;
-        }
-
-        const { error } = await supabase.rpc('decide_workflow_route_step', {
-          target_submission_id: sub.id,
-          approve_step: decision === 'approve',
-          decision_comments: comment.trim() || null,
-        });
-        if (error) {
-          setActionError(error.message || 'Could not save the municipal office decision.');
-        } else {
-          await fetchDetails();
-        }
-        setUpdating(false);
-        return;
-      }
-    }
-
-    const update: Record<string, string> = {
-      updated_at: new Date().toISOString(),
-    };
-
-    if (role === 'approver' && QUEUE_STATUSES.includes(sub.status)) {
-      if (decision === 'approve') {
-        setUpdating(false);
-        return;
-      } else if (decision === 'reject') {
-        if (!comment.trim()) {
-          setActionError('Add a rejection reason before declining this document.');
-          setUpdating(false);
-          return;
-        }
-        update.status = 'declined_by_approver';
-        update.approver_comments = comment;
-      }
-    } else if (
-      isOfficeRole(role)
-      && role === sub.selected_office_role
-      && sub.status === 'pending_office'
-    ) {
-      update.office_comments = comment;
-      update.status = decision === 'approve' ? 'pending_mayor' : 'declined_by_office';
-      if (decision === 'reject' && !comment.trim()) {
-        setActionError('Add a rejection reason before declining this document.');
-        setUpdating(false);
-        return;
-      }
-    } else if (role === 'mayor_office' && sub.status === 'pending_mayor') {
-      update.mayor_comments = comment;
-      if (decision === 'approve') update.status = 'completed';
-      else if (decision === 'reject') update.status = 'declined_by_mayor';
-      else update.status = 'returned_for_requirements';
-      if (decision !== 'approve' && !comment.trim()) {
-        setActionError('Add remarks before rejecting or requesting additional requirements.');
-        setUpdating(false);
-        return;
-      }
-    } else {
-      setUpdating(false);
-      return;
-    }
-
-    const decisionComments = role === 'mayor_office'
-      ? update.mayor_comments
-      : isOfficeRole(role) && sub.status === 'pending_office'
-        ? update.office_comments
-        : update.approver_comments;
-    const { error: updateError } = await supabase.rpc('decide_workflow_submission', {
-      target_submission_id: sub.id,
-      next_status: update.status,
-      decision_comments: decisionComments ?? null,
-      routed_office_role: update.selected_office_role ?? null,
+    setSaving(true);
+    setError('');
+    const { error: decisionError } = await supabase.rpc('record_overall_decision', {
+      p_submission_id: submission.id,
+      p_expected_version_id: submission.current_version_id,
+      p_stage: stage,
+      p_decision: decision,
+      p_reason: decisionReason.trim() || null,
+      p_correction_instructions: decision === 'returned' ? correctionInstructions.trim() : null,
+      p_evidence_links: {},
+      p_idempotency_key: crypto.randomUUID(),
     });
-
-    if (updateError) {
-      const errorMessage = [
-        updateError.message,
-        updateError.details,
-        updateError.hint,
-        updateError.code ? `Database code: ${updateError.code}` : '',
-      ].filter(Boolean).join('\n');
-      setActionError(
-        errorMessage
-          || JSON.stringify(updateError)
-          || 'The database rejected this decision without returning details. Refresh and try again.'
-      );
+    if (decisionError) {
+      console.error('Overall decision was rejected by the workflow operation:', decisionError);
+      setError(decisionError.message);
     } else {
-      await fetchDetails();
+      setNotice(`The Tourism Officer recorded ${decision}.`);
+      setDecisionReason('');
+      setCorrectionInstructions('');
+      await loadDetails();
     }
-    setUpdating(false);
+    setSaving(false);
   };
 
-  if (loading) {
-    return (
-      <div className="w-full">
-        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Loading submission...
-        </div>
-      </div>
-    );
-  }
+  const createRoutingPlan = async () => {
+    if (!submission || saving) return;
+    if (!selectedOfficeIds.length || !scope.trim() || !routingReason.trim()) {
+      setError('Select at least one office and provide the responsibility scope and routing reason.');
+      return;
+    }
+    if (routingMode === 'one_at_a_time' && selectedOfficeIds.length !== 1) {
+      setError('One-at-a-time routing assigns one office per explicit Tourism Officer action.');
+      return;
+    }
 
-  if (!sub) {
-    return (
-      <div className="w-full">
-        <div className="rounded-2xl border border-rejected-bg bg-rejected-bg/50 px-5 py-8 text-xs font-semibold text-rejected-text">
-          Submission not found.
-        </div>
-      </div>
-    );
-  }
+    setSaving(true);
+    setError('');
+    const assignmentsPayload = selectedOfficeIds.map((officeId) => ({
+      office_id: officeId,
+      instructions: instructions.trim() || null,
+      responsibilities: [{
+        responsibility_key: responsibilityType,
+        responsibility_type: responsibilityType,
+        scope: scope.trim(),
+        instructions: instructions.trim() || null,
+      }],
+    }));
+    const { error: routeError } = await supabase.rpc('create_routing_plan', {
+      p_submission_id: submission.id,
+      p_mode: routingMode,
+      p_assignments: assignmentsPayload,
+      p_reason: routingReason.trim(),
+      p_idempotency_key: crypto.randomUUID(),
+    });
+    if (routeError) {
+      console.error('Office routing was rejected by the workflow operation:', routeError);
+      setError(routeError.message);
+    } else {
+      setNotice('The Tourism Officer created the office assignments.');
+      setSelectedOfficeIds([]);
+      setScope('');
+      setInstructions('');
+      setRoutingReason('');
+      await loadDetails();
+    }
+    setSaving(false);
+  };
 
-  const statusConfig = sub.status === 'pending_office' && sub.selected_office_role === 'mayor_office'
-    ? { label: "Mayor's final route decision", classes: 'bg-review-bg text-review-text' }
-    : getStatusStyles(sub.status);
-  const officeReview =
-    isOfficeRole(role)
-    && role === sub.selected_office_role
-    && sub.status === 'pending_office';
-  const mayorRouteStep = role === 'mayor_office' && officeReview && hasFinalizedRoute;
-  const activeRouteStep = routeSteps.find(
-    (step) => step.office_role === sub.selected_office_role && step.status === 'in_progress'
-  );
-  const mayorReview = role === 'mayor_office' && sub.status === 'pending_mayor';
-  const approverReview = role === 'approver' && QUEUE_STATUSES.includes(sub.status);
-  const canAct = officeReview || mayorReview || approverReview;
-  const isLocked = !canAct;
-  const isDeclined = DECLINED_STATUSES.includes(sub.status.toLowerCase());
-  const reviewNotes = mayorReview
-    ? sub.mayor_comments
-    : officeReview
-      ? sub.office_comments
-      : sub.approver_comments;
+  const reviewResponse = async (responseId: string) => {
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    const { error: reviewError } = await supabase.rpc('record_officer_response_review', {
+      p_review_response_id: responseId,
+      p_disposition: 'reviewed',
+      p_reason: null,
+      p_notes: null,
+      p_idempotency_key: crypto.randomUUID(),
+    });
+    if (reviewError) {
+      console.error('Office response review failed:', reviewError);
+      setError(reviewError.message);
+    } else {
+      setNotice('Office response recorded as reviewed.');
+      await loadDetails();
+    }
+    setSaving(false);
+  };
+
+  const getOfficeName = (officeId: string) => offices.find((office) => office.id === officeId)?.name ?? 'Office';
+  const getResponsibility = (responsibilityId: string) => {
+    const responsibility = responsibilities.find((entry) => entry.id === responsibilityId);
+    const revision = revisions
+      .filter((entry) => entry.responsibility_id === responsibilityId)
+      .sort((left, right) => right.revision_number - left.revision_number)[0];
+    return { responsibility, revision };
+  };
+
+  if (loading) return <p role="status" className="py-12 text-center text-sm text-muted-text">Loading submission history...</p>;
+  if (error && !submission) return <p role="alert" className="rounded-xl border border-rejected-bg bg-rejected-bg/50 p-4 text-sm text-rejected-text">{error}</p>;
+  if (!submission) return <p role="alert">Submission unavailable.</p>;
+
+  const officeRoutingAvailable = offices.length > 0;
+  const activeAssignments = assignments.filter((assignment) => !assignment.cancelled_at);
 
   return (
-    <div className="w-full">
-      {/* Back */}
-      <div className="mb-5 max-md:mb-4">
-        <button
-          onClick={() => {
-            if (officeReview) router.push(getRoleHomePath(role));
-            else router.back();
-          }}
-          className="inline-flex h-10 items-center gap-2 rounded-full border border-warm-border px-4 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11"
-        >
-          <span aria-hidden="true">←</span> Back to queue
-        </button>
-      </div>
+    <section className="space-y-6">
+      <Link href="/workflow/approver" className="text-sm font-semibold text-clay">← Review queue</Link>
+      <header className="rounded-2xl border border-warm-border bg-card p-6">
+        <p className="text-xs font-semibold uppercase tracking-wide text-clay">{submission.tracking_number}</p>
+        <h1 className="mt-2 font-serif text-3xl text-warm-text">{submission.title}</h1>
+        <p className="mt-2 text-sm text-muted-text">State: {submission.state.replaceAll('_', ' ')}</p>
+        {submission.destination_department && <p className="mt-2 text-sm text-muted-text">Destination department: {submission.destination_department}</p>}
+        {submission.description && <p className="mt-4 whitespace-pre-wrap text-sm text-warm-text">{submission.description}</p>}
+      </header>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 max-md:gap-3">
+      {error && <p role="alert" className="rounded-xl border border-rejected-bg bg-rejected-bg/50 p-4 text-sm text-rejected-text">{error}</p>}
+      {notice && <p role="status" className="rounded-xl border border-approved-bg bg-approved-bg/50 p-4 text-sm text-approved-text">{notice}</p>}
 
-        {/* DETAILS COLUMN */}
-        <aside className="space-y-4 lg:col-span-5 max-md:space-y-3">
+      <section className="rounded-2xl border border-warm-border bg-card p-6">
+        <h2 className="font-serif text-xl text-warm-text">Current attachments</h2>
+        {attachments.length === 0 ? <p className="mt-3 text-sm text-muted-text">No attachment metadata is linked to this submission.</p> : (
+          <ul className="mt-4 divide-y divide-warm-border">
+            {attachments.map((attachment) => (
+              <li key={attachment.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                <span className="text-sm text-warm-text">{attachment.original_filename}</span>
+                <button type="button" onClick={() => void downloadAttachment(attachment)} className="rounded-full border border-warm-border px-4 py-2 text-xs font-semibold text-warm-text">
+                  Download private file
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
-          {/* Header */}
-          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-            <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Submission ID: {String(sub.id).split('-')[0]}
-            </p>
-            <h1 className={`${fonts.serif} mb-4 break-words text-[28px] leading-tight text-warm-text max-md:text-[24px]`}>{sub.file_name}</h1>
-            <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${statusConfig.classes}`}>
-              <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
-              {statusConfig.label}
-            </div>
-            <div className="mt-4 border-t border-warm-border pt-4">
-              <p className="text-[10px] font-medium text-muted-text">Tracking number</p>
-              <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{sub.tracking_number || 'Pending assignment'}</p>
-            </div>
-          </section>
-
-          {/* Context Card */}
-          <section className="space-y-5 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-            <div>
-              <p className="mb-1 text-[11px] font-medium text-muted-text">Document type</p>
-              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">{sub.category || 'Unassigned'}</p>
-            </div>
-            <div>
-              <p className="mb-1 text-[11px] font-medium text-muted-text">
-                {routeSteps.length > 0 || proposedOffices.length > 0
-                  ? 'Municipal office route'
-                  : 'Selected municipal office'}
-              </p>
-              {routeSteps.length > 0 ? (
-                <ol className="space-y-1.5 text-xs font-semibold text-warm-text">
-                  {routeSteps.map((step) => (
-                    <li key={`${step.sequence_number}-${step.office_role}`} className="flex items-center justify-between gap-3">
-                      <span>{step.sequence_number}. {OFFICE_CONFIG[step.office_role].label}</span>
-                      <span className="text-[10px] font-normal capitalize text-muted-text">
-                        {step.status.replaceAll('_', ' ')}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              ) : proposedOffices.length > 0 ? (
-                <ol className="space-y-1.5 text-xs font-semibold text-warm-text">
-                  {proposedOffices.map((officeRole, index) => (
-                    <li key={officeRole}>{index + 1}. {OFFICE_CONFIG[officeRole].label}</li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="text-xs font-semibold text-warm-text">
-                  {typeof sub.selected_office_role === 'string' && isOfficeRole(sub.selected_office_role)
-                    ? OFFICE_CONFIG[sub.selected_office_role].label
-                    : 'Not selected yet'}
-                </p>
-              )}
-              {routeStatus === 'proposed' && (
-                <p className="mt-1 text-[10px] text-muted-text">Proposed; awaiting Admin review</p>
-              )}
-            </div>
-            {sub.intended_recipient && (
-              <div>
-                <p className="mb-1 text-[11px] font-medium text-muted-text">Intended recipient</p>
-                <p className="text-xs text-warm-text">{sub.intended_recipient}</p>
-              </div>
-            )}
-            {activeRouteStep?.requirements_requested_at && activeRouteStep.requirements_comments && (
-              <div className="rounded-xl border border-warm-border bg-sidebar p-4">
-                <p className="mb-2 text-[11px] font-semibold text-warm-text">
-                  Requirements requested by this office
-                </p>
-                <p className="whitespace-pre-wrap text-xs leading-relaxed text-warm-text">
-                  {activeRouteStep.requirements_comments}
-                </p>
-              </div>
-            )}
-            {activeRouteStep?.requirements_requested_at && sub.sender_response && (
-              <div className="rounded-xl border border-warm-border bg-sidebar p-4">
-                <p className="mb-2 text-[11px] font-semibold text-warm-text">Sender response</p>
-                <p className="whitespace-pre-wrap text-xs leading-relaxed text-warm-text">
-                  {sub.sender_response}
-                </p>
-              </div>
-            )}
-            {sub.purpose && (
-              <div>
-                <p className="mb-1 text-[11px] font-medium text-muted-text">Purpose</p>
-                <p className="whitespace-pre-wrap text-xs leading-relaxed text-warm-text">{sub.purpose}</p>
-              </div>
-            )}
-            {sub.requested_action && (
-              <div>
-                <p className="mb-1 text-[11px] font-medium text-muted-text">Requested action</p>
-                <p className="whitespace-pre-wrap text-xs leading-relaxed text-warm-text">{sub.requested_action}</p>
-              </div>
-            )}
-            <div>
-              <p className="mb-1.5 text-[11px] font-medium text-muted-text">Sender notes</p>
-              <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
-                &quot;{sub.description || 'No description provided.'}&quot;
-              </p>
-            </div>
-            <div className="border-t border-warm-border pt-4">
-              <p className="text-[10px] font-medium text-muted-text">Submitted by</p>
-              <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{sender?.full_name || 'Unknown'}</p>
-              <p className="text-[11px] text-muted-text">{sender?.email}</p>
-            </div>
-            <div className="flex items-end justify-between gap-4 border-t border-warm-border pt-4">
-              <div>
-                <p className="text-[10px] font-medium text-muted-text">Submitted on</p>
-                <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{new Date(sub.created_at).toLocaleDateString()} at {new Date(sub.created_at).toLocaleTimeString()}</p>
-              </div>
-              {sub.file_size ? (
-                <div className="text-right">
-                  <p className="text-[10px] font-medium text-muted-text">File size</p>
-                  <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{(sub.file_size / 1024).toFixed(2)} KB</p>
-                </div>
-              ) : null}
-            </div>
-          </section>
-
-          {attachments.length > 0 && (
-            <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-              <h2 className="mb-3 text-xs font-semibold text-warm-text">Supporting attachments</h2>
-              <ul className="space-y-2">
-                {attachments.map((attachment) => (
-                  <li key={attachment.id} className="flex items-center justify-between gap-3 text-[11px]">
-                    <span className="min-w-0 truncate text-warm-text">{attachment.file_name}</span>
-                    <button
-                      type="button"
-                      onClick={() => void downloadAttachment(attachment)}
-                      className="shrink-0 font-semibold text-clay underline"
-                    >
-                      Download
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {/* Review Actions */}
-          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-            {officeReview && (
-              <p className="mb-4 text-[11px] leading-relaxed text-muted-text">
-                Review the request and record your office decision. Rejections are archived; the sender must submit a new request.
-              </p>
-            )}
-            {mayorReview && (
-              <p className="mb-4 text-[11px] leading-relaxed text-muted-text">
-                Record the final decision, or return the request to the sender for additional requirements without changing its tracking number.
-              </p>
-            )}
-            {isLocked ? (
-              <div className="space-y-3">
-                <p className="text-xs font-semibold text-warm-text">Review record</p>
-                {reviewNotes ? (
-                  <div className={`rounded-xl border p-4 ${isDeclined ? 'border-rejected-bg bg-rejected-bg/50' : 'border-approved-bg bg-approved-bg/50'}`}>
-                    <p className={`mb-2 text-xs font-semibold ${isDeclined ? 'text-rejected-text' : 'text-approved-text'}`}>Your notes</p>
-                    <p className="whitespace-pre-wrap break-words font-serif text-base leading-relaxed text-warm-text">
-                      &quot;{reviewNotes}&quot;
-                    </p>
-                    <p className="mt-3 text-[10px] text-muted-text">{new Date(sub.updated_at).toLocaleDateString()}</p>
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-text">No notes are recorded for this stage.</p>
-                )}
-                <div className="rounded-xl border border-dashed border-warm-border bg-sidebar p-4 text-center text-xs leading-relaxed text-muted-text">
-                  {sub.status === 'declined_by_approver'
-                    || sub.status === 'declined_by_admin'
-                    || sub.status === 'declined_by_office'
-                    || sub.status === 'declined_by_mayor'
-                    ? 'This request is archived. The sender must submit a new request.'
-                    : sub.status === 'returned_for_requirements'
-                      ? 'Waiting for the sender to provide the requested information.'
-                      : 'This review stage is closed.'}
-                </div>
-              </div>
-            ) : (
-              <>
-                {approverReview && (
-                  <fieldset className="mb-4 space-y-3">
-                    <legend className="mb-2 text-xs font-semibold text-warm-text">
-                      Propose the municipal offices this request requires
-                    </legend>
-                    <div className="space-y-2">
-                      {Object.entries(OFFICE_CONFIG).map(([officeRole, office]) => (
-                        <label key={officeRole} className="flex items-start gap-3 rounded-xl border border-warm-border bg-card p-3 text-xs text-warm-text">
-                          <input
-                            type="checkbox"
-                            checked={proposedOffices.includes(officeRole as OfficeRole)}
-                            onChange={() => toggleProposedOffice(officeRole as OfficeRole)}
-                            className="mt-0.5 accent-clay"
-                          />
-                          <span>{office.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                    {proposedOffices.length > 0 && (
-                      <ol className="space-y-2 rounded-xl bg-sidebar p-3 text-xs text-warm-text">
-                        {proposedOffices.map((officeRole, index) => (
-                          <li key={officeRole} className="flex items-center justify-between gap-3">
-                            <span>{index + 1}. {OFFICE_CONFIG[officeRole].label}</span>
-                            <span className="flex gap-2">
-                              <button type="button" onClick={() => moveProposedOffice(index, -1)} disabled={index === 0 || officeRole === 'mayor_office'} aria-label={`Move ${OFFICE_CONFIG[officeRole].label} up`} className="disabled:opacity-40">↑</button>
-                              <button type="button" onClick={() => moveProposedOffice(index, 1)} disabled={index === proposedOffices.length - 1 || officeRole === 'mayor_office' || proposedOffices[index + 1] === 'mayor_office'} aria-label={`Move ${OFFICE_CONFIG[officeRole].label} down`} className="disabled:opacity-40">↓</button>
-                            </span>
-                          </li>
-                        ))}
-                      </ol>
-                    )}
-                    <p className="text-[11px] text-muted-text">
-                      The Mayor’s Office is optional and, if selected, must be the final route step.
-                    </p>
-                  </fieldset>
-                )}
-                <label htmlFor="approver-notes" className="mb-2 block text-xs font-semibold text-warm-text">
-                  {mayorReview || mayorRouteStep
-                    ? mayorRouteStep ? 'Additional requirements or office decision notes' : "Mayor's official decision"
-                    : officeReview
-                      ? hasFinalizedRoute
-                        ? 'Office evaluation or additional requirements'
-                        : 'Office evaluation'
-                      : 'Approver remarks'}
-                </label>
-                <textarea
-                  id="approver-notes"
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  aria-describedby={hasFinalizedRoute && officeReview && actionError ? 'office-route-action-error' : undefined}
-                  className="mb-4 h-32 w-full resize-none rounded-xl border border-warm-border bg-card p-4 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay"
-                  placeholder={hasFinalizedRoute && officeReview
-                    ? 'Explain the additional information the sender must provide...'
-                    : mayorReview
-                      ? 'Explain the final decision...'
-                    : 'Record your evaluation and any reasons...'}
-                />
-                {actionError && (
-                  <p
-                    id={hasFinalizedRoute && officeReview ? 'office-route-action-error' : undefined}
-                    role="alert"
-                    className="mb-3 whitespace-pre-wrap rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text"
-                  >
-                    {actionError}
-                  </p>
-                )}
-                <div className="flex flex-col gap-3">
-                  {approverReview && (
-                    <>
-                      <button
-                        onClick={() => handleWorkflowAction('approve')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
-                      >
-                        {updating ? 'Saving...' : 'Approve and send to admin'}
-                      </button>
-                      <button
-                        onClick={() => handleWorkflowAction('reject')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 disabled:opacity-50"
-                      >
-                        Reject and archive
-                      </button>
-                    </>
-                  )}
-                  {officeReview && (
-                    <>
-                      {hasFinalizedRoute && (
-                        <button
-                          type="button"
-                          onClick={() => void handleWorkflowAction('return')}
-                          disabled={updating}
-                          className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar disabled:opacity-50"
-                        >
-                          {updating ? 'Saving...' : 'Return for requirements'}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleWorkflowAction('approve')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
-                      >
-                        {updating
-                          ? 'Saving...'
-                          : mayorRouteStep
-                            ? 'Approve and return to Admin'
-                            : 'Complete office review'}
-                      </button>
-                      <button
-                        onClick={() => handleWorkflowAction('reject')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 disabled:opacity-50"
-                      >
-                        Reject and archive
-                      </button>
-                    </>
-                  )}
-                  {mayorReview && (
-                    <>
-                      <button
-                        onClick={() => handleWorkflowAction('approve')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
-                      >
-                        {updating ? 'Saving...' : 'Approve and complete'}
-                      </button>
-                      <button
-                        onClick={() => handleWorkflowAction('reject')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 disabled:opacity-50"
-                      >
-                        Reject and archive
-                      </button>
-                      <button
-                        onClick={() => handleWorkflowAction('return')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar disabled:opacity-50"
-                      >
-                        Return for requirements
-                      </button>
-                    </>
-                  )}
-                </div>
-              </>
-            )}
-          </section>
-
-          {/* Audit Log */}
-          <DocumentMessaging
-            key={sub.id}
-            submissionId={sub.id}
-            fileName={sub.file_name}
-            trackingNumber={sub.tracking_number ?? null}
-            activity={(
-              <div>
-                <h3 className="mb-4 text-xs font-semibold text-warm-text">Activity</h3>
-                {auditLogs.length === 0 ? (
-                  <p className="text-xs text-muted-text">No activity recorded yet.</p>
-                ) : (
-                  <div className="relative ml-1 space-y-6 border-l border-warm-border">
-                    {auditLogs.map((log) => (
-                      <div key={log.id} className="relative pl-5">
-                        <span className="absolute -left-[4.5px] top-1.5 h-2 w-2 rounded-full bg-clay ring-4 ring-card" />
-                        <p className="text-[11px] font-semibold text-clay">{getActionLabel(log.action_type)}</p>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-2">
-                          <p className="text-[11px] font-medium text-warm-text">{log.profiles?.full_name || 'System'}</p>
-                          {log.profiles?.role && (
-                            <span className="rounded-md bg-sidebar px-1.5 py-0.5 text-[10px] font-medium capitalize text-muted-text">
-                              {log.profiles.role}
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-0.5 text-[10px] text-muted-text">
-                          {new Date(log.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+      <section className="rounded-2xl border border-warm-border bg-card p-6">
+        <h2 className="font-serif text-xl text-warm-text">Office assignments and responses</h2>
+        {activeAssignments.length === 0 ? <p className="mt-3 text-sm text-muted-text">No office assignments have been made.</p> : (
+          <ul className="mt-4 space-y-4">
+            {activeAssignments.map((assignment) => {
+              const assignmentResponsibilities = responsibilities.filter((responsibility) => responsibility.assignment_id === assignment.id);
+              return (
+                <li key={assignment.id} className="rounded-xl border border-warm-border p-4">
+                  <h3 className="font-semibold text-warm-text">{getOfficeName(assignment.office_id)}</h3>
+                  {assignment.instructions && <p className="mt-1 text-sm text-muted-text">{assignment.instructions}</p>}
+                  {assignmentResponsibilities.map((responsibility) => {
+                    const { revision } = getResponsibility(responsibility.id);
+                    const matchingCycles = cycles.filter((cycle) => cycle.responsibility_id === responsibility.id);
+                    return (
+                      <div key={responsibility.id} className="mt-3 border-l-2 border-clay pl-3">
+                        <p className="text-sm font-medium text-warm-text">
+                          {revision ? RESPONSIBILITY_LABELS[revision.responsibility_type as ResponsibilityType] ?? revision.responsibility_type : responsibility.responsibility_key}
                         </p>
-                        {log.comments && (
-                          <p className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-sidebar p-3 font-serif text-sm leading-relaxed text-warm-text">
-                            &quot;{log.comments}&quot;
-                          </p>
-                        )}
+                        {revision?.scope && <p className="mt-1 text-xs text-muted-text">Scope: {revision.scope}</p>}
+                        {matchingCycles.map((cycle) => responses.filter((response) => response.review_cycle_id === cycle.id).map((response) => {
+                          const existingReview = officerReviews.find((review) => review.review_response_id === response.id);
+                          return (
+                            <div key={response.id} className="mt-3 rounded-lg bg-sidebar p-3">
+                              <p className="text-xs font-semibold text-warm-text">Office outcome: {response.outcome}</p>
+                              {response.findings && <p className="mt-1 whitespace-pre-wrap text-xs text-muted-text">{response.findings}</p>}
+                              {response.remarks && <p className="mt-1 whitespace-pre-wrap text-xs text-muted-text">Remarks: {response.remarks}</p>}
+                              {existingReview ? (
+                                <p className="mt-2 text-xs text-approved-text">Tourism Officer reviewed: {existingReview.disposition}</p>
+                              ) : (
+                                <button type="button" disabled={saving} onClick={() => void reviewResponse(response.id)} className="mt-3 rounded-full bg-clay px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                                  Record officer review
+                                </button>
+                              )}
+                            </div>
+                          );
+                        }))}
+                        {matchingCycles.length === 0 && <p className="mt-2 text-xs text-muted-text">No review cycle is available.</p>}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          />
+                    );
+                  })}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
-          {/* Footer Actions */}
-          <button
-            onClick={async () => {
-              const url = await getFileUrl(supabase, sub);
-              await downloadFile(url, sub.file_name);
-            }}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar"
-          >
-            Download original file
-          </button>
-        </aside>
-
-        {/* PREVIEW PANEL */}
-        <main className="lg:col-span-7">
-          <div className="flex flex-col overflow-hidden rounded-2xl border border-warm-border bg-card lg:sticky lg:top-10">
-            <div className="flex min-h-12 items-center border-b border-warm-border px-5 py-3 max-md:px-3.5">
-              <div className="flex min-w-0 flex-col">
-                <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">Document preview</span>
-                <span className="truncate text-[11px] font-medium text-warm-text">{sub.file_name}</span>
-              </div>
-            </div>
-
-            <div className="relative flex h-[60vh] min-h-[380px] items-center justify-center overflow-hidden bg-cream lg:h-[75vh]">
-              <FilePreview file={sub} />
-            </div>
+      {(submission.state === 'initial_review' || submission.state === 'office_review') && officeRoutingAvailable && (
+        <section className="rounded-2xl border border-warm-border bg-card p-6">
+          <h2 className="font-serif text-xl text-warm-text">Manually assign municipal offices</h2>
+          <p className="mt-2 text-sm text-muted-text">Choose each office and responsibility. Routing is never selected automatically. An approved office authority mapping is required by the database.</p>
+          <div className="mt-4 grid gap-4">
+            <label className="grid gap-2 text-sm font-medium text-warm-text">
+              Offices
+              <select multiple value={selectedOfficeIds} onChange={(event) => setSelectedOfficeIds(Array.from(event.target.selectedOptions, (option) => option.value))} className="min-h-28 rounded-xl border border-warm-border bg-white p-3">
+                {offices.map((office) => <option key={office.id} value={office.id}>{office.name}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-medium text-warm-text">
+              Responsibility type
+              <select value={responsibilityType} onChange={(event) => setResponsibilityType(event.target.value as ResponsibilityType)} className="rounded-xl border border-warm-border bg-white p-3">
+                {Object.entries(RESPONSIBILITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-medium text-warm-text">
+              Responsibility scope
+              <textarea value={scope} onChange={(event) => setScope(event.target.value)} rows={3} className="rounded-xl border border-warm-border bg-white p-3" />
+            </label>
+            <label className="grid gap-2 text-sm font-medium text-warm-text">
+              Office instructions (optional)
+              <textarea value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={2} className="rounded-xl border border-warm-border bg-white p-3" />
+            </label>
+            <label className="grid gap-2 text-sm font-medium text-warm-text">
+              Routing method
+              <select value={routingMode} onChange={(event) => setRoutingMode(event.target.value as typeof routingMode)} className="rounded-xl border border-warm-border bg-white p-3">
+                <option value="simultaneous">Simultaneous</option>
+                <option value="one_at_a_time">One office at a time</option>
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-medium text-warm-text">
+              Reason for routing
+              <textarea value={routingReason} onChange={(event) => setRoutingReason(event.target.value)} rows={2} className="rounded-xl border border-warm-border bg-white p-3" />
+            </label>
+            <button type="button" disabled={saving} onClick={() => void createRoutingPlan()} className="rounded-full bg-clay px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
+              {saving ? 'Saving...' : 'Create office assignments'}
+            </button>
           </div>
-        </main>
-      </div>
+        </section>
+      )}
+      {offices.length === 0 && (submission.state === 'initial_review' || submission.state === 'office_review') && (
+        <p className="rounded-xl border border-pending-bg bg-pending-bg/40 p-4 text-sm text-pending-text">
+          Office routing is unavailable until an administrator provisions approved offices and responsibility authorities.
+        </p>
+      )}
 
-    </div>
+      {(submission.state === 'initial_review' || submission.state === 'office_review') && (
+        <section className="rounded-2xl border border-warm-border bg-card p-6">
+          <h2 className="font-serif text-xl text-warm-text">Tourism Officer decision</h2>
+          <p className="mt-2 text-sm text-muted-text">Final approval is enforced by the database and requires all active office responsibilities and response reviews to be satisfied.</p>
+          <div className="mt-4 grid gap-4">
+            <label className="grid gap-2 text-sm font-medium text-warm-text">
+              Decision
+              <select value={decision} onChange={(event) => setDecision(event.target.value as Decision)} className="rounded-xl border border-warm-border bg-white p-3">
+                <option value="approved">Approve overall submission</option>
+                <option value="returned">Return to submitter for changes</option>
+                <option value="rejected">Reject overall submission</option>
+              </select>
+            </label>
+            {decision !== 'approved' && (
+              <label className="grid gap-2 text-sm font-medium text-warm-text">
+                Decision reason
+                <textarea value={decisionReason} onChange={(event) => setDecisionReason(event.target.value)} rows={3} className="rounded-xl border border-warm-border bg-white p-3" />
+              </label>
+            )}
+            {decision === 'returned' && (
+              <label className="grid gap-2 text-sm font-medium text-warm-text">
+                Correction instructions
+                <textarea value={correctionInstructions} onChange={(event) => setCorrectionInstructions(event.target.value)} rows={3} className="rounded-xl border border-warm-border bg-white p-3" />
+              </label>
+            )}
+            <button type="button" disabled={saving} onClick={() => void recordDecision()} className="rounded-full bg-clay px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
+              {saving ? 'Recording decision...' : 'Record Tourism Officer decision'}
+            </button>
+          </div>
+        </section>
+      )}
+      <DocumentMessaging
+        key={submission.id}
+        submissionId={submission.id}
+        fileName={submission.title}
+        trackingNumber={submission.tracking_number}
+        activity={null}
+      />
+    </section>
   );
 }

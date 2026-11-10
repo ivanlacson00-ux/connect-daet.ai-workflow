@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import FilePreview from '@/components/FilePreview';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
   getWorkflowFileMimeType,
@@ -9,579 +9,259 @@ import {
   WORKFLOW_ATTACHMENT_ACCEPT,
   WORKFLOW_DOCUMENT_ACCEPT,
 } from '@/lib/workflow/file-types';
-import { OFFICE_CONFIG } from '@/lib/workflow/offices';
-import { useRouter } from 'next/navigation';
 
-type UploadMessage = {
-  text: string;
-  type: 'success' | 'error';
+type UploadMessage = { type: 'success' | 'error'; text: string };
+type UploadedMetadata = {
+  original_filename: string;
+  object_key: string;
+  content_type: string;
+  byte_size: number;
 };
+
+const STORAGE_BUCKET = 'connect-daet-submissions';
 
 export default function UploadPage() {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const attachmentInputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const mainFileRef = useRef<HTMLInputElement>(null);
+  const attachmentsRef = useRef<HTMLInputElement>(null);
+  const [mainFile, setMainFile] = useState<File | null>(null);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [intendedRecipient, setIntendedRecipient] = useState('');
-  const [category, setCategory] = useState<string>(
-    OFFICE_CONFIG.municipal_treasurer.categories[0]
-  );
+  const [destinationDepartment, setDestinationDepartment] = useState('');
+  const [submissionId, setSubmissionId] = useState<string | null>(null);
+  const [expectedVersionId, setExpectedVersionId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
   const [message, setMessage] = useState<UploadMessage | null>(null);
 
-  const previewUrl = useMemo(
-    () => (file ? URL.createObjectURL(file) : null),
-    [file]
-  );
-  const extension = file?.name.split('.').pop()?.toLowerCase() ?? '';
-  const mimeType = file ? getWorkflowFileMimeType(file.name) : null;
-
   useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const resubmitId = query.get('resubmit');
+    if (!resubmitId) return;
+
+    let active = true;
+    void supabase
+      .from('submissions')
+      .select('id, title, description, state, current_version_id')
+      .eq('id', resubmitId)
+      .single()
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          setMessage({ type: 'error', text: 'This submission cannot be loaded for resubmission.' });
+          return;
+        }
+        if (data.state !== 'returned') {
+          setMessage({ type: 'error', text: 'Only a returned submission can be resubmitted.' });
+          return;
+        }
+        setSubmissionId(data.id);
+        setExpectedVersionId(data.current_version_id);
+        setTitle(data.title);
+        setDescription(data.description ?? '');
+      });
+
     return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      active = false;
     };
-  }, [previewUrl]);
+  }, [supabase]);
 
-  useEffect(() => {
-    if (!file) setShowPreview(false);
-  }, [file]);
-
-  useEffect(() => {
-    if (!showPreview) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setShowPreview(false);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showPreview]);
-
-  const selectMainFile = (selectedFile: File) => {
-    const fileError = getWorkflowFilesTypeError([selectedFile], false);
-    if (fileError) {
-      setFile(null);
-      setMessage({ text: fileError, type: 'error' });
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    setFile(selectedFile);
-    setTitle((currentTitle) => currentTitle || selectedFile.name.replace(/\.[^.]+$/, ''));
-    setMessage(null);
-  };
-
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = event.target.files?.[0];
-    if (selectedFile) selectMainFile(selectedFile);
-  };
-
-  const handleAttachmentChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(event.target.files ?? []);
-    const fileError = getWorkflowFilesTypeError(selectedFiles);
-    if (fileError) {
-      setAttachments([]);
-      setMessage({ text: fileError, type: 'error' });
+  const handleMainFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files?.[0] ?? null;
+    if (!selected) return;
+    const error = getWorkflowFilesTypeError([selected], false);
+    if (error) {
+      setMainFile(null);
+      setMessage({ type: 'error', text: error });
       event.target.value = '';
       return;
     }
-
-    setAttachments(selectedFiles);
+    setMainFile(selected);
     setMessage(null);
   };
 
-  const handleUpload = async () => {
+  const handleAttachments = (event: ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(event.target.files ?? []);
+    const error = getWorkflowFilesTypeError(selected);
+    if (error) {
+      setAttachments([]);
+      setMessage({ type: 'error', text: error });
+      event.target.value = '';
+      return;
+    }
+    setAttachments(selected);
+    setMessage(null);
+  };
+
+  const handleSubmit = async () => {
     if (uploading) return;
-    if (!file || !title.trim() || !description.trim()) {
-      setMessage({
-        text: 'Complete the document title, request summary, and main document before submitting.',
-        type: 'error',
-      });
+    if (!title.trim() || !description.trim() || !mainFile) {
+      setMessage({ type: 'error', text: 'Enter a title and summary, then select the main document.' });
       return;
     }
 
-    const fileError =
-      getWorkflowFilesTypeError([file], false) ||
-      getWorkflowFilesTypeError(attachments);
+    const fileError = getWorkflowFilesTypeError([mainFile], false)
+      ?? getWorkflowFilesTypeError(attachments);
     if (fileError) {
-      setMessage({ text: fileError, type: 'error' });
+      setMessage({ type: 'error', text: fileError });
       return;
     }
 
     setUploading(true);
     setMessage(null);
-    const uploadedFilePaths: string[] = [];
+    const uploadedKeys: string[] = [];
+    let submissionSaved = false;
 
     try {
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser();
-      if (authError) throw authError;
-      if (!user) throw new Error('Your session has expired. Please sign in again.');
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      if (!user) throw new Error('Your session has expired. Sign in again to continue.');
 
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('id', user.id)
-        .single();
-      if (profileError) throw profileError;
-      if (!profile) {
-        throw new Error('Your user profile was not found. Please contact an administrator.');
-      }
+      const files = [mainFile, ...attachments];
+      const metadata: UploadedMetadata[] = [];
+      for (const [index, file] of files.entries()) {
+        const contentType = getWorkflowFileMimeType(file.name);
+        if (!contentType) throw new Error(`Unsupported file type: ${file.name}`);
 
-      const uploadToStorage = async (uploadFile: File, index: number) => {
-        const contentType = getWorkflowFileMimeType(uploadFile.name);
-        if (!contentType) {
-          throw new Error(`Unsupported file type: ${uploadFile.name}`);
-        }
-
-        const safeName = uploadFile.name.replace(/[^\w.-]/g, '_');
-        const filePath = `${user.id}/${crypto.randomUUID()}-${index}-${safeName}`;
-        const { error: uploadError } = await supabase.storage
-          .from('workflow_uploads')
-          .upload(filePath, uploadFile, {
+        const safeName = file.name.replace(/[^\w.-]/g, '_');
+        const objectKey = `${user.id}/${crypto.randomUUID()}-${index}-${safeName}`;
+        const { error: storageError } = await supabase.storage
+          .from(STORAGE_BUCKET)
+          .upload(objectKey, file, {
             contentType,
             cacheControl: '3600',
             upsert: false,
           });
-        if (uploadError) throw uploadError;
+        if (storageError) throw storageError;
 
-        uploadedFilePaths.push(filePath);
-        return { filePath, contentType };
-      };
-
-      const { filePath, contentType } = await uploadToStorage(file, 0);
-      const attachmentRecords: {
-        file_name: string;
-        file_path: string;
-        file_type: string;
-        file_size: number;
-      }[] = [];
-
-      for (const [index, attachment] of attachments.entries()) {
-        const uploadedAttachment = await uploadToStorage(attachment, index + 1);
-        attachmentRecords.push({
-          file_name: attachment.name,
-          file_path: uploadedAttachment.filePath,
-          file_type: uploadedAttachment.contentType,
-          file_size: attachment.size,
+        uploadedKeys.push(objectKey);
+        metadata.push({
+          original_filename: file.name,
+          object_key: objectKey,
+          content_type: contentType,
+          byte_size: file.size,
         });
       }
 
-      const { data: publicUrlData } = supabase.storage
-        .from('workflow_uploads')
-        .getPublicUrl(filePath);
+      if (submissionId && expectedVersionId) {
+        const { error: resubmitError } = await supabase.rpc('resubmit_submission', {
+          p_submission_id: submissionId,
+          p_expected_version_id: expectedVersionId,
+          p_version_description: description.trim(),
+          p_attachment_metadata: metadata,
+          p_idempotency_key: crypto.randomUUID(),
+        });
+        if (resubmitError) throw resubmitError;
+        submissionSaved = true;
+      } else {
+        const { data, error: submissionError } = await supabase.rpc('create_submission', {
+          p_title: title.trim(),
+          p_description: description.trim(),
+          p_document_type_id: null,
+          p_destination_department: destinationDepartment.trim() || null,
+          p_version_description: 'Initial submission',
+          p_attachment_metadata: metadata,
+          p_idempotency_key: crypto.randomUUID(),
+        });
+        if (submissionError) throw submissionError;
+        if (typeof data !== 'string') throw new Error('The submission operation returned no submission ID.');
+        submissionSaved = true;
 
-      const fileName = title.trim().toLowerCase().endsWith(`.${extension}`)
-        ? title.trim()
-        : `${title.trim()}.${extension}`;
-      const { data, error: submissionError } = await supabase.rpc(
-        'create_workflow_submission',
-        {
-          submission_title: fileName,
-          submission_file_path: filePath,
-          submission_file_url: publicUrlData.publicUrl,
-          submission_file_type: contentType,
-          submission_file_size: file.size,
-          submission_document_type: category,
-          submission_description: description.trim(),
-          submission_purpose: null,
-          submission_requested_action: null,
-          submission_intended_recipient: intendedRecipient.trim() || null,
-          attachment_records: attachmentRecords,
+        const { data: submission, error: trackingError } = await supabase
+          .from('submissions')
+          .select('tracking_number')
+          .eq('id', data)
+          .single();
+        if (trackingError) {
+          console.error('Submission saved, but tracking number could not be loaded:', trackingError);
+          setMessage({ type: 'success', text: 'Submission saved. Its tracking number is temporarily unavailable; view it from your submissions.' });
+          router.push('/workflow/user');
+          return;
         }
-      );
-      if (submissionError) throw submissionError;
-
-      const submission = Array.isArray(data) ? data[0] : data;
-      if (!submission?.tracking_number) {
-        throw new Error('The submission was saved without a tracking number.');
+        setMessage({ type: 'success', text: `Submission received. Tracking number: ${submission.tracking_number}` });
       }
 
-      uploadedFilePaths.length = 0;
-      setMessage({
-        text: `Document submitted. Tracking number: ${submission.tracking_number}. Redirecting...`,
-        type: 'success',
-      });
-      setTimeout(() => router.push('/workflow/user'), 1500);
+      uploadedKeys.length = 0;
+      setTimeout(() => router.push('/workflow/user'), 800);
     } catch (error: unknown) {
-      console.error('Upload error:', error);
-      if (uploadedFilePaths.length > 0) {
-        try {
-          const { error: cleanupError } = await supabase.storage
-            .from('workflow_uploads')
-            .remove(uploadedFilePaths);
-          if (cleanupError) {
-            console.error('Uploaded file cleanup error:', cleanupError);
-          }
-        } catch (cleanupError) {
-          console.error('Uploaded file cleanup error:', cleanupError);
+      console.error('Submission upload failed:', error);
+      let cleanupMessage = '';
+      if (!submissionSaved && uploadedKeys.length > 0) {
+        const { error: cleanupError } = await supabase.storage.from(STORAGE_BUCKET).remove(uploadedKeys);
+        if (cleanupError) {
+          console.error('Failed to remove unattached uploaded objects:', cleanupError);
+          cleanupMessage = ' Some uploaded files may need administrator cleanup.';
         }
       }
-
-      const errorText =
-        error instanceof Error
-          ? error.message
-          : typeof error === 'object' && error !== null && 'message' in error
-            ? String(error.message)
-            : 'An unexpected upload error occurred.';
-      setMessage({ text: errorText, type: 'error' });
+      const errorText = error instanceof Error ? error.message : 'Unexpected submission error.';
+      setMessage({ type: 'error', text: `${errorText}${cleanupMessage}` });
+    } finally {
       setUploading(false);
     }
   };
 
-  const labelClass =
-    'mb-2 block text-[11px] font-semibold uppercase tracking-wide text-warm-text';
-  const fieldClass =
-    'h-11 w-full rounded-xl border border-warm-border bg-card px-4 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/70 focus:border-clay focus:ring-2 focus:ring-clay/10';
-
   return (
-    <div className="mx-auto w-full max-w-5xl rounded-2xl border border-warm-border bg-card p-5 shadow-sm sm:p-8">
-      <header className="mb-6 flex flex-col gap-4 border-b border-warm-border pb-5 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-clay">
-            Document intake
-          </p>
-          <h1 className="text-2xl font-bold leading-tight text-warm-text sm:text-[28px]">
-            Submit a New Document
-          </h1>
-          <p className="mt-2 text-xs text-muted-text">
-            Provide the request details and upload the document for review.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => router.push('/workflow/user')}
-          className="inline-flex h-10 items-center justify-center rounded-full border border-warm-border px-5 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar"
-        >
-          Cancel
-        </button>
+    <section className="mx-auto max-w-3xl rounded-2xl border border-warm-border bg-card p-6">
+      <header className="mb-6">
+        <p className="text-xs font-semibold uppercase tracking-wide text-clay">
+          {submissionId ? 'Corrected version' : 'New submission'}
+        </p>
+        <h1 className="mt-2 font-serif text-2xl text-warm-text">
+          {submissionId ? 'Resubmit your document' : 'Submit a document'}
+        </h1>
+        <p className="mt-2 text-sm text-muted-text">
+          Every submission is first reviewed by the Tourism Officer. Municipal offices are selected by that officer when required.
+        </p>
       </header>
 
-      <div className="grid grid-cols-1 gap-x-4 gap-y-5 md:grid-cols-2">
-        <div>
-          <label className={labelClass} htmlFor="submission-title">
-            Document title / subject
-          </label>
-          <input
-            id="submission-title"
-            type="text"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="e.g. Request for municipal assistance"
-            className={fieldClass}
-            required
-          />
-        </div>
+      {submissionId && (
+        <p className="mb-5 rounded-xl border border-pending-bg bg-pending-bg/40 p-3 text-sm text-pending-text">
+          Resubmission creates a new version. Earlier files and office responses remain in the history.
+        </p>
+      )}
 
-        <div>
-          <label className={labelClass} htmlFor="submission-category">
-            Classification / document type
+      <div className="grid gap-5">
+        <label className="grid gap-2 text-sm font-medium text-warm-text">
+          Document title
+          <input value={title} onChange={(event) => setTitle(event.target.value)} required className="rounded-xl border border-warm-border bg-white px-4 py-3" />
+        </label>
+        <label className="grid gap-2 text-sm font-medium text-warm-text">
+          Request summary
+          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} required className="resize-y rounded-xl border border-warm-border bg-white px-4 py-3" />
+        </label>
+        {!submissionId && (
+          <label className="grid gap-2 text-sm font-medium text-warm-text">
+            Destination department (optional)
+            <input value={destinationDepartment} onChange={(event) => setDestinationDepartment(event.target.value)} className="rounded-xl border border-warm-border bg-white px-4 py-3" />
+            <span className="text-xs font-normal text-muted-text">This information does not automatically route your submission.</span>
           </label>
-          <select
-            id="submission-category"
-            value={category}
-            onChange={(event) => setCategory(event.target.value)}
-            className={`${fieldClass} cursor-pointer`}
-          >
-            {Object.values(OFFICE_CONFIG).map((office) => (
-              <optgroup key={office.label} label={office.label}>
-                {office.categories.map((officeCategory) => (
-                  <option key={officeCategory} value={officeCategory}>
-                    {officeCategory}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className={labelClass} htmlFor="submission-context">
-            Request summary / context
-          </label>
-          <textarea
-            id="submission-context"
-            rows={3}
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            placeholder="Briefly explain what this submission is about."
-            className={`${fieldClass} h-auto resize-y py-3 leading-relaxed`}
-            required
-          />
-        </div>
-
-        <div>
-          <label className={labelClass} htmlFor="intended-recipient">
-            Intended recipient (optional)
-          </label>
-          <input
-            id="intended-recipient"
-            type="text"
-            value={intendedRecipient}
-            onChange={(event) => setIntendedRecipient(event.target.value)}
-            placeholder="Office or recipient, if known"
-            className={fieldClass}
-          />
-          <p className="mt-2 text-[11px] leading-relaxed text-muted-text">
-            The approver will confirm the appropriate municipal office during review.
-          </p>
-        </div>
-      </div>
-
-      <section className="mt-6">
-        <label className={`${labelClass} mb-1`} htmlFor="main-document">
+        )}
+        <label className="grid gap-2 text-sm font-medium text-warm-text">
           Main document
+          <input ref={mainFileRef} type="file" accept={WORKFLOW_DOCUMENT_ACCEPT} onChange={handleMainFile} required className="rounded-xl border border-warm-border bg-white p-3 text-sm" />
+          <span className="text-xs font-normal text-muted-text">PDF, Word, Excel, CSV, PowerPoint, JPEG, or PNG.</span>
         </label>
-        <p className="mb-3 text-[11px] text-muted-text">
-          PDF, DOC/DOCX, XLS/XLSX, CSV, PPT/PPTX, JPG/JPEG, or PNG.
-        </p>
-        <input
-          id="main-document"
-          type="file"
-          accept={WORKFLOW_DOCUMENT_ACCEPT}
-          ref={fileInputRef}
-          onChange={handleFileChange}
-          className="sr-only"
-        />
-        <div
-          onDragEnter={(event) => {
-            event.preventDefault();
-            if (!uploading) setIsDragging(true);
-          }}
-          onDragOver={(event) => {
-            event.preventDefault();
-            if (!uploading) setIsDragging(true);
-          }}
-          onDragLeave={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-              setIsDragging(false);
-            }
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            setIsDragging(false);
-            if (!uploading && event.dataTransfer.files[0]) {
-              selectMainFile(event.dataTransfer.files[0]);
-            }
-          }}
-          className={`flex min-h-44 flex-col items-center justify-center rounded-2xl border-2 border-dashed px-5 py-7 text-center transition-colors sm:min-h-48 ${
-            isDragging
-              ? 'border-clay bg-clay-soft'
-              : file
-                ? 'border-approved-bg bg-approved-bg/20'
-                : 'border-warm-border bg-sidebar/60'
-          }`}
-        >
-          {file ? (
-            <div className="flex w-full flex-col items-center">
-              {extension.match(/^(jpe?g|png)$/) && previewUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={previewUrl}
-                  alt={file.name}
-                  className="mb-3 max-h-24 max-w-full rounded-lg border border-warm-border bg-card object-contain"
-                />
-              ) : (
-                <span
-                  className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-card text-lg text-clay"
-                  aria-hidden="true"
-                >
-                  ▤
-                </span>
-              )}
-              <p className="max-w-full break-all text-sm font-semibold text-warm-text">
-                {file.name}
-              </p>
-              <p className="mt-1 text-[11px] text-muted-text">
-                {(file.size / 1024).toFixed(1)} KB
-              </p>
-              <div className="mt-3 flex flex-wrap justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowPreview(true)}
-                  className="inline-flex h-9 items-center rounded-full border border-warm-border bg-card px-4 text-[11px] font-medium text-warm-text hover:bg-sidebar"
-                >
-                  Preview
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFile(null);
-                    if (fileInputRef.current) fileInputRef.current.value = '';
-                  }}
-                  className="inline-flex h-9 items-center rounded-full border border-warm-border bg-card px-4 text-[11px] font-medium text-warm-text hover:bg-sidebar"
-                >
-                  Remove file
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="inline-flex h-9 items-center rounded-full border border-warm-border bg-card px-4 text-[11px] font-medium text-warm-text hover:bg-sidebar"
-                >
-                  Replace file
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <span
-                className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-clay-soft text-xl text-clay"
-                aria-hidden="true"
-              >
-                ↑
-              </span>
-              <p className="text-sm font-semibold text-warm-text">
-                Drag and drop your document here
-              </p>
-              <p className="mt-1 text-xs text-muted-text">
-                or choose a file from your device
-              </p>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="mt-4 inline-flex h-9 items-center rounded-full border border-warm-border bg-card px-5 text-xs font-semibold text-warm-text transition-colors hover:border-clay hover:text-clay"
-              >
-                Choose document
-              </button>
-            </>
-          )}
-        </div>
-      </section>
-
-      <section className="mt-5 rounded-xl border border-warm-border bg-card p-4">
-        <label className={`${labelClass} mb-1`} htmlFor="supporting-attachments">
+        <label className="grid gap-2 text-sm font-medium text-warm-text">
           Supporting attachments (optional)
+          <input ref={attachmentsRef} type="file" accept={WORKFLOW_ATTACHMENT_ACCEPT} multiple onChange={handleAttachments} className="rounded-xl border border-warm-border bg-white p-3 text-sm" />
+          <span className="text-xs font-normal text-muted-text">ZIP files are accepted only as supporting attachments.</span>
         </label>
-        <p className="mb-3 text-[11px] text-muted-text">
-          PDF, DOC/DOCX, XLS/XLSX, CSV, PPT/PPTX, JPG/JPEG, PNG, or ZIP.
-        </p>
-        <input
-          id="supporting-attachments"
-          ref={attachmentInputRef}
-          type="file"
-          accept={WORKFLOW_ATTACHMENT_ACCEPT}
-          multiple
-          onChange={handleAttachmentChange}
-          className="block w-full text-xs text-muted-text file:mr-3 file:rounded-full file:border-0 file:bg-clay-soft file:px-4 file:py-2 file:text-xs file:font-semibold file:text-clay"
-        />
-        {attachments.length > 0 && (
-          <ul className="mt-3 space-y-2 text-[11px] text-warm-text">
-            {attachments.map((attachment, attachmentIndex) => (
-              <li
-                key={`${attachment.name}-${attachment.size}-${attachmentIndex}`}
-                className="flex items-center justify-between gap-3 rounded-lg bg-sidebar px-3 py-2"
-              >
-                <span className="min-w-0 break-all">
-                  {attachment.name} ({(attachment.size / 1024).toFixed(1)} KB)
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAttachments((currentAttachments) =>
-                      currentAttachments.filter((_, index) => index !== attachmentIndex)
-                    );
-                    if (attachmentInputRef.current) {
-                      attachmentInputRef.current.value = '';
-                    }
-                  }}
-                  aria-label={`Remove ${attachment.name}`}
-                  className="shrink-0 rounded-full px-3 py-1.5 font-medium text-rejected-text transition-colors hover:bg-rejected-bg"
-                >
-                  Remove
-                </button>
-              </li>
-            ))}
+        {(mainFile || attachments.length > 0) && (
+          <ul className="rounded-xl bg-sidebar p-4 text-xs text-muted-text">
+            {mainFile && <li>Main: {mainFile.name} ({Math.ceil(mainFile.size / 1024)} KB)</li>}
+            {attachments.map((attachment) => <li key={`${attachment.name}-${attachment.size}`}>Attachment: {attachment.name} ({Math.ceil(attachment.size / 1024)} KB)</li>)}
           </ul>
         )}
-      </section>
-
-      <footer className="mt-6 flex flex-col gap-4 border-t border-warm-border pt-5 sm:flex-row sm:items-center sm:justify-between">
-        <p className="max-w-lg text-xs leading-relaxed text-muted-text">
-          After submission, you’ll receive a tracking number and can follow the review progress from your dashboard.
-        </p>
-        <button
-          type="button"
-          onClick={handleUpload}
-          disabled={uploading || !file}
-          className={`inline-flex h-12 w-full shrink-0 items-center justify-center gap-2 rounded-full px-7 text-xs font-semibold transition-colors sm:w-auto ${
-            uploading || !file
-              ? 'cursor-not-allowed bg-sidebar text-muted-text'
-              : 'bg-clay text-white hover:bg-warm-text'
-          }`}
-        >
-          {uploading ? (
-            <>
-              <span className="h-2 w-2 animate-pulse rounded-full bg-current" />
-              Submitting...
-            </>
-          ) : (
-            'Submit document →'
-          )}
+        {message && (
+          <p role={message.type === 'error' ? 'alert' : 'status'} className={`rounded-xl border p-3 text-sm ${message.type === 'success' ? 'border-approved-bg bg-approved-bg/50 text-approved-text' : 'border-rejected-bg bg-rejected-bg/50 text-rejected-text'}`}>
+            {message.text}
+          </p>
+        )}
+        <button type="button" onClick={handleSubmit} disabled={uploading} className="rounded-full bg-clay px-6 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+          {uploading ? 'Uploading securely...' : submissionId ? 'Resubmit corrected version' : 'Submit for Tourism Officer review'}
         </button>
-      </footer>
-
-      {message && (
-        <div
-          role="status"
-          className={`mt-4 rounded-xl border p-4 ${
-            message.type === 'success'
-              ? 'border-approved-bg bg-approved-bg/50 text-approved-text'
-              : 'border-rejected-bg bg-rejected-bg/50 text-rejected-text'
-          }`}
-        >
-          <p className="text-sm leading-relaxed">{message.text}</p>
-        </div>
-      )}
-
-      {showPreview && file && previewUrl && mimeType && (
-        <div className="fixed inset-0 z-100 flex flex-col bg-warm-text/75 backdrop-blur-sm animate-in fade-in duration-300 max-md:bg-card max-md:backdrop-blur-none">
-          <div className="flex min-h-16 items-center justify-between border-b border-warm-border bg-card px-4 py-3 sm:px-8">
-            <div className="flex min-w-0 flex-col">
-              <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">
-                Document preview
-              </span>
-              <h2 className="max-w-[55vw] truncate text-sm font-semibold text-warm-text">
-                {file.name}
-              </h2>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowPreview(false)}
-              aria-label="Close preview"
-              className="flex h-9 w-9 items-center justify-center rounded-full text-muted-text transition-colors hover:bg-sidebar hover:text-warm-text max-md:h-11 max-md:w-11"
-            >
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                aria-hidden="true"
-              >
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          <div className="flex flex-1 items-center justify-center overflow-hidden bg-cream p-3 sm:p-8 max-md:bg-card max-md:p-0">
-            <div className="relative flex h-full w-full max-w-6xl items-center justify-center overflow-hidden rounded-xl border border-warm-border bg-card shadow-xl max-md:max-w-none max-md:rounded-none max-md:border-0 max-md:shadow-none">
-              <FilePreview
-                file={{
-                  file_name: file.name,
-                  file_url: previewUrl,
-                  file_type: mimeType,
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      </div>
+    </section>
   );
 }

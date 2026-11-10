@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
-import { getRoleHomePath } from '@/lib/workflow/offices';
+import { getCurrentWorkflowAccess, getPrimaryWorkflowRole, getWorkflowHomePath } from '@/lib/auth/access';
 
 export default function SetupPasswordPage() {
   const supabase = useMemo(() => createClient(), []);
@@ -66,28 +66,22 @@ export default function SetupPasswordPage() {
       return;
     }
 
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
-      console.error('Could not load the verified invited account:', userError?.message);
+    let access: Awaited<ReturnType<typeof getCurrentWorkflowAccess>>;
+    try {
+      access = await getCurrentWorkflowAccess(supabase);
+    } catch (accessError) {
+      console.error('Could not load the verified invited account role:', accessError);
+      setError('Your password was saved, but we could not load your role. Please contact an administrator.');
+      setSubmitting(false);
+      return;
+    }
+    if (!access) {
       setError('Your password was saved, but we could not load your role. Please sign in to continue.');
       setSubmitting(false);
       return;
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    if (profileError || !profile) {
-      console.error('Could not load the invited account role:', profileError?.message);
-      setError('Your password was saved, but we could not load your role. Please contact an administrator.');
-      setSubmitting(false);
-      return;
-    }
-
-    window.location.href = getRoleHomePath(profile.role);
+    window.location.href = getWorkflowHomePath(getPrimaryWorkflowRole(access.roles));
   };
 
   return (

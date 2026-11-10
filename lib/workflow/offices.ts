@@ -40,6 +40,6 @@ export function isOfficeRole(role: string | null): role is OfficeRole {
 export function getRoleHomePath(role: string | null) {
   if (role === 'admin') return '/workflow/admin';
   if (role === 'approver') return '/workflow/approver';
-  if (isOfficeRole(role)) return OFFICE_CONFIG[role].path;
+  if (role === 'external_approver' || isOfficeRole(role)) return '/workflow/office';
   return '/workflow/user';
 }

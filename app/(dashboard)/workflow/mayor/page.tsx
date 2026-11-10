@@ -1,5 +1,5 @@
-import OfficeDashboard from '@/components/OfficeDashboard';
+import { redirect } from 'next/navigation';
 
-export default function MayorOfficeDashboard() {
-  return <OfficeDashboard role="mayor_office" />;
+export default function LegacyMayorOfficePage() {
+  redirect('/workflow/office');
 }

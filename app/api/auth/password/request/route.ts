@@ -1,4 +1,3 @@
-import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -42,56 +41,19 @@ export async function POST(request: NextRequest) {
     { headers: { 'Cache-Control': 'no-store' } }
   );
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceRoleKey) {
-    console.error('Password recovery is missing Supabase service configuration.');
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey) {
+    console.error('Password recovery is missing public Supabase configuration.');
     return NextResponse.json(
       { error: 'Password recovery is not configured correctly.' },
       { status: 500, headers: { 'Cache-Control': 'no-store' } }
     );
   }
 
-  const adminClient = createClient(supabaseUrl, serviceRoleKey, {
+  const supabase = createClient(supabaseUrl, anonKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
   const normalizedEmail = payload.email.trim().toLowerCase();
-  const { data: profile, error: profileError } = await adminClient
-    .from('profiles')
-    .select('id')
-    .eq('email', normalizedEmail)
-    .maybeSingle();
-
-  if (profileError) {
-    console.error('Password recovery account lookup failed:', profileError.message);
-    return NextResponse.json(
-      { error: 'We could not process your request right now. Please try again later.' },
-      { status: 503, headers: { 'Cache-Control': 'no-store' } }
-    );
-  }
-
-  if (!profile) {
-    return NextResponse.json(
-      { error: "This email doesn't exist." },
-      { status: 404, headers: { 'Cache-Control': 'no-store' } }
-    );
-  }
-
-  const supabase = createServerClient(
-    supabaseUrl,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            response.cookies.set(name, value, options);
-          });
-        },
-      },
-    }
-  );
   const redirectTo = new URL('/auth/callback', applicationOrigin);
   redirectTo.searchParams.set('next', '/reset-password');
   const { error } = await supabase.auth.resetPasswordForEmail(

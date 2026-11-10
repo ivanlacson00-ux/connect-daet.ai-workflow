@@ -1,375 +1,277 @@
 import { createServerClient } from '@supabase/ssr';
-import { createClient } from '@supabase/supabase-js';
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 
-const OFFICIAL_ROLES = new Set([
-  'approver',
-  'municipal_treasurer',
-  'mayor_office',
-  'sangguniang_bayan',
-]);
+export const runtime = 'nodejs';
 
-export async function GET(request: NextRequest) {
-  const origin = request.headers.get('origin');
-  if (origin && origin !== new URL(request.url).origin) {
-    return NextResponse.json({ error: 'Request origin is not allowed.' }, { status: 403 });
-  }
+const workflowRoles = ['user', 'approver', 'external_approver', 'admin'] as const;
+type WorkflowRole = (typeof workflowRoles)[number];
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+function respond(cookieResponse: NextResponse, body: unknown, status = 200) {
+  const response = NextResponse.json(body, { status });
+  for (const cookie of cookieResponse.cookies.getAll()) response.cookies.set(cookie);
+  response.headers.set('Cache-Control', 'private, no-store');
+  return response;
+}
+
+function createSessionClient(request: NextRequest, cookieResponse: NextResponse) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !anonKey) {
-    console.error('Account verification status is unavailable: Supabase public configuration is missing.');
-    return NextResponse.json({ error: 'Account verification status is not configured.' }, { status: 500 });
-  }
+  if (!url || !anonKey) throw new Error('Supabase session configuration is missing.');
 
-  const authResponse = new NextResponse();
-  const supabase = createServerClient(supabaseUrl, anonKey, {
+  return createServerClient(url, anonKey, {
     cookies: {
       getAll: () => request.cookies.getAll(),
       setAll: (cookiesToSet) => {
-        cookiesToSet.forEach(({ name, value, options }) => authResponse.cookies.set(name, value, options));
+        cookiesToSet.forEach(({ name, value, options }) => {
+          cookieResponse.cookies.set(name, value, options);
+        });
       },
     },
   });
-  const withAuthCookies = (response: NextResponse) => {
-    authResponse.cookies.getAll().forEach((cookie) => response.cookies.set(cookie));
-    return response;
-  };
+}
 
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  if (userError || !user) {
-    return withAuthCookies(NextResponse.json({ error: 'Sign in as an administrator to view account verification status.' }, { status: 401 }));
+async function authorizeAdministrator(
+  request: NextRequest,
+  cookieResponse: NextResponse
+) {
+  const supabase = createSessionClient(request, cookieResponse);
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError) throw new Error(`Could not verify session: ${userError.message}`);
+  if (!userData.user) return { supabase, user: null, status: 401 as const };
+
+  const { data: grants, error: grantError } = await supabase
+    .from('role_grants')
+    .select('id')
+    .eq('profile_id', userData.user.id)
+    .eq('role', 'admin')
+    .is('revoked_at', null)
+    .limit(1);
+  if (grantError) throw new Error(`Could not verify administrator access: ${grantError.message}`);
+  if (!grants?.length) return { supabase, user: null, status: 403 as const };
+  return { supabase, user: userData.user, status: null };
+}
+
+function createServiceClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceRoleKey) {
+    throw new Error('Server-side Supabase service configuration is missing.');
   }
-
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (profileError) {
-    console.error('Could not verify account status access:', profileError.message);
-    return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
-  }
-  if (profile?.role !== 'admin') {
-    return withAuthCookies(NextResponse.json({ error: 'Only administrators can view account verification status.' }, { status: 403 }));
-  }
-
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!serviceRoleKey || /^(replace-with|your[-_ ]|changeme|<)/i.test(serviceRoleKey)) {
-    console.error('Account verification status is unavailable: SUPABASE_SERVICE_ROLE_KEY is missing or still has a placeholder value.');
-    return withAuthCookies(NextResponse.json({
-      error: 'Account verification status is not configured. Set SUPABASE_SERVICE_ROLE_KEY to your Supabase server-side secret key, then restart the app.',
-    }, { status: 500 }));
-  }
-
-  const adminClient = createClient(supabaseUrl, serviceRoleKey, {
+  return createSupabaseClient(url, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
-  const verificationStatuses: Record<string, 'pending' | 'verified'> = {};
-  const perPage = 1000;
+}
 
-  for (let page = 1; ; page += 1) {
-    const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage });
-    if (error) {
-      console.error('Could not load account verification statuses:', error.message);
-      return withAuthCookies(NextResponse.json({ error: 'Could not load account verification statuses. Try again.' }, { status: 500 }));
+export async function GET(request: NextRequest) {
+  const cookieResponse = new NextResponse(null);
+  try {
+    const access = await authorizeAdministrator(request, cookieResponse);
+    if (access.status) {
+      return respond(cookieResponse, { error: 'Administrator access is required.' }, access.status);
     }
 
-    data.users.forEach((authUser) => {
-      verificationStatuses[authUser.id] = authUser.email_confirmed_at
-        ? 'verified'
-        : 'pending';
+    const adminClient = createServiceClient();
+    const [rolesResult, membershipsResult, officesResult] = await Promise.all([
+      adminClient
+        .from('role_grants')
+        .select('id, profile_id, role, granted_at, revoked_at, revocation_reason')
+        .order('granted_at', { ascending: false }),
+      adminClient
+        .from('office_memberships')
+        .select('id, profile_id, office_id, started_at, ended_at, end_reason')
+        .order('started_at', { ascending: false }),
+      adminClient
+        .from('offices')
+        .select('id, code, name, is_active')
+        .order('name'),
+    ]);
+    if (rolesResult.error) throw new Error(`Could not load workflow roles: ${rolesResult.error.message}`);
+    if (membershipsResult.error) throw new Error(`Could not load office memberships: ${membershipsResult.error.message}`);
+    if (officesResult.error) throw new Error(`Could not load offices: ${officesResult.error.message}`);
+
+    const accounts = [];
+    for (let page = 1; ; page += 1) {
+      const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage: 500 });
+      if (error) throw new Error(`Could not load accounts: ${error.message}`);
+      accounts.push(...data.users.map((account) => ({
+        id: account.id,
+        email: account.email ?? null,
+        created_at: account.created_at,
+        email_confirmed_at: account.email_confirmed_at ?? null,
+      })));
+      if (data.users.length < 500) break;
+    }
+
+    return respond(cookieResponse, {
+      accounts,
+      roleGrants: rolesResult.data ?? [],
+      officeMemberships: membershipsResult.data ?? [],
+      offices: officesResult.data ?? [],
     });
-
-    if (data.users.length < perPage) break;
+  } catch (error) {
+    console.error('Administrator account directory request failed:', error);
+    return respond(cookieResponse, { error: 'The account directory could not be loaded.' }, 500);
   }
-
-  return withAuthCookies(NextResponse.json({ verificationStatuses }, {
-    headers: { 'Cache-Control': 'private, no-store' },
-  }));
 }
 
 export async function POST(request: NextRequest) {
-  const origin = request.headers.get('origin');
-  if (origin && origin !== new URL(request.url).origin) {
-    return NextResponse.json({ error: 'Request origin is not allowed.' }, { status: 403 });
-  }
-
-  if (!request.headers.get('content-type')?.includes('application/json')) {
-    return NextResponse.json({ error: 'Expected a JSON request body.' }, { status: 415 });
-  }
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !anonKey) {
-    console.error('Official account invitation is unavailable: Supabase public configuration is missing.');
-    return NextResponse.json({ error: 'Account creation is not configured.' }, { status: 500 });
-  }
-
-  const authResponse = new NextResponse();
-  const supabase = createServerClient(supabaseUrl, anonKey, {
-    cookies: {
-      getAll: () => request.cookies.getAll(),
-      setAll: (cookiesToSet) => {
-        cookiesToSet.forEach(({ name, value, options }) => authResponse.cookies.set(name, value, options));
-      },
-    },
-  });
-  const withAuthCookies = (response: NextResponse) => {
-    authResponse.cookies.getAll().forEach((cookie) => response.cookies.set(cookie));
-    return response;
-  };
-
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  if (userError || !user) {
-    return withAuthCookies(NextResponse.json({ error: 'Sign in as an administrator to create official accounts.' }, { status: 401 }));
-  }
-
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (profileError) {
-    console.error('Could not verify account creation permission:', profileError.message);
-    return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
-  }
-  if (profile?.role !== 'admin') {
-    return withAuthCookies(NextResponse.json({ error: 'Only administrators can create official accounts.' }, { status: 403 }));
-  }
-
-  let body: {
-    email?: unknown;
-    firstName?: unknown;
-    middleName?: unknown;
-    lastName?: unknown;
-    phoneNumber?: unknown;
-    age?: unknown;
-    sex?: unknown;
-    address?: unknown;
-    role?: unknown;
-  };
+  const cookieResponse = new NextResponse(null);
   try {
-    body = await request.json();
-  } catch {
-    return withAuthCookies(NextResponse.json({ error: 'Request body must be valid JSON.' }, { status: 400 }));
-  }
-
-  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
-  const firstName = typeof body.firstName === 'string' ? body.firstName.trim() : '';
-  const middleName = typeof body.middleName === 'string' ? body.middleName.trim() : '';
-  const lastName = typeof body.lastName === 'string' ? body.lastName.trim() : '';
-  const phoneNumber = typeof body.phoneNumber === 'string' ? body.phoneNumber.trim() : '';
-  const age = body.age;
-  const sex = typeof body.sex === 'string' ? body.sex : '';
-  const address = typeof body.address === 'string' ? body.address.trim() : '';
-  const role = typeof body.role === 'string' ? body.role : '';
-  const fullName = [firstName, middleName, lastName].filter(Boolean).join(' ');
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
-    return withAuthCookies(NextResponse.json({ error: 'Enter a valid email address.' }, { status: 400 }));
-  }
-  if (!firstName || firstName.length > 80 || !lastName || lastName.length > 80 || middleName.length > 80 || fullName.length > 240) {
-    return withAuthCookies(NextResponse.json({ error: 'Enter a first and last name of up to 80 characters each. Middle name is optional.' }, { status: 400 }));
-  }
-  const phoneDigits = phoneNumber.replace(/\D/g, '');
-  if (!/^\+?[\d\s().-]{7,24}$/.test(phoneNumber) || phoneDigits.length < 7 || phoneDigits.length > 15) {
-    return withAuthCookies(NextResponse.json({ error: 'Enter a valid contact number with 7 to 15 digits.' }, { status: 400 }));
-  }
-  if (typeof age !== 'number' || !Number.isInteger(age) || age < 1 || age > 120) {
-    return withAuthCookies(NextResponse.json({ error: 'Enter an age from 1 to 120.' }, { status: 400 }));
-  }
-  if (!['female', 'male', 'other', 'prefer_not_to_say'].includes(sex)) {
-    return withAuthCookies(NextResponse.json({ error: 'Choose a valid sex option.' }, { status: 400 }));
-  }
-  if (!address || address.length > 500) {
-    return withAuthCookies(NextResponse.json({ error: 'Enter an address of 1 to 500 characters.' }, { status: 400 }));
-  }
-  if (!OFFICIAL_ROLES.has(role)) {
-    return withAuthCookies(NextResponse.json({ error: 'Choose an allowed official role.' }, { status: 400 }));
-  }
-
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!serviceRoleKey || /^(replace-with|your[-_ ]|changeme|<)/i.test(serviceRoleKey)) {
-    console.error('Official account invitation is unavailable: SUPABASE_SERVICE_ROLE_KEY is missing or still has a placeholder value.');
-    return withAuthCookies(NextResponse.json({
-      error: 'Account creation is not configured. Set SUPABASE_SERVICE_ROLE_KEY to your Supabase server-side secret key, then restart the app.',
-    }, { status: 500 }));
-  }
-
-  const adminClient = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-  const { data: invitation, error: inviteError } = await adminClient.auth.admin.generateLink({
-    type: 'invite',
-    email,
-    options: {
-      redirectTo: `${new URL(request.url).origin}/auth/confirm`,
-      data: { full_name: fullName, role },
-    },
-  });
-
-  if (inviteError || !invitation.user || invitation.properties.verification_type !== 'invite') {
-    console.error('Official account invitation failed:', inviteError?.message || 'Supabase returned an invalid invitation.');
-    const invalidApiKey = /invalid api key/i.test(inviteError?.message || '');
-    return withAuthCookies(NextResponse.json({
-      error: invalidApiKey
-        ? 'Supabase rejected the server API key. Check that SUPABASE_SERVICE_ROLE_KEY is the secret/service-role key for this same Supabase project, then restart the app.'
-        : inviteError?.message || 'Could not create the account invitation.',
-    }, { status: invalidApiKey ? 500 : 400 }));
-  }
-
-  const { error: saveProfileError } = await adminClient
-    .from('profiles')
-    .upsert(
-      {
-        id: invitation.user.id,
-        email,
-        full_name: fullName,
-        first_name: firstName,
-        middle_name: middleName || null,
-        last_name: lastName,
-        phone_number: phoneNumber,
-        age,
-        sex,
-        address,
-        role,
-      },
-      { onConflict: 'id' }
-    );
-
-  if (saveProfileError) {
-    console.error('Invited account profile creation failed:', saveProfileError.message);
-    const { error: cleanupError } = await adminClient.auth.admin.deleteUser(invitation.user.id);
-    if (cleanupError) {
-      console.error('Could not roll back invited account after profile creation failed:', cleanupError.message);
+    if (request.headers.get('origin') !== request.nextUrl.origin) {
+      return respond(cookieResponse, { error: 'Cross-origin requests are not allowed.' }, 403);
     }
-    return withAuthCookies(NextResponse.json({ error: 'Could not complete the official account setup. Please try again.' }, { status: 500 }));
+    if (!request.headers.get('content-type')?.includes('application/json')) {
+      return respond(cookieResponse, { error: 'Expected a JSON request body.' }, 415);
+    }
+
+    const access = await authorizeAdministrator(request, cookieResponse);
+    if (access.status) {
+      return respond(cookieResponse, { error: 'Administrator access is required.' }, access.status);
+    }
+
+    let payload: unknown;
+    try {
+      payload = await request.json();
+    } catch {
+      return respond(cookieResponse, { error: 'Request body must be valid JSON.' }, 400);
+    }
+    if (typeof payload !== 'object' || payload === null || !('action' in payload) || typeof payload.action !== 'string') {
+      return respond(cookieResponse, { error: 'A valid account action is required.' }, 400);
+    }
+
+    if (payload.action === 'invite') {
+      if (
+        !('email' in payload) || typeof payload.email !== 'string'
+        || !('role' in payload) || typeof payload.role !== 'string'
+        || !workflowRoles.includes(payload.role as WorkflowRole)
+      ) {
+        return respond(cookieResponse, { error: 'A valid email address and workflow role are required.' }, 400);
+      }
+      const email = payload.email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+        return respond(cookieResponse, { error: 'Enter a valid email address.' }, 400);
+      }
+
+      const adminClient = createServiceClient();
+      const appBaseUrl = process.env.APP_BASE_URL;
+      const redirectTo = appBaseUrl
+        ? new URL('/setup-password', appBaseUrl).toString()
+        : undefined;
+      const { data, error } = await adminClient.auth.admin.inviteUserByEmail(
+        email,
+        redirectTo ? { redirectTo } : undefined
+      );
+      if (error || !data.user) {
+        return respond(cookieResponse, {
+          error: error?.message ?? 'The invitation could not be created.',
+        }, 400);
+      }
+
+      const { error: roleError } = await access.supabase.rpc('admin_grant_workflow_role', {
+        p_profile_id: data.user.id,
+        p_role: payload.role,
+        p_reason: `Invited account assigned ${payload.role}.`,
+      });
+      if (roleError) {
+        console.error('Account invitation succeeded but its role grant failed:', roleError.message);
+        return respond(cookieResponse, {
+          accountId: data.user.id,
+          error: 'The invitation was sent, but the workflow role was not assigned. Assign the role from this page before the user signs in.',
+        }, 502);
+      }
+      return respond(cookieResponse, { accountId: data.user.id, invited: true });
+    }
+
+    const { error } = await performAdminAction(access.supabase, payload as Record<string, unknown>);
+    if (error) return respond(cookieResponse, { error }, 400);
+    return respond(cookieResponse, { completed: true });
+  } catch (error) {
+    console.error('Administrator account action failed:', error);
+    return respond(cookieResponse, { error: 'The account action could not be completed.' }, 500);
   }
-
-  const invitationUrl = new URL('/auth/confirm', request.url);
-  invitationUrl.searchParams.set('token_hash', invitation.properties.hashed_token);
-  invitationUrl.searchParams.set('type', 'invite');
-
-  return withAuthCookies(NextResponse.json({
-    message: `Account created for ${email}. Copy the invitation link and send it to the official.`,
-    invitationUrl: invitationUrl.toString(),
-  }, { status: 201 }));
 }
 
-export async function DELETE(request: NextRequest) {
-  const origin = request.headers.get('origin');
-  if (origin && origin !== new URL(request.url).origin) {
-    return NextResponse.json({ error: 'Request origin is not allowed.' }, { status: 403 });
-  }
+async function performAdminAction(
+  supabase: Awaited<ReturnType<typeof authorizeAdministrator>>['supabase'],
+  payload: Record<string, unknown>
+): Promise<{ error: string | null }> {
+  const requiredString = (key: string) =>
+    typeof payload[key] === 'string' ? payload[key].trim() : '';
 
-  if (!request.headers.get('content-type')?.includes('application/json')) {
-    return NextResponse.json({ error: 'Expected a JSON request body.' }, { status: 415 });
-  }
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!supabaseUrl || !anonKey || !serviceRoleKey || /^(replace-with|your[-_ ]|changeme|<)/i.test(serviceRoleKey)) {
-    console.error('Profile deletion is unavailable: Supabase configuration is missing or invalid.');
-    return NextResponse.json({ error: 'Profile deletion is not configured.' }, { status: 500 });
-  }
-
-  const authResponse = new NextResponse();
-  const supabase = createServerClient(supabaseUrl, anonKey, {
-    cookies: {
-      getAll: () => request.cookies.getAll(),
-      setAll: (cookiesToSet) => {
-        cookiesToSet.forEach(({ name, value, options }) => authResponse.cookies.set(name, value, options));
-      },
-    },
-  });
-  const withAuthCookies = (response: NextResponse) => {
-    authResponse.cookies.getAll().forEach((cookie) => response.cookies.set(cookie));
-    return response;
-  };
-
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  if (userError || !user) {
-    return withAuthCookies(NextResponse.json({ error: 'Sign in as an administrator to delete profiles.' }, { status: 401 }));
-  }
-
-  const { data: requesterProfile, error: requesterProfileError } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (requesterProfileError) {
-    console.error('Could not verify profile deletion permission:', requesterProfileError.message);
-    return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
-  }
-  if (requesterProfile?.role !== 'admin') {
-    return withAuthCookies(NextResponse.json({ error: 'Only administrators can delete profiles.' }, { status: 403 }));
-  }
-
-  let body: { userId?: unknown };
-  try {
-    body = await request.json();
-  } catch {
-    return withAuthCookies(NextResponse.json({ error: 'Request body must be valid JSON.' }, { status: 400 }));
-  }
-
-  const targetUserId = typeof body.userId === 'string' ? body.userId.trim() : '';
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetUserId)) {
-    return withAuthCookies(NextResponse.json({ error: 'A valid account ID is required.' }, { status: 400 }));
-  }
-  if (targetUserId === user.id) {
-    return withAuthCookies(NextResponse.json({ error: 'You cannot delete your own profile.' }, { status: 400 }));
-  }
-
-  const adminClient = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-  const { data: targetProfile, error: targetProfileError } = await adminClient
-    .from('profiles')
-    .select('id, role')
-    .eq('id', targetUserId)
-    .maybeSingle();
-
-  if (targetProfileError) {
-    console.error('Could not look up profile for deletion:', targetProfileError.message);
-    return withAuthCookies(NextResponse.json({ error: 'Could not load the profile to delete.' }, { status: 500 }));
-  }
-  if (!targetProfile) {
-    return withAuthCookies(NextResponse.json({ error: 'The profile no longer exists.' }, { status: 404 }));
-  }
-
-  if (targetProfile.role === 'admin') {
-    const { data: anotherAdmin, error: anotherAdminError } = await adminClient
-      .from('profiles')
-      .select('id')
-      .eq('role', 'admin')
-      .neq('id', targetUserId)
-      .limit(1)
-      .maybeSingle();
-
-    if (anotherAdminError) {
-      console.error('Could not check for another administrator before profile deletion:', anotherAdminError.message);
-      return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator availability.' }, { status: 500 }));
+  switch (payload.action) {
+    case 'grant-role': {
+      const profileId = requiredString('profileId');
+      const role = requiredString('role');
+      const reason = requiredString('reason');
+      if (!profileId || !workflowRoles.includes(role as WorkflowRole) || !reason) {
+        return { error: 'A target account, valid workflow role, and reason are required.' };
+      }
+      const { error } = await supabase.rpc('admin_grant_workflow_role', {
+        p_profile_id: profileId,
+        p_role: role,
+        p_reason: reason,
+      });
+      return { error: error?.message ?? null };
     }
-    if (!anotherAdmin) {
-      return withAuthCookies(NextResponse.json({ error: 'The last administrator profile cannot be deleted.' }, { status: 409 }));
+    case 'revoke-role': {
+      const grantId = requiredString('grantId');
+      const reason = requiredString('reason');
+      if (!grantId || !reason) return { error: 'A role grant and reason are required.' };
+      const { data, error } = await supabase.rpc('admin_revoke_workflow_role', {
+        p_role_grant_id: grantId,
+        p_reason: reason,
+      });
+      return { error: error?.message ?? (data === false ? 'The role grant is no longer active.' : null) };
     }
+    case 'grant-office': {
+      const profileId = requiredString('profileId');
+      const officeId = requiredString('officeId');
+      const reason = requiredString('reason');
+      if (!profileId || !officeId || !reason) {
+        return { error: 'An account, office, and reason are required.' };
+      }
+      const { error } = await supabase.rpc('admin_grant_office_membership', {
+        p_profile_id: profileId,
+        p_office_id: officeId,
+        p_reason: reason,
+      });
+      return { error: error?.message ?? null };
+    }
+    case 'revoke-office': {
+      const membershipId = requiredString('membershipId');
+      const reason = requiredString('reason');
+      if (!membershipId || !reason) return { error: 'A membership and reason are required.' };
+      const { data, error } = await supabase.rpc('admin_revoke_office_membership', {
+        p_membership_id: membershipId,
+        p_reason: reason,
+      });
+      return { error: error?.message ?? (data === false ? 'The office membership is no longer active.' : null) };
+    }
+    case 'create-office': {
+      const code = requiredString('code');
+      const name = requiredString('name');
+      if (!code || !name) return { error: 'An office code and name are required.' };
+      const { error } = await supabase.rpc('admin_create_office', {
+        p_code: code,
+        p_name: name,
+      });
+      return { error: error?.message ?? null };
+    }
+    case 'set-office-active': {
+      const officeId = requiredString('officeId');
+      const reason = requiredString('reason');
+      if (!officeId || typeof payload.isActive !== 'boolean' || !reason) {
+        return { error: 'An office, status, and reason are required.' };
+      }
+      const { data, error } = await supabase.rpc('admin_set_office_active', {
+        p_office_id: officeId,
+        p_is_active: payload.isActive,
+        p_reason: reason,
+      });
+      return { error: error?.message ?? (data === false ? 'The office was not found.' : null) };
+    }
+    default:
+      return { error: 'Unsupported administrator action.' };
   }
-
-  const { error: deleteError } = await adminClient
-    .from('profiles')
-    .delete()
-    .eq('id', targetUserId);
-
-  if (deleteError) {
-    console.error('Profile deletion failed:', deleteError.message);
-    return withAuthCookies(NextResponse.json({
-      error: 'Could not delete this profile because other records may still depend on it.',
-    }, { status: 409 }));
-  }
-
-  return withAuthCookies(NextResponse.json({ message: 'Profile deleted.' }));
 }

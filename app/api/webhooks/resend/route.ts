@@ -50,22 +50,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Webhook event is missing its email identifier' }, { status: 400 });
   }
 
-  const eventDetails: Record<string, unknown> = {};
-  if ('bounce' in eventData) eventDetails.bounce = eventData.bounce;
-  if ('failed' in eventData) eventDetails.failed = eventData.failed;
-  if ('suppressed' in eventData) eventDetails.suppressed = eventData.suppressed;
-
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
   const { data: recorded, error } = await supabase.rpc(
-    'record_workflow_email_provider_event',
+    'record_notification_provider_event',
     {
       p_provider_event_id: eventId,
       p_provider_event_type: event.type,
       p_provider_message_id: eventData.email_id,
       p_event_occurred_at: event.created_at,
-      p_provider_event_data: eventDetails,
+      p_provider_event_data: {},
     }
   );
 

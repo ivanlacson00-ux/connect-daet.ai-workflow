@@ -1,257 +1,123 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
-// ─── Styles & Fonts (synced with dashboard) ──────────────────────────────────
-const fonts = {
-  serif: "font-serif",
-  mono: "font-sans text-xs",
-};
-
-// "5 min ago", "2 hours ago", "3 days ago"
-const timeAgo = (dateString: string) => {
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(dateString).getTime()) / 1000));
-  if (seconds < 60) return 'Just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days} ${days === 1 ? 'day' : 'days'} ago`;
-  return new Date(dateString).toLocaleDateString();
-};
-
-// What the notification says, and how it looks, based on the submission status
-const getNotificationContent = (status: string) => {
-  if (status.includes('approved')) {
-    return { icon: '✓', iconStyles: 'bg-approved-bg text-approved-text', message: 'was approved.' };
-  }
-  if (status.includes('declined') || status.includes('rejected')) {
-    return { icon: '✕', iconStyles: 'bg-rejected-bg text-rejected-text', message: 'was rejected.' };
-  }
-  if (status === 'pending_admin') {
-    return { icon: '◷', iconStyles: 'bg-review-bg text-review-text', message: 'is now under review.' };
-  }
-  if (status.includes('pending')) {
-    return { icon: '◷', iconStyles: 'bg-pending-bg text-pending-text', message: 'was submitted and is waiting for review.' };
-  }
-  return { icon: '●', iconStyles: 'bg-sidebar text-muted-text', message: `status changed to ${status.replace(/_/g, ' ')}.` };
-};
-
-const isNewUpdate = (updatedAt: string) => Date.now() - new Date(updatedAt).getTime() < 300000;
-
-interface UserNotification {
+type Notification = {
   id: string;
   submission_id: string;
-  notification_id: string;
-  notification_title?: string;
-  notification_message?: string;
-  notification_status?: string;
-  status?: string;
-  file_name?: string | null;
-  tracking_number?: string | null;
-  requester_email?: string | null;
-  description?: string | null;
-  updated_at: string;
-}
-
-const getNotificationStatus = (eventType: string, currentStatus: string) => {
-  switch (eventType) {
-    case 'SUBMITTED':
-      return 'pending';
-    case 'VERIFICATION_PASSED':
-      return 'pending_admin';
-    case 'RETURNED_FOR_CORRECTION':
-      return 'declined_by_approver';
-    case 'FINAL_APPROVAL':
-      return 'approved';
-    case 'FINAL_REJECTION':
-      return 'declined_by_admin';
-    case 'WORKFLOW_COMPLETED':
-      return 'completed';
-    default:
-      return currentStatus;
-  }
+  title: string;
+  message: string;
+  created_at: string;
+  read_at: string | null;
 };
+type SubmissionLink = { id: string; tracking_number: string; title: string };
 
 export default function NotificationsPage() {
   const supabase = useMemo(() => createClient(), []);
-  const [notifications, setNotifications] = useState<UserNotification[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [submissions, setSubmissions] = useState<SubmissionLink[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  const fetchNotifications = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { data } = await supabase
-      .from('workflow_notifications')
-      .select('*, workflow_submissions(*, profiles:user_id(email))')
-      .eq('recipient_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(20);
-
-    if (data) {
-      const latestBySubmission = new Map<string, UserNotification>();
-      data.forEach((notification) => {
-        if (!latestBySubmission.has(notification.submission_id)) {
-          latestBySubmission.set(notification.submission_id, {
-            ...notification.workflow_submissions,
-            id: notification.submission_id,
-            submission_id: notification.submission_id,
-            notification_id: notification.id,
-            notification_title: notification.title,
-            notification_message: notification.message,
-            requester_email: notification.workflow_submissions?.profiles?.email,
-            notification_status: getNotificationStatus(
-              notification.event_type,
-              notification.workflow_submissions?.status
-            ),
-            updated_at: notification.created_at,
-          });
-        }
-      });
-      setNotifications(Array.from(latestBySubmission.values()));
-      await supabase
-        .from('workflow_notifications')
-        .update({ read_at: new Date().toISOString() })
-        .eq('recipient_id', user.id)
-        .is('read_at', null);
+  const loadNotifications = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    const { data, error: notificationError } = await supabase
+      .from('notifications')
+      .select('id, submission_id, title, message, created_at, read_at')
+      .order('created_at', { ascending: false });
+    if (notificationError) {
+      console.error('Notifications could not be loaded:', notificationError);
+      setError('Notifications could not be loaded. Refresh and try again.');
+      setLoading(false);
+      return;
     }
+
+    const submissionIds = [...new Set((data ?? []).map((notification) => notification.submission_id))];
+    const submissionResult = submissionIds.length
+      ? await supabase.from('submissions')
+          .select('id, tracking_number, title')
+          .in('id', submissionIds)
+      : { data: [], error: null };
+    if (submissionResult.error) {
+      console.error('Notification submission references could not be loaded:', submissionResult.error);
+      setError('Notification details could not be loaded.');
+      setLoading(false);
+      return;
+    }
+    setNotifications(data ?? []);
+    setSubmissions(submissionResult.data ?? []);
     setLoading(false);
   }, [supabase]);
 
   useEffect(() => {
-    let active = true;
-    queueMicrotask(() => {
-      if (active) void fetchNotifications();
+    void loadNotifications().catch((loadError: unknown) => {
+      console.error('Notification load failed:', loadError);
+      setError('Notifications could not be loaded.');
+      setLoading(false);
     });
+  }, [loadNotifications]);
 
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'workflow_notifications',
-        },
-        () => fetchNotifications()
-      )
-      .subscribe();
-
-    return () => {
-      active = false;
-      supabase.removeChannel(channel);
-    };
-  }, [fetchNotifications, supabase]);
-
-  if (loading) {
-    return (
-      <div className="w-full">
-        <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Loading notifications...
-        </div>
-      </div>
-    );
-  }
-
-  // Split into "Today" and "Earlier" groups (list is already newest first)
-  const todayString = new Date().toDateString();
-  const groups = [
-    { title: 'Today', items: notifications.filter(n => new Date(n.updated_at).toDateString() === todayString) },
-    { title: 'Earlier', items: notifications.filter(n => new Date(n.updated_at).toDateString() !== todayString) },
-  ].filter(g => g.items.length > 0);
-
-  const newCount = notifications.filter(n => isNewUpdate(n.updated_at)).length;
+  const markRead = async (id: string) => {
+    const readAt = new Date().toISOString();
+    const { error: updateError } = await supabase
+      .from('notifications')
+      .update({ read_at: readAt })
+      .eq('id', id)
+      .is('read_at', null);
+    if (updateError) {
+      console.error('Notification read state could not be updated:', updateError);
+      setError('This notification could not be marked as read.');
+      return;
+    }
+    setNotifications((current) => current.map((notification) =>
+      notification.id === id ? { ...notification, read_at: readAt } : notification
+    ));
+  };
 
   return (
-    <div className="w-full">
-      <div>
-        <header className="mb-8 flex flex-col justify-between gap-3 sm:flex-row sm:items-end max-md:mb-5">
-          <div>
-            <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Live updates
-            </p>
-            <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>Notifications</h1>
-          </div>
-          {newCount > 0 && (
-            <span className="inline-flex items-center gap-2 self-start rounded-full bg-clay-soft px-3 py-1.5 text-[11px] font-semibold text-clay sm:self-auto">
-              <span className="h-1.5 w-1.5 rounded-full bg-clay" />
-              {newCount} new {newCount === 1 ? 'update' : 'updates'}
-            </span>
-          )}
-        </header>
-
-        {notifications.length === 0 ? (
-          <div className="rounded-2xl border border-warm-border bg-card py-20 text-center">
-            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-sidebar text-lg text-muted-text" aria-hidden="true">🔔</div>
-            <p className={`${fonts.serif} text-2xl text-warm-text`}>No notifications yet</p>
-            <p className="mt-2 text-xs text-muted-text">Updates on your submissions will appear here.</p>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {groups.map(group => (
-              <section key={group.title}>
-                <h2 className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-text">{group.title}</h2>
-
-                <ul className="divide-y divide-warm-border overflow-hidden rounded-2xl border border-warm-border bg-card">
-                  {group.items.map((note) => {
-                    const content = getNotificationContent(note.status ?? 'unknown');
-                    const isNew = isNewUpdate(note.updated_at);
-
-                    return (
-                      <li
-                        key={note.id}
-                        className={`relative flex flex-col gap-3 px-5 py-4 transition-colors hover:bg-sidebar/50 sm:flex-row sm:items-start sm:justify-between max-md:px-3.5 ${isNew ? 'bg-clay-soft/40' : ''}`}
-                      >
-                        <div className="flex min-w-0 flex-1 items-start gap-3.5">
-                          <span className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${content.iconStyles}`} aria-hidden="true">
-                            {content.icon}
-                          </span>
-
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm leading-snug text-warm-text">
-                              <span className="font-semibold">{note.file_name}</span> {content.message}
-                            </p>
-
-                            <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
-                              <span>{timeAgo(note.updated_at)}</span>
-                              <span aria-hidden="true">·</span>
-                              <span>{note.id.split('-')[0].toUpperCase()}</span>
-                              {isNew && (
-                                <span className="rounded-full bg-clay px-2 py-0.5 text-[10px] font-semibold text-white">New</span>
-                              )}
-                            </div>
-
-                            <p className="mt-1.5 max-w-xl truncate text-xs text-muted-text">
-                              {note.description || "No description provided."}
-                            </p>
-                          </div>
-                        </div>
-
-                        <Link
-                          href={`/workflow/user/file_registry/${note.id}`}
-                          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 self-start whitespace-nowrap rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text sm:self-center max-md:h-11 max-md:w-full max-md:self-stretch"
-                        >
-                          View details <span aria-hidden="true">→</span>
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            ))}
-          </div>
-        )}
-
-        <footer className="mt-8 border-t border-warm-border pt-6">
-          <p className="text-center text-[11px] text-muted-text">
-            You&apos;re all caught up.
-          </p>
-        </footer>
-      </div>
-    </div>
+    <section>
+      <header className="mb-6">
+        <p className="text-xs font-semibold uppercase tracking-wide text-clay">Submission updates</p>
+        <h1 className="mt-2 font-serif text-3xl text-warm-text">Notifications</h1>
+      </header>
+      {error && <p role="alert" className="mb-4 rounded-xl border border-rejected-bg bg-rejected-bg/50 p-4 text-sm text-rejected-text">{error}</p>}
+      {loading ? (
+        <p role="status" className="py-10 text-center text-sm text-muted-text">Loading notifications...</p>
+      ) : notifications.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-warm-border bg-card p-10 text-center text-sm text-muted-text">
+          Decision updates for your submissions will appear here.
+        </div>
+      ) : (
+        <ul className="grid gap-3">
+          {notifications.map((notification) => {
+            const submission = submissions.find((item) => item.id === notification.submission_id);
+            return (
+              <li key={notification.id} className="rounded-2xl border border-warm-border bg-card p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-warm-text">{notification.title}{notification.read_at ? '' : ' · New'}</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-muted-text">{notification.message}</p>
+                    {submission && (
+                      <Link href={`/workflow/user/file_registry/${submission.id}`} className="mt-3 inline-block text-xs font-semibold text-clay">
+                        {submission.tracking_number} · {submission.title}
+                      </Link>
+                    )}
+                    <time className="mt-2 block text-xs text-muted-text">{new Date(notification.created_at).toLocaleString()}</time>
+                  </div>
+                  {!notification.read_at && (
+                    <button type="button" onClick={() => void markRead(notification.id)} className="rounded-full border border-warm-border px-3 py-2 text-xs font-semibold text-warm-text">
+                      Mark read
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }

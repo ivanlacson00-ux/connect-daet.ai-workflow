@@ -1,5 +1,5 @@
-import OfficeDashboard from '@/components/OfficeDashboard';
+import { redirect } from 'next/navigation';
 
-export default function MunicipalTreasurerDashboard() {
-  return <OfficeDashboard role="municipal_treasurer" />;
+export default function LegacyMunicipalTreasurerPage() {
+  redirect('/workflow/office');
 }

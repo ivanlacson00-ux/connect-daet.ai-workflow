@@ -1,45 +1,34 @@
-// app/(dashboard)/workflow/page.tsx
 'use client';
 
 import { useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { getRoleHomePath } from '@/lib/workflow/offices';
+import { getCurrentWorkflowAccess, getPrimaryWorkflowRole, getWorkflowHomePath } from '@/lib/auth/access';
+import { useRouter } from 'next/navigation';
 
 export default function WorkflowLanding() {
   const supabase = useMemo(() => createClient(), []);
+  const router = useRouter();
 
   useEffect(() => {
-    const checkRoleAndRedirect = async () => {
-      // Get current user
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        // Not logged in, send to login
-        window.location.href = '/login';
-        return;
-      }
+    let active = true;
+    void getCurrentWorkflowAccess(supabase)
+      .then((access) => {
+        if (!active) return;
+        if (!access) {
+          router.replace('/login');
+          return;
+        }
+        router.replace(getWorkflowHomePath(getPrimaryWorkflowRole(access.roles)));
+      })
+      .catch((error: unknown) => {
+        console.error('Workflow landing access lookup failed:', error);
+        if (active) router.replace('/login?access=unassigned');
+      });
 
-      // Get user's role from profiles table
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single();
-
-      if (profileError || !profile) {
-        window.location.href = '/login';
-        return;
-      }
-
-      window.location.href = getRoleHomePath(profile.role);
+    return () => {
+      active = false;
     };
+  }, [router, supabase]);
 
-    checkRoleAndRedirect();
-  }, [supabase]);
-
-  return (
-    <div className="flex justify-center items-center h-64">
-      <div className="text-muted-text">Redirecting to your dashboard...</div>
-    </div>
-  );
+  return <p className="py-12 text-center text-sm text-muted-text">Opening your workflow...</p>;
 }
