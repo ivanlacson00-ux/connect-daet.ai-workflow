@@ -66,7 +66,7 @@ The overall separation is workable for a small workflow system, but much busines
 
 The current interface includes distinct submitter and administrator workspaces and a common `OfficeDashboard` for Tourism, Treasurer, Mayor, and Sangguniang Bayan roles. The upload UI has destination-dependent document-type choices and an `Other` description. File detail pages combine document preview, metadata, routing/history, and communication; `CloseSubmissionDialog` confirms closure and blocks confirmation while pending assignments are shown.
 
-Usability strengths include explicit loading/error states in many data-heavy components, responsive Tailwind layouts, file preview/download handling, message pagination, and a primary office completion action. The shared UI is not fully integrated at the route layer: `proxy.ts` recognizes only `/workflow/approver/file_management/…` for non-Tourism offices, not the exact index URL used by the shared sidebar. As a result, municipal office users are redirected when selecting **File Registry**.
+Usability strengths include explicit loading/error states in many data-heavy components, responsive Tailwind layouts, file preview/download handling, message pagination, and a primary office completion action. Office file-management and notification routes now resolve under each office's own workspace path; the former `/workflow/approver/...` URLs redirect to the signed-in office's corresponding route.
 
 Additional UI risks:
 
@@ -191,7 +191,7 @@ No unit tests cover workflow RPC behavior, RLS/storage policies, route guards, A
 
 ## 14. Confirmed Bugs and Technical Issues
 
-1. **Municipal office registry index is blocked by route guard.** The sidebar links to `/workflow/approver/file_management`, but `proxy.ts` only recognizes `/workflow/approver/file_management/…` for non-Tourism offices. Municipal users are redirected to their dashboard rather than the shared registry. See `proxy.ts` lines 75–83 and the shared navigation in `app/(dashboard)/workflow/layout.tsx`.
+1. **Resolved (2026-11-12): office registry route was shared through the Tourism Officer path.** File Registry, submission-detail, notification, and archive pages now use role-specific office paths while reusing shared components. Legacy `/workflow/approver/...` links are redirected to the signed-in office's matching route.
 2. **Missing-profile redirect can loop.** The proxy does not handle profile-query failure or a missing profile explicitly; a null role maps to the submitter home, which is itself rejected for a null/non-submitter role. See `proxy.ts` lines 46–61 and `lib/workflow/offices.ts` role-home fallback.
 3. **Request-for-changes requires a revised file.** The SQL function rejects an empty revised file path/name/type/size, and the submitter UI labels “Revised document (required)”. The workflow plan allows revised/supporting files “when needed.” See `20261110194204_submitter_direct_office_routing.sql` lines 1285–1315 and user File ID page lines 707–761.
 4. **Admin report stage metrics are legacy-shaped.** The report calculates verification, approval, and completion durations from `VERIFICATION_PASSED`, `FINAL_APPROVAL`, and `WORKFLOW_COMPLETED`. The current direct/office closure path may not produce the first two events, so the stage averages and personnel breakdown are incomplete or blank for revised-flow submissions. See `app/(dashboard)/workflow/admin/reports/page.tsx` lines 149–213.

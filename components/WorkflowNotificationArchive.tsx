@@ -6,8 +6,14 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import SwipeDismissNotification from '@/components/SwipeDismissNotification';
 import WorkflowNotificationFeed from '@/components/WorkflowNotificationFeed';
+import {
+  getOfficeFileManagementPath,
+  getOfficeNotificationsPath,
+  getRoleHomePath,
+  type OfficeRole,
+} from '@/lib/workflow/offices';
 
-type ArchiveRole = 'submitter' | 'office';
+type ArchiveRole = 'submitter' | OfficeRole;
 
 interface ArchiveCursor {
   archivedAt: string;
@@ -96,8 +102,9 @@ export default function WorkflowNotificationArchive({ role }: { role: ArchiveRol
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const basePath = role === 'office' ? '/workflow/approver' : '/workflow/user';
-  const detailPath = role === 'office' ? 'file_management' : 'file_registry';
+  const basePath = getRoleHomePath(role);
+  const notificationPath = role === 'submitter' ? `${basePath}/notifications` : getOfficeNotificationsPath(role);
+  const detailPath = role === 'submitter' ? `${basePath}/file_registry` : getOfficeFileManagementPath(role);
 
   const fetchNotifications = useCallback(async (startAfter: ArchiveCursor | null, append = false) => {
     if (fetchInFlight.current) return;
@@ -248,7 +255,7 @@ export default function WorkflowNotificationArchive({ role }: { role: ArchiveRol
     <div className="w-full">
       <header className="mb-8 max-md:mb-5">
         <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
-          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> {role === 'office' ? 'Office workspace' : 'Live updates'}
+          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> {role !== 'submitter' ? 'Office workspace' : 'Live updates'}
         </p>
         <h1 className="font-serif text-[32px] leading-tight text-warm-text max-md:text-[26px]">Notification archive</h1>
         <p className="mt-2 text-xs text-muted-text">
@@ -257,7 +264,7 @@ export default function WorkflowNotificationArchive({ role }: { role: ArchiveRol
       </header>
 
       <WorkflowNotificationFeed
-        archiveHref={`${basePath}/notifications`}
+        archiveHref={notificationPath}
         archiveLabel="Back to notifications"
         busy={busy || loading}
         canClear={notifications.length > 0}
@@ -324,7 +331,7 @@ export default function WorkflowNotificationArchive({ role }: { role: ArchiveRol
                           {notification.fileName || 'Untitled file'}
                         </h2>
                         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-text">
-                          {role === 'office' && (
+                          {role !== 'submitter' && (
                             <>
                               <span className="truncate">From {notification.requesterEmail || 'unknown submitter'}</span>
                               <span aria-hidden="true">·</span>

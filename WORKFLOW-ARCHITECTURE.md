@@ -9,7 +9,7 @@ application, data, and notification components.
 flowchart LR
   subgraph People["People and role-specific workspaces"]
     Submitter["Submitter"]
-    Approver["Approver"]
+    Tourism["Daet Tourism Officer"]
     Admin["Administrator"]
     Offices["Municipal offices<br/>Treasurer · Sangguniang Bayan · Mayor"]
   end
@@ -30,7 +30,7 @@ flowchart LR
   Resend["Resend"]
 
   Submitter --> UI
-  Approver --> UI
+  Tourism --> UI
   Admin --> UI
   Offices --> UI
   UI <--> Auth
@@ -52,9 +52,9 @@ flowchart TD
   Start([Submitter starts a request])
   Upload["Upload primary document and optional attachments<br/>Enter document details"]
   Submitted["Create submission and tracking number<br/>Status: pending / pending_approver"]
-  ApproverReview["Approver reviews submission"]
+  TourismReview["Tourism Officer reviews submission"]
   Propose["Propose ordered office route<br/>Create proposed route version"]
-  ApproverReject["Approver rejects with reason<br/>declined_by_approver"]
+  TourismReject["Tourism Officer rejects with reason<br/>declined_by_approver"]
   AdminReview["Administrator reviews proposed route<br/>pending_admin"]
   Finalize["Finalize or revise route<br/>Create finalized route version<br/>pending_office; first office becomes active"]
   AdminReject["Administrator rejects with reason<br/>declined_by_admin"]
@@ -71,9 +71,9 @@ flowchart TD
   Notify["Database audit and notification triggers<br/>In-app via Realtime; email via outbox"]
   Archive["Administrator may archive separately<br/>Archive metadata does not change workflow status"]
 
-  Start --> Upload --> Submitted --> ApproverReview
-  ApproverReview -->|"Propose route"| Propose --> AdminReview
-  ApproverReview -->|"Reject"| ApproverReject
+  Start --> Upload --> Submitted --> TourismReview
+  TourismReview -->|"Propose route"| Propose --> AdminReview
+  TourismReview -->|"Reject"| TourismReject
   AdminReview -->|"Finalize route"| Finalize --> OfficeReview
   AdminReview -->|"Reject"| AdminReject
   OfficeReview -->|"Approve"| ApproveOffice --> NextOffice
@@ -92,13 +92,13 @@ flowchart TD
   OfficeReject -.-> Notify
   ReturnInfo -.-> Notify
   Complete -.-> Notify
-  ApproverReject -.-> Archive
+  TourismReject -.-> Archive
   AdminReject -.-> Archive
   OfficeReject -.-> Archive
   Complete -.-> Archive
 ```
 
-The approver-proposed route and administrator-finalized route are versioned.
+The Tourism Officer-proposed route and administrator-finalized route are versioned.
 The Mayor's Office is optional and, when included, must be the final route step.
 Office approvals advance one step at a time; any active office can request more
 information. That pauses the route until the submitter responds, then returns it
@@ -140,7 +140,7 @@ sends pending jobs through Resend and records delivery attempts.
 - [Live document conversation](./components/DocumentMessaging.tsx)
 - [Document messaging schema, access policies, and notifications](./supabase/migrations/20261108080000_add_document_messaging.sql)
 - [Submitter document detail and route progress](./app/%28dashboard%29/workflow/user/file_registry/[id]/page.tsx)
-- [Approver document detail and route progress](./app/%28dashboard%29/workflow/approver/file_management/[id]/page.tsx)
+- [Shared office document detail and route progress](./components/OfficeSubmissionDetail.tsx)
 - [Administrator document detail and route progress](./app/%28dashboard%29/workflow/admin/submissions/[id]/page.tsx)
 - [Optional legacy purpose and action fields](./supabase/migrations/20261106160000_make_submission_purpose_and_action_optional.sql)
 - [Versioned route tables](./supabase/migrations/20261105230000_add_versioned_workflow_routing.sql)

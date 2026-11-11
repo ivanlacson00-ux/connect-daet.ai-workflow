@@ -159,7 +159,7 @@ interface DocumentMessagingProps {
     closedMessage?: string;
     busy?: boolean;
     pendingAssignmentCount?: number;
-    sidebarContent?: ReactNode;
+    isOfficeWorkspace?: boolean;
     sourceDocument?: {
       filePath: string | null;
       fileType: string;
@@ -247,7 +247,7 @@ export default function DocumentMessaging({
   const conversationFileInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<Message[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
-  const isOfficeWorkspace = Boolean(workflowComposer?.sidebarContent);
+  const isOfficeWorkspace = workflowComposer?.isOfficeWorkspace ?? false;
 
   // Actions depend on the selected recipient. Conversation messages have a separate composer.
   const recipientActions = workflowComposer?.actionsByRecipient[selectedRecipient] ?? [];
@@ -1113,46 +1113,51 @@ export default function DocumentMessaging({
             </header>
             <div className="max-h-[560px] overflow-y-auto p-5">{activity}</div>
           </section>
-          {workflowComposer?.sidebarContent}
-          <section className="overflow-hidden rounded-2xl border border-warm-border bg-card">
-            <header className="flex items-center justify-between gap-2 border-b border-warm-border px-4 py-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="shrink-0 text-clay"><Icon name="paperclip" size={15} /></span>
-                <h3 className="truncate text-xs font-bold text-warm-text">Shared files</h3>
-              </div>
-              <span className="shrink-0 rounded-full bg-sidebar px-2 py-0.5 text-[10px] font-bold text-muted-text">
-                {sharedAttachments.length}
-              </span>
-            </header>
-            <div className="max-h-64 space-y-1.5 overflow-y-auto p-3">
-              {sharedAttachments.length === 0 ? (
-                <p className="px-1 py-1 text-[10px] text-muted-text">No files shared yet.</p>
-              ) : (
-                sharedAttachments.map((attachment) => (
-                  <button
-                    key={attachment.id}
-                    type="button"
-                    onClick={() => void downloadAttachment(attachment)}
-                    className="flex w-full min-w-0 items-center gap-2.5 rounded-lg border border-transparent bg-sidebar/60 px-2.5 py-2 text-left text-warm-text transition-colors hover:border-warm-border hover:bg-white"
-                  >
-                    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-clay-soft text-clay">
-                      <Icon name="file" size={14} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[10px] font-semibold">{attachment.file_name}</span>
-                      <span className="block truncate text-[9px] text-muted-text">
-                        {Math.max(1, Math.round(attachment.file_size / 1024))} KB
-                        {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-[9px] font-semibold text-clay">Open</span>
-                  </button>
-                ))
-              )}
-            </div>
-          </section>
         </aside>
       </div>
+
+      <section className="overflow-hidden rounded-2xl border border-warm-border bg-card">
+        <header className="flex items-center justify-between gap-2 border-b border-warm-border px-5 py-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="shrink-0 text-clay"><Icon name="paperclip" size={17} /></span>
+            <div>
+              <h3 className="text-sm font-bold text-warm-text">Shared files</h3>
+              <p className="mt-0.5 text-[10px] text-muted-text">Files shared in messages and office actions</p>
+            </div>
+          </div>
+          <span className="shrink-0 rounded-full bg-sidebar px-2.5 py-1 text-[10px] font-bold text-muted-text">
+            {sharedAttachments.length}
+          </span>
+        </header>
+        <div className="max-h-64 overflow-y-auto p-4">
+          {sharedAttachments.length === 0 ? (
+            <p className="rounded-xl bg-sidebar/60 px-4 py-3 text-[11px] text-muted-text">No files shared yet.</p>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {sharedAttachments.map((attachment) => (
+                <button
+                  key={attachment.id}
+                  type="button"
+                  onClick={() => void downloadAttachment(attachment)}
+                  className="flex w-full min-w-0 items-center gap-3 rounded-xl border border-warm-border bg-white px-3 py-2.5 text-left text-warm-text transition-colors hover:border-clay"
+                >
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-clay-soft text-clay">
+                    <Icon name="file" size={16} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[11px] font-semibold">{attachment.file_name}</span>
+                    <span className="mt-0.5 block truncate text-[9px] text-muted-text">
+                      {Math.max(1, Math.round(attachment.file_size / 1024))} KB
+                      {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-[10px] font-semibold text-clay">Open</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* ── Your office action ── */}
       {workflowComposer && (

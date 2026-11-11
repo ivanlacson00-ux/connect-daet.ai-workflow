@@ -4,7 +4,12 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { getRoleHomePath, isOfficeRole } from '@/lib/workflow/offices';
+import {
+  getOfficeFileManagementPath,
+  getOfficeNotificationsPath,
+  getRoleHomePath,
+  isOfficeRole,
+} from '@/lib/workflow/offices';
 
 export default function WorkflowLayout({
   children,
@@ -92,8 +97,8 @@ export default function WorkflowLayout({
     if (isOfficeRole(role)) {
       return [
         { href: getRoleHomePath(role), label: 'Dashboard', icon: '▤' },
-        { href: '/workflow/approver/file_management', label: 'File Registry', icon: '▤' },
-        { href: '/workflow/approver/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
+        { href: getOfficeFileManagementPath(role), label: 'File Registry', icon: '▤' },
+        { href: getOfficeNotificationsPath(role), label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
         { href: '/workflow/retrieval', label: 'Scan QR Code', icon: '⌗' },
       ];
     }

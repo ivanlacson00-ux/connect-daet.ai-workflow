@@ -4,7 +4,7 @@ export const TOURISM_OFFICE_LABEL = 'Daet Tourism Office';
 export const OFFICE_CONFIG = {
   tourism_officer: {
     label: TOURISM_OFFICE_LABEL,
-    path: '/workflow/approver',
+    path: '/workflow/tourism-office',
     categories: ['Other'],
   },
   municipal_treasurer: {
@@ -68,6 +68,14 @@ export type OfficeRoutingMode = 'sequential' | 'simultaneous';
 
 export function isOfficeRole(role: string | null): role is OfficeRole {
   return role !== null && Object.prototype.hasOwnProperty.call(OFFICE_CONFIG, role);
+}
+
+export function getOfficeFileManagementPath(role: OfficeRole) {
+  return `${OFFICE_CONFIG[role].path}/file_management`;
+}
+
+export function getOfficeNotificationsPath(role: OfficeRole) {
+  return `${OFFICE_CONFIG[role].path}/notifications`;
 }
 
 export function getRoleHomePath(role: string | null) {

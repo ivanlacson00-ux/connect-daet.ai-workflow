@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import WorkflowNotificationFeed from '@/components/WorkflowNotificationFeed';
 import SwipeDismissNotification from '@/components/SwipeDismissNotification';
+import { getOfficeFileManagementPath, getOfficeNotificationsPath, type OfficeRole } from '@/lib/workflow/offices';
 
 // ─── Styles & Fonts (synced with the dashboards) ─────────────────────────────
 const fonts = {
@@ -90,6 +91,17 @@ const getErrorMessage = (error: unknown, fallback: string) => {
 export default function ApproverNotificationsPage() {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
+  const pathname = usePathname();
+  const officePath = pathname.split('/notifications')[0];
+  const officeRole: OfficeRole = officePath === '/workflow/tourism-office'
+    ? 'tourism_officer'
+    : officePath === '/workflow/municipal-treasurer'
+      ? 'municipal_treasurer'
+      : officePath === '/workflow/mayor'
+        ? 'mayor_office'
+        : 'sangguniang_bayan';
+  const fileManagementPath = getOfficeFileManagementPath(officeRole);
+  const notificationsPath = getOfficeNotificationsPath(officeRole);
   const fetchInFlight = useRef(false);
   const [notifications, setNotifications] = useState<ApproverNotification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -238,7 +250,7 @@ export default function ApproverNotificationsPage() {
         ));
         window.dispatchEvent(new Event('workflow-notifications-changed'));
       }
-      router.push(`/workflow/approver/file_management/${notification.id}`);
+      router.push(`${fileManagementPath}/${notification.id}`);
     } catch (error) {
       setErrorMessage(getErrorMessage(error, 'Could not open this notification.'));
     }
@@ -318,7 +330,7 @@ export default function ApproverNotificationsPage() {
       </div>
 
       <WorkflowNotificationFeed
-        archiveHref="/workflow/approver/notifications/archive"
+        archiveHref={`${notificationsPath}/archive`}
         busy={actionBusy || loading}
         canClear={notifications.length > 0}
         hasMore={hasMore}
@@ -365,7 +377,7 @@ export default function ApproverNotificationsPage() {
                 busy={actionBusy}
               >
                 <Link
-                  href={`/workflow/approver/file_management/${note.id}`}
+                  href={`${fileManagementPath}/${note.id}`}
                   onClick={(event) => void openNotification(event, note)}
                   className="group flex flex-col gap-5 border border-warm-border bg-card px-5 py-5 pr-14 transition-colors hover:border-clay-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-clay sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:pr-14 max-md:py-3.5"
                 >

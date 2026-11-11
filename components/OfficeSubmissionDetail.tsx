@@ -214,6 +214,8 @@ export default function ApproverManagePage() {
   const [routeStateError, setRouteStateError] = useState(false);
   const [role, setRole] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [supportingAttachmentsOpen, setSupportingAttachmentsOpen] = useState(false);
+  const [previewingAttachmentId, setPreviewingAttachmentId] = useState<string | null>(null);
 
   const fetchDetails = useCallback(async () => {
     try {
@@ -615,47 +617,11 @@ export default function ApproverManagePage() {
   const historicalRecipientView = hasOfficeAssignment && !isResponsibleOffice && !isRecipientOffice;
   const composerClosed = isCompleted || isWithdrawn || historicalRecipientView;
   const processingNote = sub.office_comments || sub.mayor_comments || sub.approver_comments || '';
-  const workspaceSidebar = (
-    <>
-      {attachments.length > 0 && (
-        <section className="rounded-2xl border border-warm-border bg-card p-5">
-          <div className="mb-4 flex items-center gap-2 text-warm-text">
-            <Icon name="paperclip" size={16} />
-            <h2 className="text-sm font-bold">Supporting attachments</h2>
-            <span className="ml-auto rounded-full bg-sidebar px-2 py-0.5 text-[10px] font-bold">{attachments.length}</span>
-          </div>
-          <div className="space-y-2">
-            {attachments.map((attachment) => (
-              <button
-                key={attachment.id}
-                type="button"
-                onClick={() => void downloadAttachment(attachment)}
-                className="flex w-full items-center gap-3 rounded-xl border border-warm-border bg-white p-3 text-left text-warm-text transition-colors hover:border-clay"
-              >
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-clay-soft text-clay">
-                  <Icon name="file" size={17} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[11px] font-bold">{attachment.file_name}</span>
-                  <span className="mt-0.5 block text-[9px] text-muted-text">
-                    {Math.max(1, Math.round(attachment.file_size / 1024))} KB
-                    {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
-                  </span>
-                </span>
-                <Icon name="download" size={15} />
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-
-    </>
-  );
-
   const downloadOriginal = async () => {
     const url = await getFileUrl(supabase, sub);
     await downloadFile(url, sub.file_name);
   };
+  const previewingAttachment = attachments.find((attachment) => attachment.id === previewingAttachmentId);
 
   return (
     <div className="mx-auto w-full max-w-[1500px] pb-8">
@@ -796,7 +762,110 @@ export default function ApproverManagePage() {
               <Icon name="download" size={15} />
               <span className="hidden sm:inline">Download</span>
             </button>
+            {attachments.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSupportingAttachmentsOpen((open) => !open)}
+                aria-label={`${supportingAttachmentsOpen ? 'Hide' : 'Show'} ${attachments.length} supporting documents`}
+                aria-expanded={supportingAttachmentsOpen}
+                aria-controls={`supporting-attachments-${sub.id}`}
+                title={`${attachments.length} supporting ${attachments.length === 1 ? 'document' : 'documents'}`}
+                className={`relative grid h-9 w-9 shrink-0 place-items-center rounded-full border transition-colors ${
+                  supportingAttachmentsOpen
+                    ? 'border-clay bg-clay-soft text-clay'
+                    : 'border-warm-border text-warm-text hover:bg-sidebar'
+                }`}
+              >
+                <Icon name="paperclip" size={16} />
+                <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-clay px-1 text-[9px] font-bold leading-none text-white">
+                  {attachments.length}
+                </span>
+              </button>
+            )}
           </div>
+          {attachments.length > 0 && (
+            <div
+              id={`supporting-attachments-${sub.id}`}
+              hidden={!supportingAttachmentsOpen}
+              className="border-b border-warm-border bg-sidebar/40 px-5 py-4 md:px-7"
+            >
+              <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-text">
+                Supporting documents
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {attachments.map((attachment) => (
+                  <div
+                    key={attachment.id}
+                    className="flex min-w-0 items-center gap-3 rounded-xl border border-warm-border bg-card p-3 text-left text-warm-text transition-colors hover:border-clay"
+                  >
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-clay-soft text-clay">
+                      <Icon name="file" size={17} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[11px] font-bold">{attachment.file_name}</span>
+                      <span className="mt-0.5 block text-[9px] text-muted-text">
+                        {Math.max(1, Math.round(attachment.file_size / 1024))} KB
+                        {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
+                      </span>
+                    </span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewingAttachmentId((current) =>
+                          current === attachment.id ? null : attachment.id
+                        )}
+                        aria-label={`${previewingAttachmentId === attachment.id ? 'Close preview of' : 'Preview'} ${attachment.file_name}`}
+                        aria-pressed={previewingAttachmentId === attachment.id}
+                        className={`grid h-9 w-9 place-items-center rounded-full transition-colors ${
+                          previewingAttachmentId === attachment.id
+                            ? 'bg-clay-soft text-clay'
+                            : 'text-muted-text hover:bg-sidebar hover:text-warm-text'
+                        }`}
+                      >
+                        <span className="text-sm" aria-hidden="true">⌕</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void downloadAttachment(attachment)}
+                        aria-label={`Download ${attachment.file_name}`}
+                        className="grid h-9 w-9 place-items-center rounded-full text-muted-text transition-colors hover:bg-sidebar hover:text-warm-text"
+                      >
+                        <Icon name="download" size={15} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {previewingAttachment && (
+                <section className="mt-4 overflow-hidden rounded-xl border border-warm-border bg-card">
+                  <header className="flex items-center justify-between gap-3 border-b border-warm-border px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-clay">Supporting document preview</p>
+                      <h3 className="mt-1 truncate text-xs font-semibold text-warm-text">{previewingAttachment.file_name}</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewingAttachmentId(null)}
+                      aria-label="Close supporting document preview"
+                      className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-warm-border text-muted-text hover:bg-sidebar"
+                    >
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  </header>
+                  <div className="relative flex h-[min(65vh,680px)] min-h-[360px] items-center justify-center overflow-auto bg-[#eae5df] p-4 md:p-6">
+                    <FilePreview
+                      file={{
+                        file_name: previewingAttachment.file_name,
+                        file_url: '',
+                        file_path: previewingAttachment.file_path,
+                        file_type: previewingAttachment.file_type,
+                      }}
+                    />
+                  </div>
+                </section>
+              )}
+            </div>
+          )}
           <div id={`document-preview-${sub.id}`} hidden={!previewOpen}>
             {previewOpen && (
               <div className="relative flex h-[min(70vh,760px)] min-h-[540px] items-center justify-center overflow-auto bg-[#eae5df] p-5 md:p-8">
@@ -829,6 +898,7 @@ export default function ApproverManagePage() {
                   initialMessage: processingNote,
                   statusLine,
                   isClosed: composerClosed,
+                  isOfficeWorkspace: true,
                   closedMessage: historicalRecipientView
                     ? 'This assignment is no longer active. You can still review its files and messages.'
                     : isWithdrawn
@@ -836,7 +906,6 @@ export default function ApproverManagePage() {
                       : 'This submission is closed.',
                   busy: updating,
                   pendingAssignmentCount,
-                  sidebarContent: workspaceSidebar,
                   sourceDocument: {
                     filePath: sub.file_path ?? null,
                     fileType: sub.file_type,
