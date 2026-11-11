@@ -53,6 +53,7 @@ interface Submission {
   admin_comments: string;
   rejection_comment: string;
   created_at: string;
+  received_at?: string | null;
   completed_at?: string | null;
 }
 
@@ -403,9 +404,10 @@ export default function UserFileDetail() {
   const getWorkflowActionLabel = (actionType: string) => {
     switch (actionType) {
       case 'DESTINATION_SELECTED': return 'Destination selected by submitter';
+      case 'SUBMITTED': return 'Submission submitted';
       case 'SUBMISSION_REDIRECTED': return 'Submission redirected to a new office';
       case 'SUBMISSION_RECEIVED': return 'Received by responsible office';
-      case 'SUBMISSION_FORWARDED': return 'Forwarded to an office for Recommendation';
+      case 'SUBMISSION_FORWARDED': return 'Recommendation requested';
       case 'ASSIGNMENT_COMPLETED': return 'Office assignment completed';
       case 'ASSIGNMENT_RETURNED': return 'Office assignment returned';
       case 'ASSIGNMENT_WITHDRAWN': return 'Office assignment withdrawn';
@@ -419,8 +421,8 @@ export default function UserFileDetail() {
       case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Assigned to municipal office';
       case 'OFFICE_ROUTE_STEP_APPROVED': return 'Municipal office approved';
       case 'OFFICE_ASSIGNMENT_COMPLETED': return 'Municipal office assignment completed';
-      case 'OFFICE_ASSIGNMENT_FORWARDED': return 'Forwarded to a municipal office for Recommendation';
-      case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Forwarded for Tourism Officer review';
+      case 'OFFICE_ASSIGNMENT_FORWARDED': return 'Recommendation requested from another office';
+      case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Sent to Tourism Officer for review';
       case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer assigned additional offices';
       case 'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED': return 'Additional office assignments completed';
       case 'OFFICE_FINAL_DECISION': return 'Final decision by authorized office';
@@ -462,7 +464,8 @@ export default function UserFileDetail() {
   const isWithdrawn = sub.status === 'withdrawn';
   const isReturned = sub.status === 'changes_requested' || sub.status === 'returned_for_requirements';
   const isRedirectable = sub.status === 'returned';
-  const canWithdraw = !isCompleted && !isWithdrawn;
+  const canWithdraw = sub.status === 'submitted' && !sub.received_at;
+  const canRespondToChanges = sub.status === 'changes_requested';
   const currentDestinationRole = sub.selected_office_role ?? sub.initial_destination_role ?? null;
   const currentDestinationLabel = isOfficeRole(currentDestinationRole)
     ? OFFICE_CONFIG[currentDestinationRole].label
@@ -475,19 +478,18 @@ export default function UserFileDetail() {
     .reverse()
     .find((log) => ['CHANGES_REQUESTED', 'ROUTE_REQUIREMENTS_REQUESTED'].includes(log.action_type));
   const submitterActions = [
-    { value: 'send_message', label: 'Send message', buttonLabel: 'Send', tone: 'neutral' as const, requiresMessage: true },
     {
       value: 'respond_changes',
-      label: 'Send response',
-      buttonLabel: 'Send response',
+      label: 'Submit response',
+      buttonLabel: 'Submit response',
       tone: 'primary' as const,
       requiresMessage: true,
-      unavailableReason: isReturned ? undefined : 'Available when status is Changes Requested',
+      unavailableReason: canRespondToChanges ? undefined : 'Available when changes have been requested',
     },
     {
       value: 'redirect',
-      label: 'Redirect to another office',
-      buttonLabel: 'Redirect',
+      label: 'Redirect submission',
+      buttonLabel: 'Redirect submission',
       tone: 'primary' as const,
       unavailableReason: isRedirectable ? undefined : 'Available when status is Returned',
     },
@@ -495,8 +497,10 @@ export default function UserFileDetail() {
       value: 'withdraw_submission',
       label: 'Withdraw submission',
       tone: 'warning' as const,
-      confirmation: 'This submission will be withdrawn, and any pending office assignments will also be withdrawn.',
-      unavailableReason: canWithdraw ? undefined : 'Completed or withdrawn submissions cannot be withdrawn',
+      confirmation: 'You can withdraw only before the responsible office receives this submission. Any pending office assignments will also be withdrawn.',
+      unavailableReason: canWithdraw
+        ? undefined
+        : 'Available only before the responsible office receives the submission',
     },
   ];
 
@@ -791,10 +795,14 @@ export default function UserFileDetail() {
             fileName={sub.file_name}
             trackingNumber={sub.tracking_number}
             workflowComposer={{
-              recipients: [{ value: 'responsible_office', label: currentDestinationLabel }],
+              recipients: [{ value: 'responsible_office', label: 'Responsible office' }],
               actionsByRecipient: { responsible_office: submitterActions },
               initialRecipient: 'responsible_office',
-              initialAction: isReturned ? 'respond_changes' : 'send_message',
+              initialAction: isRedirectable
+                ? 'redirect'
+                : canRespondToChanges
+                  ? 'respond_changes'
+                  : submitterActions.find((action) => !action.unavailableReason)?.value ?? 'respond_changes',
               statusLine: statusConfig.label,
               contextNote: isReturned
                 ? requirementsRequest?.comments || sub.office_comments || sub.mayor_comments || undefined

@@ -158,7 +158,7 @@ const getActionLabel = (type: string) => {
     case 'DESTINATION_SELECTED': return 'Destination selected by submitter';
     case 'SUBMISSION_REDIRECTED': return 'Submission redirected';
     case 'SUBMISSION_RECEIVED': return 'Submission received by office';
-    case 'SUBMISSION_FORWARDED': return 'Forwarded for Recommendation';
+    case 'SUBMISSION_FORWARDED': return 'Recommendation requested';
     case 'ASSIGNMENT_COMPLETED': return 'Office assignment completed';
     case 'ASSIGNMENT_RETURNED': return 'Office assignment returned';
     case 'ASSIGNMENT_WITHDRAWN': return 'Office assignment withdrawn';
@@ -177,8 +177,8 @@ const getActionLabel = (type: string) => {
     case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Office route step assigned';
     case 'OFFICE_ROUTE_STEP_APPROVED': return 'Office route step approved';
     case 'OFFICE_ASSIGNMENT_COMPLETED': return 'Office assignment completed';
-    case 'OFFICE_ASSIGNMENT_FORWARDED': return 'Office forwarded submission for Recommendation';
-    case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Municipal office forwarded for Tourism Officer review';
+    case 'OFFICE_ASSIGNMENT_FORWARDED': return 'Recommendation requested from another office';
+    case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Sent to Tourism Officer for review';
     case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer assigned additional offices';
     case 'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED': return 'Additional office assignments completed';
     case 'OFFICE_FINAL_DECISION': return 'Final decision by authorized office';
@@ -192,7 +192,7 @@ const getActionLabel = (type: string) => {
     case 'OFFICE_REJECTED': return 'Municipal office rejected request';
     case 'MAYOR_REJECTED': return 'Mayor rejected request';
     case 'WORKFLOW_COMPLETED': return 'Workflow completed';
-    case 'SUBMITTED': return 'Submitted by';
+    case 'SUBMITTED': return 'Submission submitted';
     default: return 'Action by';
   }
 };
@@ -213,7 +213,6 @@ export default function ApproverManagePage() {
   const [routeStatus, setRouteStatus] = useState<string | null>(null);
   const [routeStateError, setRouteStateError] = useState(false);
   const [role, setRole] = useState<string | null>(null);
-  const [activeOfficeRoles, setActiveOfficeRoles] = useState<OfficeRole[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
 
   const fetchDetails = useCallback(async () => {
@@ -229,20 +228,6 @@ export default function ApproverManagePage() {
         currentRole = currentProfile?.role ?? null;
         setRole(currentRole);
       }
-      const { data: activeProfiles, error: activeProfilesError } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('is_active', true);
-      if (activeProfilesError) {
-        console.error('Could not load active office representatives:', activeProfilesError.message);
-        setActiveOfficeRoles([]);
-        setActionError('Could not load active offices. Refresh and try again.');
-      } else {
-        setActiveOfficeRoles([...new Set((activeProfiles ?? [])
-          .map((profile) => profile.role)
-          .filter(isOfficeRole))]);
-      }
-
       let { data: submission } = await supabase
         .from('workflow_submissions')
         .select('*')
@@ -499,11 +484,13 @@ export default function ApproverManagePage() {
   const activeRouteStep = isOfficeRole(role)
     ? routeSteps.find((step) => step.office_role === role && ['pending', 'in_progress'].includes(step.status))
     : undefined;
+  const hasOfficeAssignment = isOfficeRole(role)
+    && routeSteps.some((step) => step.office_role === role && step.status !== 'skipped');
   const selectedOfficeRole = sub.selected_office_role ?? null;
   const initialDestinationRole = sub.initial_destination_role ?? null;
   const isResponsibleOffice = isOfficeRole(role) && role === selectedOfficeRole;
   const isRecipientOffice = Boolean(activeRouteStep) && !isResponsibleOffice;
-  const officeReview = isResponsibleOffice || isRecipientOffice;
+  const officeReview = isResponsibleOffice || hasOfficeAssignment;
   const pendingAssignments = routeSteps.filter((step) =>
     step.status === 'pending' || step.status === 'in_progress'
   );
@@ -520,7 +507,6 @@ export default function ApproverManagePage() {
       ? ` · ${pendingAssignments.length} assignments pending`
       : ''}`;
   const responsibleOfficeActions = [
-    { value: 'send_message', label: 'Send message', buttonLabel: 'Send', tone: 'neutral' as const, requiresMessage: true },
     {
       value: 'request_changes',
       label: 'Request changes',
@@ -533,10 +519,10 @@ export default function ApproverManagePage() {
     },
     {
       value: 'return_to_submitter',
-      label: 'Return to submitter (wrong office)',
+      label: 'Return for redirection',
       tone: 'warning' as const,
       requiresMessage: true,
-      confirmation: 'The submission will be returned to the submitter for redirection. This is not a rejection.',
+      confirmation: 'The submission will return to the submitter so they can choose the correct office. This is not a rejection.',
       unavailableReason: !['submitted', 'in_process'].includes(sub.status)
         ? 'Available only while status is Submitted or In Process'
         : undefined,
@@ -564,12 +550,14 @@ export default function ApproverManagePage() {
   }[]> = {};
   const recipients: { value: string; label: string }[] = [];
   let initialRecipient = 'responsible_office';
-  let initialAction = 'send_message';
+  let initialAction = 'request_changes';
 
   if (isResponsibleOffice) {
     recipients.push({ value: 'submitter', label: 'Submitter' });
     actionsByRecipient.submitter = responsibleOfficeActions;
-    for (const officeRole of activeOfficeRoles.filter((office) => office !== role)) {
+    for (const officeRole of Object.keys(OFFICE_CONFIG)
+      .filter(isOfficeRole)
+      .filter((office) => office !== role)) {
       const targetAssignment = pendingAssignments.find((step) => step.office_role === officeRole);
       const forwardReason = routeStateError
         ? 'Could not verify the office assignment'
@@ -579,22 +567,21 @@ export default function ApproverManagePage() {
       const recipientValue = `office:${officeRole}`;
       recipients.push({ value: recipientValue, label: OFFICE_CONFIG[officeRole].label });
       const currentDocumentReason = !sub.file_path
-        ? 'Current document is unavailable for automatic forwarding'
+        ? 'Current document is unavailable to send to another office'
         : sub.file_size > 10 * 1024 * 1024
-          ? 'Current document exceeds the 10 MB forwarding limit'
+          ? 'Current document exceeds the 10 MB limit for sending to another office'
           : undefined;
       actionsByRecipient[recipientValue] = [
         {
           value: 'forward',
-          label: 'Forward for recommendation',
-          buttonLabel: 'Forward',
+          label: 'Request recommendation',
+          buttonLabel: 'Request recommendation',
           tone: 'primary',
-          requiresMessage: true,
           unavailableReason: currentDocumentReason || forwardReason,
         },
         {
           value: 'withdraw_assignment',
-          label: 'Withdraw forward',
+          label: 'Withdraw assignment',
           tone: 'warning',
           requiresMessage: true,
           confirmation: `The pending assignment with ${OFFICE_CONFIG[officeRole].label} will be withdrawn.`,
@@ -608,11 +595,10 @@ export default function ApproverManagePage() {
   } else if (isRecipientOffice) {
     recipients.push({ value: 'responsible_office', label: 'Responsible office' });
     actionsByRecipient.responsible_office = [
-      { value: 'send_message', label: 'Send message', buttonLabel: 'Send', tone: 'neutral', requiresMessage: true },
       {
         value: 'complete_assignment',
-        label: 'Mark assignment completed',
-        buttonLabel: 'Mark completed',
+        label: 'Complete assignment',
+        buttonLabel: 'Complete assignment',
         tone: 'primary',
         unavailableReason: routeStateError ? 'Could not verify your office assignment' : undefined,
       },
@@ -626,7 +612,8 @@ export default function ApproverManagePage() {
       },
     ];
   }
-  const composerClosed = isCompleted || isWithdrawn;
+  const historicalRecipientView = hasOfficeAssignment && !isResponsibleOffice && !isRecipientOffice;
+  const composerClosed = isCompleted || isWithdrawn || historicalRecipientView;
   const processingNote = sub.office_comments || sub.mayor_comments || sub.approver_comments || '';
   const workspaceSidebar = (
     <>
@@ -842,7 +829,11 @@ export default function ApproverManagePage() {
                   initialMessage: processingNote,
                   statusLine,
                   isClosed: composerClosed,
-                  closedMessage: isWithdrawn ? 'This submission is withdrawn.' : 'This submission is closed.',
+                  closedMessage: historicalRecipientView
+                    ? 'This assignment is no longer active. You can still review its files and messages.'
+                    : isWithdrawn
+                      ? 'This submission is withdrawn.'
+                      : 'This submission is closed.',
                   busy: updating,
                   pendingAssignmentCount,
                   sidebarContent: workspaceSidebar,

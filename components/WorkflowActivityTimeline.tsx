@@ -9,6 +9,7 @@ interface WorkflowActivityEvent {
 }
 
 const KEY_ACTIVITY_ACTIONS = new Set([
+  'SUBMITTED',
   'DESTINATION_SELECTED',
   'SUBMISSION_REDIRECTED',
   'SUBMISSION_RECEIVED',
@@ -21,7 +22,6 @@ const KEY_ACTIVITY_ACTIONS = new Set([
   'RETURNED_TO_SUBMITTER',
   'SUBMISSION_WITHDRAWN',
   'SUBMISSION_CLOSED',
-  'FILE_VERSION_ADDED',
   'STAGE_1_AUTHORIZED',
   'STAGE_1_REJECTED',
   'FINAL_AUTHORIZATION',
@@ -43,11 +43,10 @@ const KEY_ACTIVITY_ACTIONS = new Set([
   'ROUTE_RETURNED_TO_ADMIN',
   'APPROVER_REJECTED',
   'ADMIN_REJECTED',
+  'OFFICE_REJECTED',
+  'MAYOR_REJECTED',
   'WORKFLOW_COMPLETED',
-  'RETRIEVAL_QR_SCANNED',
-  'RETRIEVAL_LOCATION_UPDATED',
   'DOCUMENT_RELEASED',
-  'SUBMITTED',
 ]);
 
 const formatTimestamp = (value: string) =>
@@ -84,30 +83,38 @@ export default function WorkflowActivityTimeline({
     return <p className="text-[11px] text-muted-text">{emptyMessage}</p>;
   }
 
-  const sortedEvents = [...events].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const keyEvents = sortedEvents.filter((event) => KEY_ACTIVITY_ACTIONS.has(event.actionType));
-  const featuredEvents = (keyEvents.length > 0 ? keyEvents : sortedEvents).slice(0, 5);
-  const featuredIds = new Set(featuredEvents.map((event) => event.id));
-  const additionalEvents = sortedEvents.filter((event) => !featuredIds.has(event.id));
+  const sortedEvents = [...events].sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+  );
+  const hasSubmittedEvent = sortedEvents.some((event) => event.actionType === 'SUBMITTED');
+  const keyEvents = sortedEvents.filter((event) =>
+    KEY_ACTIVITY_ACTIONS.has(event.actionType)
+    && !(hasSubmittedEvent && event.actionType === 'DESTINATION_SELECTED')
+  );
+  const featuredEvents = keyEvents.map((event) =>
+    event.actionType === 'DESTINATION_SELECTED'
+      ? { ...event, label: 'Submission submitted', comments: null }
+      : event
+  );
 
   return (
     <div className="space-y-4">
       <div>
-        <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">Key updates</p>
+        <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">Key workflow updates</p>
         <ol className="space-y-4">
-          {featuredEvents.map((event) => <ActivityEvent key={event.id} event={event} featured />)}
+          {featuredEvents.length > 0
+            ? featuredEvents.map((event) => <ActivityEvent key={event.id} event={event} featured />)
+            : <li className="text-[11px] text-muted-text">No key workflow updates recorded yet.</li>}
         </ol>
       </div>
-      {additionalEvents.length > 0 && (
-        <details className="border-t border-warm-border pt-3">
-          <summary className="cursor-pointer text-[10px] font-semibold text-clay outline-none hover:text-warm-text focus-visible:ring-2 focus-visible:ring-clay/30">
-            Show full activity ({additionalEvents.length} more)
-          </summary>
-          <ol className="mt-4 space-y-4">
-            {additionalEvents.map((event) => <ActivityEvent key={event.id} event={event} />)}
-          </ol>
-        </details>
-      )}
+      <details className="border-t border-warm-border pt-3">
+        <summary className="cursor-pointer text-[10px] font-semibold text-clay outline-none hover:text-warm-text focus-visible:ring-2 focus-visible:ring-clay/30">
+          Show full audit history ({sortedEvents.length})
+        </summary>
+        <ol className="mt-4 space-y-4">
+          {sortedEvents.map((event) => <ActivityEvent key={event.id} event={event} />)}
+        </ol>
+      </details>
     </div>
   );
 }

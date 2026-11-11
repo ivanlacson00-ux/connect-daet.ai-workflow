@@ -127,6 +127,10 @@ interface MessageAttachment {
   file_size: number;
 }
 
+interface SharedMessageAttachment extends MessageAttachment {
+  created_at: string;
+}
+
 interface Message extends MessageRow {
   attachments: MessageAttachment[];
   readCount: number;
@@ -192,12 +196,11 @@ interface UploadedAttachment {
   file_size: number;
 }
 
-const FALLBACK_SEND_ACTION: ComposerAction = {
-  value: 'send_message',
-  label: 'Send message',
-  buttonLabel: 'Send',
+const FALLBACK_NO_ACTION: ComposerAction = {
+  value: '',
+  label: 'No action available',
   tone: 'neutral',
-  requiresMessage: true,
+  unavailableReason: 'There are no workflow actions available for this recipient.',
 };
 
 const mergeMessages = (current: Message[], incoming: Message[]) => {
@@ -218,6 +221,7 @@ export default function DocumentMessaging({
   const supabase = useMemo(() => createClient(), []);
   const [userId, setUserId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [sharedAttachments, setSharedAttachments] = useState<SharedMessageAttachment[]>([]);
   // Office action form state
   const [draft, setDraft] = useState(workflowComposer?.initialMessage ?? '');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -234,7 +238,7 @@ export default function DocumentMessaging({
   const [sending, setSending] = useState(false);
   const [liveStatus, setLiveStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [selectedRecipient, setSelectedRecipient] = useState(workflowComposer?.initialRecipient ?? 'submitter');
-  const [selectedAction, setSelectedAction] = useState(workflowComposer?.initialAction ?? 'send_message');
+  const [selectedAction, setSelectedAction] = useState(workflowComposer?.initialAction ?? '');
   const [confirmingAction, setConfirmingAction] = useState<ComposerAction | null>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -245,9 +249,9 @@ export default function DocumentMessaging({
   const listRef = useRef<HTMLDivElement>(null);
   const isOfficeWorkspace = Boolean(workflowComposer?.sidebarContent);
 
-  // Actions for the chosen recipient; falls back to a plain "send message" action.
+  // Actions depend on the selected recipient. Conversation messages have a separate composer.
   const recipientActions = workflowComposer?.actionsByRecipient[selectedRecipient] ?? [];
-  const actionList = recipientActions.length > 0 ? recipientActions : [FALLBACK_SEND_ACTION];
+  const actionList = recipientActions.length > 0 ? recipientActions : [FALLBACK_NO_ACTION];
   const currentAction = actionList.find((action) => action.value === selectedAction) ?? actionList[0];
   const recipientLabel = workflowComposer?.recipients.find((recipient) => recipient.value === selectedRecipient)?.label
     ?? 'recipient';
@@ -309,6 +313,22 @@ export default function DocumentMessaging({
       readCount: readCounts.get(message.id) ?? 0,
     }));
   }, [supabase]);
+
+  const refreshSharedAttachments = useCallback(async () => {
+    const { data, error: attachmentsError } = await supabase
+      .from('workflow_message_attachments')
+      .select('id, submission_id, message_id, file_name, file_path, file_type, file_size, created_at')
+      .eq('submission_id', submissionId)
+      .order('created_at', { ascending: false });
+
+    if (attachmentsError) {
+      console.error('Could not load shared document attachments:', attachmentsError.message);
+      setConversationError('Could not load files shared in messages. Refresh the page to try again.');
+      return;
+    }
+
+    setSharedAttachments(data ?? []);
+  }, [submissionId, supabase]);
 
   const markMessagesRead = useCallback(async (rows: MessageRow[], readerId: string) => {
     const unreadMessages = rows.filter((message) => message.sender_id !== readerId);
@@ -396,6 +416,8 @@ export default function DocumentMessaging({
       setMessages(page);
       setHasEarlier(page.length === PAGE_SIZE);
       setLoading(false);
+      await refreshSharedAttachments();
+      if (!active) return;
 
       channel = supabase
         .channel(`document-messages-${submissionId}-${user.id}`)
@@ -420,6 +442,7 @@ export default function DocumentMessaging({
             console.error('Live message attachment refresh failed:', loadError);
             if (active) setError(loadError instanceof Error ? loadError.message : 'Could not refresh attachments.');
           });
+          void refreshSharedAttachments();
         })
         .on('postgres_changes', {
           event: 'INSERT',
@@ -460,7 +483,7 @@ export default function DocumentMessaging({
       active = false;
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [fetchPage, refreshLatest, refreshVisibleMetadata, submissionId, supabase]);
+  }, [fetchPage, refreshLatest, refreshSharedAttachments, refreshVisibleMetadata, submissionId, supabase]);
 
   const loadEarlierMessages = async () => {
     const oldestMessage = messages[0];
@@ -589,6 +612,7 @@ export default function DocumentMessaging({
     if (!userId) return;
     try {
       await refreshLatest(userId);
+      await refreshSharedAttachments();
     } catch (refreshError) {
       console.error('Message was sent but the conversation did not refresh:', refreshError);
       notify('Your action succeeded, but the conversation did not refresh. Reload this page to see the latest messages.');
@@ -667,10 +691,10 @@ export default function DocumentMessaging({
       return false;
     }
     if (
-      !['send_message', 'forward', 'respond_changes', 'close_submission'].includes(action.value)
+      !['send_message', 'forward', 'respond_changes', 'close_submission', 'complete_assignment', 'return_assignment'].includes(action.value)
       && files.length > 0
     ) {
-      setError('Attachments are supported for messages, forwards, changes responses, and closure documents.');
+      setError('Attachments are not supported for this action.');
       return false;
     }
 
@@ -684,7 +708,6 @@ export default function DocumentMessaging({
         if (attachmentsSaved) setNotice('Message sent.');
       } else if (action.value === 'forward') {
         if (!userId) throw new Error('Sign in to forward this submission.');
-        if (!message) throw new Error('Enter forwarding context before continuing.');
         if (!workflowComposer.sourceDocument?.filePath) {
           throw new Error('The current document file is not available for automatic forwarding.');
         }
@@ -708,7 +731,7 @@ export default function DocumentMessaging({
             target_submission_id: submissionId,
             target_office_role: selectedRecipient.replace(/^office:/, ''),
             message_id: messageId,
-            message_body: message,
+            message_body: message || null,
             attachment_records: rows,
           });
           if (forwardError) throw new Error(forwardError.message);
@@ -723,13 +746,25 @@ export default function DocumentMessaging({
           throw forwardError;
         }
         await workflowComposer.onForwarded?.();
-        setNotice('Submission forwarded as a Recommendation assignment.');
+        setNotice(`Recommendation requested from ${recipientLabel}.`);
       } else {
+        let actionFiles = files;
+        if (files.length > 0 && ['complete_assignment', 'return_assignment'].includes(action.value)) {
+          const attachmentsSaved = await sendPlainMessage('Supporting document shared for this assignment.', files);
+          if (!attachmentsSaved) {
+            throw new Error('The workflow action was not completed because the attached document could not be saved.');
+          }
+          setSelectedFiles([]);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          if (userId) await refreshLatest(userId);
+          await refreshSharedAttachments();
+          actionFiles = [];
+        }
         await workflowComposer.onWorkflowAction(
           action.value,
           selectedRecipient,
           message,
-          files,
+          actionFiles,
         );
         setNotice(`${action.label} completed.`);
       }
@@ -763,10 +798,10 @@ export default function DocumentMessaging({
       return;
     }
     if (
-      !['send_message', 'forward', 'respond_changes', 'close_submission'].includes(action.value)
+      !['send_message', 'forward', 'respond_changes', 'close_submission', 'complete_assignment', 'return_assignment'].includes(action.value)
       && selectedFiles.length > 0
     ) {
-      setError('Attachments are supported for messages, forwards, changes responses, and closure documents.');
+      setError('Attachments are not supported for this action.');
       return;
     }
     if (action.value === 'respond_changes' && selectedFiles.length > 1) {
@@ -1079,6 +1114,43 @@ export default function DocumentMessaging({
             <div className="max-h-[560px] overflow-y-auto p-5">{activity}</div>
           </section>
           {workflowComposer?.sidebarContent}
+          <section className="overflow-hidden rounded-2xl border border-warm-border bg-card">
+            <header className="flex items-center justify-between gap-2 border-b border-warm-border px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="shrink-0 text-clay"><Icon name="paperclip" size={15} /></span>
+                <h3 className="truncate text-xs font-bold text-warm-text">Shared files</h3>
+              </div>
+              <span className="shrink-0 rounded-full bg-sidebar px-2 py-0.5 text-[10px] font-bold text-muted-text">
+                {sharedAttachments.length}
+              </span>
+            </header>
+            <div className="max-h-64 space-y-1.5 overflow-y-auto p-3">
+              {sharedAttachments.length === 0 ? (
+                <p className="px-1 py-1 text-[10px] text-muted-text">No files shared yet.</p>
+              ) : (
+                sharedAttachments.map((attachment) => (
+                  <button
+                    key={attachment.id}
+                    type="button"
+                    onClick={() => void downloadAttachment(attachment)}
+                    className="flex w-full min-w-0 items-center gap-2.5 rounded-lg border border-transparent bg-sidebar/60 px-2.5 py-2 text-left text-warm-text transition-colors hover:border-warm-border hover:bg-white"
+                  >
+                    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-clay-soft text-clay">
+                      <Icon name="file" size={14} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[10px] font-semibold">{attachment.file_name}</span>
+                      <span className="block truncate text-[9px] text-muted-text">
+                        {Math.max(1, Math.round(attachment.file_size / 1024))} KB
+                        {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-[9px] font-semibold text-clay">Open</span>
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
         </aside>
       </div>
 
@@ -1105,7 +1177,7 @@ export default function DocumentMessaging({
               <p className="mt-1.5 text-[11px] leading-relaxed text-muted-text">
                 {isOfficeWorkspace
                   ? 'Review the request, communicate as needed, and close it when your office has finished processing.'
-                  : 'Send a message, reply to a change request, or choose another available action.'}
+                  : 'Choose an available action and add a note when needed.'}
               </p>
             </header>
 
@@ -1126,7 +1198,7 @@ export default function DocumentMessaging({
                     onChange={(event) => {
                       const recipient = event.target.value;
                       setSelectedRecipient(recipient);
-                      setSelectedAction(workflowComposer.actionsByRecipient[recipient]?.[0]?.value ?? 'send_message');
+                      setSelectedAction(workflowComposer.actionsByRecipient[recipient]?.[0]?.value ?? '');
                       setError('');
                     }}
                     disabled={actionDisabled}
@@ -1189,9 +1261,11 @@ export default function DocumentMessaging({
                   disabled={actionDisabled}
                   maxLength={5000}
                   rows={4}
-                  placeholder={currentAction.value === 'forward'
-                    ? 'Add context for the receiving office…'
-                    : `Write a message to ${recipientLabel}…`}
+                  placeholder={currentAction.requiresMessage
+                    ? currentAction.value === 'respond_changes'
+                      ? 'Write your response (required)…'
+                      : 'Enter a reason (required)…'
+                    : `Add an optional note for ${recipientLabel}…`}
                   className="block min-h-28 w-full resize-y rounded-xl border border-warm-border bg-white p-3 text-xs leading-relaxed text-warm-text outline-none placeholder:text-muted-text/70 focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:bg-sidebar disabled:opacity-70"
                 />
                 <p className="mt-1 text-right text-[9px] text-muted-text">{draft.length}/5000</p>

@@ -117,7 +117,7 @@ const getActionLabel = (type: string) => {
     case 'ROUTE_REQUIREMENTS_REQUESTED': return 'Mayor requested additional requirements';
     case 'ROUTE_RETURNED_TO_ADMIN': return 'All routed offices approved; returned to Admin';
     case 'WORKFLOW_COMPLETED': return 'Workflow completed';
-    case 'SUBMITTED': return 'Submitted by';
+    case 'SUBMITTED': return 'Submission submitted';
     default: return 'Action by';
   }
 };
