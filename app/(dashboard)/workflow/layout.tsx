@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -19,6 +19,15 @@ export default function WorkflowLayout({
   const pathname = usePathname();
   const supabase = useMemo(() => createClient(), []);
 
+  const refreshHasUnread = useCallback(async () => {
+    const { data, error } = await supabase.rpc('has_unread_workflow_notifications');
+    if (error) {
+      console.error('Could not check unread notifications:', error.message);
+      return;
+    }
+    setHasUnread(data === true);
+  }, [supabase]);
+
   // 1. Initial User & Role Fetch
   useEffect(() => {
     const getUserInfo = async () => {
@@ -33,23 +42,15 @@ export default function WorkflowLayout({
           .single();
         
         setRole(profile?.role || 'submitter');
-        const { count } = await supabase
-          .from('workflow_notifications')
-          .select('id', { count: 'exact', head: true })
-          .eq('recipient_id', user.id)
-          .is('read_at', null);
-        setHasUnread((count ?? 0) > 0);
+        await refreshHasUnread();
       }
     };
     getUserInfo();
-  }, [supabase]);
+  }, [refreshHasUnread, supabase]);
 
   // 2. Realtime Subscription Effect (Fixed to prevent "subscribe()" errors)
   useEffect(() => {
-    // Only subscribe if we have the necessary user data and aren't on the notifs page
-    if (!role || pathname.includes('notifications')) {
-      return;
-    }
+    if (!userId) return;
 
     const channel = supabase
       .channel(`sidebar-notifs-${userId}`)
@@ -61,14 +62,18 @@ export default function WorkflowLayout({
           table: 'workflow_notifications',
           filter: `recipient_id=eq.${userId}`,
         },
-        () => setHasUnread(true)
+        () => void refreshHasUnread()
       )
       .subscribe();
 
+    const handleNotificationChange = () => void refreshHasUnread();
+    window.addEventListener('workflow-notifications-changed', handleNotificationChange);
+
     return () => {
       supabase.removeChannel(channel);
+      window.removeEventListener('workflow-notifications-changed', handleNotificationChange);
     };
-  }, [supabase, role, userId, pathname]);
+  }, [supabase, userId, refreshHasUnread]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
