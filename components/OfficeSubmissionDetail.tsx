@@ -98,9 +98,13 @@ interface SupportingAttachment {
 }
 
 interface RouteStep {
+  id: string;
+  routing_plan_id: string;
   sequence_number: number;
   office_role: OfficeRole;
   status: string;
+  assigned_by: string | null;
+  assigned_by_role: string | null;
   responsibility: OfficeResponsibility;
   assignment_source: string;
   started_at: string | null;
@@ -178,6 +182,7 @@ const getActionLabel = (type: string) => {
     case 'OFFICE_ROUTE_STEP_APPROVED': return 'Office route step approved';
     case 'OFFICE_ASSIGNMENT_COMPLETED': return 'Office assignment completed';
     case 'OFFICE_ASSIGNMENT_FORWARDED': return 'Recommendation requested from another office';
+    case 'OFFICE_ASSIGNMENT_FORWARDED_ONWARD': return 'Office assignment forwarded onward';
     case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Sent to Tourism Officer for review';
     case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer assigned additional offices';
     case 'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED': return 'Additional office assignments completed';
@@ -210,6 +215,7 @@ export default function ApproverManagePage() {
   const [updating, setUpdating] = useState(false);
   const [actionError, setActionError] = useState('');
   const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
+  const [currentRoutePlanId, setCurrentRoutePlanId] = useState<string | null>(null);
   const [routeStatus, setRouteStatus] = useState<string | null>(null);
   const [routeStateError, setRouteStateError] = useState(false);
   const [role, setRole] = useState<string | null>(null);
@@ -264,24 +270,25 @@ export default function ApproverManagePage() {
       if (submission) {
         setSub(submission);
 
-        const { data: currentRoute, error: routeError } = await supabase
+        const { data: routes, error: routeError } = await supabase
           .from('workflow_routing_plans')
-          .select('id, status')
+          .select('id, status, is_current, version')
           .eq('submission_id', submission.id)
-          .eq('is_current', true)
-          .maybeSingle();
+          .order('version', { ascending: true });
         if (routeError) {
           console.error('Could not load workflow route state:', routeError.message);
           setActionError('Could not load the routing state. Refresh and try again.');
           setRouteStateError(true);
           setRouteSteps([]);
+          setCurrentRoutePlanId(null);
           setRouteStatus(null);
         } else {
+          const currentRoute = (routes ?? []).find((route) => route.is_current) ?? null;
           if (currentRoute) {
             const { data: steps, error: stepsError } = await supabase
               .from('workflow_routing_steps')
-              .select('sequence_number, office_role, status, responsibility, assignment_source, started_at, decided_at, completed_at, requirements_requested_at, requirements_comments')
-              .eq('routing_plan_id', currentRoute.id)
+              .select('id, routing_plan_id, sequence_number, office_role, status, assigned_by, assigned_by_role, responsibility, assignment_source, started_at, decided_at, completed_at, requirements_requested_at, requirements_comments')
+              .in('routing_plan_id', (routes ?? []).map((route) => route.id))
               .order('sequence_number', { ascending: true });
 
             if (stepsError) {
@@ -289,18 +296,44 @@ export default function ApproverManagePage() {
               setActionError('Could not load the office route. Refresh and try again.');
               setRouteStateError(true);
               setRouteSteps([]);
+              setCurrentRoutePlanId(null);
               setRouteStatus(null);
             } else {
-              const validSteps = (steps ?? []).filter(
-                (step): step is RouteStep => isOfficeRole(step.office_role)
+              let resolvedSteps = steps ?? [];
+              const pendingStep = resolvedSteps.find((step) =>
+                step.routing_plan_id === currentRoute.id
+                && step.office_role === currentRole
+                && step.status === 'pending'
+              );
+              let assignmentStartError = false;
+              if (pendingStep) {
+                const { error: startError } = await supabase.rpc('receive_workflow_assignment', {
+                  target_submission_id: submission.id,
+                });
+                if (startError) {
+                  console.error('Could not start the office assignment:', startError.message);
+                  setActionError('Could not start your office assignment. Refresh and try again.');
+                  assignmentStartError = true;
+                } else {
+                  resolvedSteps = resolvedSteps.map((step) => step.id === pendingStep.id
+                    ? { ...step, status: 'in_progress' }
+                    : step);
+                }
+              }
+              const validSteps = resolvedSteps.filter(
+                (step): step is RouteStep => typeof step.id === 'string'
+                  && typeof step.routing_plan_id === 'string'
+                  && isOfficeRole(step.office_role)
                   && step.responsibility in OFFICE_RESPONSIBILITIES
               );
               setRouteSteps(validSteps);
+              setCurrentRoutePlanId(currentRoute.id);
               setRouteStatus(currentRoute.status);
-              setRouteStateError(false);
+              setRouteStateError(assignmentStartError);
             }
           } else {
             setRouteSteps([]);
+            setCurrentRoutePlanId(null);
             setRouteStatus(null);
             setRouteStateError(false);
           }
@@ -337,6 +370,24 @@ export default function ApproverManagePage() {
 
   useEffect(() => { fetchDetails(); }, [fetchDetails]);
 
+  const assignmentConversations = useMemo(() => routeSteps.flatMap((step) => {
+    if (
+      !['office_forward', 'tourism_officer'].includes(step.assignment_source)
+      || !isOfficeRole(role)
+      || (step.office_role !== role && step.assigned_by_role !== role)
+      || !isOfficeRole(step.assigned_by_role)
+    ) {
+      return [];
+    }
+
+    return [{
+      stepId: step.id,
+      label: `${OFFICE_CONFIG[step.assigned_by_role].label} ↔ ${OFFICE_CONFIG[step.office_role].label}`,
+      canSend: ['pending', 'in_progress'].includes(step.status)
+        && !['completed', 'approved', 'withdrawn'].includes(sub?.status ?? ''),
+    }];
+  }), [role, routeSteps, sub?.status]);
+
   const downloadAttachment = async (attachment: SupportingAttachment) => {
     const { data, error } = await supabase.storage
       .from('workflow_uploads')
@@ -369,7 +420,8 @@ export default function ApproverManagePage() {
 
       const targetOfficeRole = recipient.replace(/^office:/, '');
       const activeAssignment = routeSteps.find((step) =>
-        step.office_role === targetOfficeRole
+        step.routing_plan_id === currentRoutePlanId
+        && step.office_role === targetOfficeRole
         && (step.status === 'pending' || step.status === 'in_progress')
       );
       let rpcName:
@@ -483,23 +535,43 @@ export default function ApproverManagePage() {
   }
 
   const statusConfig = getStatusStyles(sub.status);
+  const currentPlanSteps = routeSteps.filter((step) => step.routing_plan_id === currentRoutePlanId);
   const activeRouteStep = isOfficeRole(role)
-    ? routeSteps.find((step) => step.office_role === role && ['pending', 'in_progress'].includes(step.status))
+    ? currentPlanSteps.find((step) => step.office_role === role && ['pending', 'in_progress'].includes(step.status))
     : undefined;
   const hasOfficeAssignment = isOfficeRole(role)
     && routeSteps.some((step) => step.office_role === role && step.status !== 'skipped');
   const selectedOfficeRole = sub.selected_office_role ?? null;
   const initialDestinationRole = sub.initial_destination_role ?? null;
-  const isResponsibleOffice = isOfficeRole(role) && role === selectedOfficeRole;
+  const responsibleOfficeRole = selectedOfficeRole
+    ?? (isOfficeRole(initialDestinationRole) ? initialDestinationRole : null);
+  const isResponsibleOffice = isOfficeRole(role) && role === responsibleOfficeRole;
   const isRecipientOffice = Boolean(activeRouteStep) && !isResponsibleOffice;
-  const officeReview = isResponsibleOffice || hasOfficeAssignment;
-  const pendingAssignments = routeSteps.filter((step) =>
+  const activeAssignmentCreatedByCurrentOffice = isOfficeRole(role)
+    && currentPlanSteps.some((step) =>
+      step.assigned_by_role === role && ['pending', 'in_progress'].includes(step.status)
+    );
+  const officeReview = isResponsibleOffice || hasOfficeAssignment || activeAssignmentCreatedByCurrentOffice;
+  const pendingAssignments = currentPlanSteps.filter((step) =>
     step.status === 'pending' || step.status === 'in_progress'
   );
   const pendingAssignmentCount = pendingAssignments.length;
   const isCompleted = sub.status === 'completed' || sub.status === 'approved';
   const isWithdrawn = sub.status === 'withdrawn';
   const currentPendingAssignment = pendingAssignments[0];
+  const activeOfficeConversation = currentPlanSteps.find((step) =>
+    ['office_forward', 'tourism_officer'].includes(step.assignment_source)
+    && ['pending', 'in_progress'].includes(step.status)
+    && (step.office_role === role || step.assigned_by_role === role)
+  );
+  const defaultAssignmentStepId = isResponsibleOffice
+    ? null
+    : activeOfficeConversation?.id
+      ?? [...routeSteps].reverse().find((step) =>
+        ['office_forward', 'tourism_officer'].includes(step.assignment_source)
+        && (step.office_role === role || step.assigned_by_role === role)
+      )?.id
+      ?? null;
   const pendingAssignmentReason = currentPendingAssignment
     ? `Pending assignment with ${OFFICE_CONFIG[currentPendingAssignment.office_role].label}`
     : '';
@@ -559,7 +631,7 @@ export default function ApproverManagePage() {
     actionsByRecipient.submitter = responsibleOfficeActions;
     for (const officeRole of Object.keys(OFFICE_CONFIG)
       .filter(isOfficeRole)
-      .filter((office) => office !== role)) {
+      .filter((office) => office !== role && office !== responsibleOfficeRole)) {
       const targetAssignment = pendingAssignments.find((step) => step.office_role === officeRole);
       const forwardReason = routeStateError
         ? 'Could not verify the office assignment'
@@ -613,8 +685,34 @@ export default function ApproverManagePage() {
         unavailableReason: routeStateError ? 'Could not verify your office assignment' : undefined,
       },
     ];
+    for (const officeRole of Object.keys(OFFICE_CONFIG)
+      .filter(isOfficeRole)
+      .filter((office) => office !== role && office !== responsibleOfficeRole)) {
+      const recipientValue = `office:${officeRole}`;
+      const currentDocumentReason = !sub.file_path
+        ? 'Current document is unavailable to send to another office'
+        : sub.file_size > 10 * 1024 * 1024
+          ? 'Current document exceeds the 10 MB limit for sending to another office'
+          : undefined;
+      recipients.push({ value: recipientValue, label: OFFICE_CONFIG[officeRole].label });
+      actionsByRecipient[recipientValue] = [
+        {
+          value: 'forward',
+          label: 'Request recommendation',
+          buttonLabel: 'Request recommendation',
+          tone: 'primary',
+          unavailableReason: currentDocumentReason
+            || (routeStateError ? 'Could not verify the office assignment' : undefined)
+            || (sub.status !== 'in_process' ? 'Available only while status is In Process' : undefined),
+        },
+      ];
+    }
   }
-  const historicalRecipientView = hasOfficeAssignment && !isResponsibleOffice && !isRecipientOffice;
+  const isAssignmentSender = activeAssignmentCreatedByCurrentOffice;
+  const historicalRecipientView = hasOfficeAssignment
+    && !isResponsibleOffice
+    && !isRecipientOffice
+    && !isAssignmentSender;
   const composerClosed = isCompleted || isWithdrawn || historicalRecipientView;
   const processingNote = sub.office_comments || sub.mayor_comments || sub.approver_comments || '';
   const downloadOriginal = async () => {
@@ -890,6 +988,10 @@ export default function ApproverManagePage() {
                 submissionId={sub.id}
                 fileName={sub.file_name}
                 trackingNumber={sub.tracking_number ?? null}
+                assignmentConversations={assignmentConversations}
+                defaultAssignmentStepId={defaultAssignmentStepId}
+                showSubmitterConversation={isResponsibleOffice}
+                canSendSubmitterConversation={!isCompleted && !isWithdrawn && isResponsibleOffice}
                 workflowComposer={{
                   recipients,
                   actionsByRecipient,
@@ -897,8 +999,11 @@ export default function ApproverManagePage() {
                   initialAction,
                   initialMessage: processingNote,
                   statusLine,
-                  isClosed: composerClosed,
+                  showStatusLine: false,
+                  isClosed: composerClosed && !isAssignmentSender,
                   isOfficeWorkspace: true,
+                  activeAssignmentStepId: activeRouteStep?.id ?? null,
+                  showWorkflowActions: isResponsibleOffice || isRecipientOffice,
                   closedMessage: historicalRecipientView
                     ? 'This assignment is no longer active. You can still review its files and messages.'
                     : isWithdrawn

@@ -9,6 +9,10 @@ import {
   OFFICE_CONFIG,
   type OfficeRole,
 } from '@/lib/workflow/offices';
+import {
+  matchesOfficeDashboardFilter,
+  type OfficeDashboardFilter,
+} from '@/lib/workflow/office-dashboard';
 import { getSubmissionStatusLabel } from '@/lib/workflow/status';
 
 interface Submission {
@@ -30,7 +34,7 @@ interface Submission {
   } | null;
 }
 
-type Filter = 'all' | 'needs_action' | 'changes_requested' | 'completed' | 'returned' | 'withdrawn' | 'processed';
+type Filter = OfficeDashboardFilter;
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All assigned documents' },
@@ -41,30 +45,6 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'withdrawn', label: 'Withdrawn' },
   { key: 'processed', label: 'Processed by this office' },
 ];
-
-function matchesFilter(submission: Submission, filter: Filter, role: OfficeRole) {
-  const isResponsibleOffice = submission.selected_office_role === role;
-  const hasPendingAssignment = submission.officeRecord?.status === 'pending'
-    || submission.officeRecord?.status === 'in_progress';
-  switch (filter) {
-    case 'needs_action':
-      return (isResponsibleOffice
-        && ['submitted', 'in_process', 'changes_requested'].includes(submission.status))
-        || (submission.status === 'in_process' && hasPendingAssignment);
-    case 'changes_requested':
-      return isResponsibleOffice && submission.status === 'changes_requested';
-    case 'completed':
-      return submission.status === 'completed' || submission.status === 'approved';
-    case 'returned':
-      return isResponsibleOffice && submission.status === 'returned';
-    case 'withdrawn':
-      return submission.status === 'withdrawn';
-    case 'processed':
-      return ['approved', 'completed', 'returned', 'withdrawn'].includes(submission.officeRecord?.status ?? '');
-    default:
-      return true;
-  }
-}
 
 function statusLabel(status: string, assignment = false) {
   if (assignment && ['pending', 'in_progress'].includes(status)) return 'Pending assignment';
@@ -106,6 +86,8 @@ export default function OfficeDashboard({
     const planIds = (plans ?? []).map((plan) => plan.id);
     let routeSteps: {
       routing_plan_id: string;
+      office_role: string;
+      assigned_by_role: string | null;
       status: string;
       comments: string | null;
       decided_at: string | null;
@@ -115,8 +97,8 @@ export default function OfficeDashboard({
     if (planIds.length > 0) {
       const { data: steps, error: stepsError } = await supabase
         .from('workflow_routing_steps')
-        .select('routing_plan_id, status, comments, decided_at, completed_at')
-        .eq('office_role', role)
+        .select('routing_plan_id, office_role, assigned_by_role, status, comments, decided_at, completed_at')
+        .or(`office_role.eq.${role},assigned_by_role.eq.${role}`)
         .neq('status', 'skipped')
         .in('routing_plan_id', planIds);
 
@@ -241,18 +223,18 @@ export default function OfficeDashboard({
         submission.file_name.toLowerCase().includes(query) ||
         (submission.tracking_number ?? '').toLowerCase().includes(query) ||
         (submission.category ?? '').toLowerCase().includes(query);
-      return matchesSearch && matchesFilter(submission, filter, role);
+      return matchesSearch && matchesOfficeDashboardFilter(submission, filter, role);
     });
   }, [filter, role, search, submissions]);
 
   const needsReview = submissions.filter((submission) =>
-    matchesFilter(submission, 'needs_action', role)
+    matchesOfficeDashboardFilter(submission, 'needs_action', role)
   ).length;
   const completed = submissions.filter((submission) =>
-    matchesFilter(submission, 'completed', role)
+    matchesOfficeDashboardFilter(submission, 'completed', role)
   ).length;
   const recentActionItems = submissions
-    .filter((submission) => matchesFilter(submission, 'needs_action', role))
+    .filter((submission) => matchesOfficeDashboardFilter(submission, 'needs_action', role))
     .slice(0, 5);
 
   return (
@@ -428,7 +410,7 @@ export default function OfficeDashboard({
           ) : (
             <div className="space-y-3">
               {filteredSubmissions.map((submission) => {
-                const canReview = matchesFilter(submission, 'needs_action', role);
+                const canReview = matchesOfficeDashboardFilter(submission, 'needs_action', role);
                 const isAssignment = submission.selected_office_role !== role
                   && ['pending', 'in_progress'].includes(submission.officeRecord?.status ?? '');
                 const processedAt = submission.officeRecord?.completed_at

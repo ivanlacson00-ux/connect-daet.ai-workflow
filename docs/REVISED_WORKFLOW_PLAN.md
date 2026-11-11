@@ -29,7 +29,7 @@ The application role codes are `submitter`, `tourism_officer`, `municipal_treasu
 
 **Standard office-staff powers**
 - As the **responsible office:** receive, claim, message the submitter, request a recommendation or required clearance from another office, withdraw a pending assignment, request changes, return for redirection, and close.
-- As a **recipient office:** view the assigned submission, complete or return the assignment, and use the internal thread.
+- As a **recipient office:** view the assigned submission, complete or return the assignment, forward it onward when needed, and use the private assignment conversation.
 
 Any active staff member of an office may act for that office. The acting person’s name and timestamp are recorded for every action and shown to the submitter where relevant, including closure. Authorization uses active `profiles.role` office membership; a separate per-person designation or finer-grained office sub-role is not modeled.
 
@@ -75,15 +75,17 @@ Office-created assignments are tracked separately, not as submission statuses.
 - Staff may optionally **claim** a submission to show who is handling it. Claiming prevents duplicate work and does not restrict who may act or close. A claim can be released or reassigned within the office, and is released automatically when the claimer’s account is deactivated.
 
 ### 4.3 Process
-The responsible office reviews documents, then closes, requests a recommendation from another office, requests changes, or returns the submission to the submitter. The workflow action list depends on the selected recipient; selecting another office creates the recommendation assignment, so there is no separate Forward action. Conversation messages remain available in the Messages panel. The action note is optional unless that action requires a reason or recommendation context. If no other office is involved, the responsible office processes and closes the submission itself.
+The responsible office reviews documents, then closes, requests a recommendation from another office, requests changes, or returns the submission to the submitter. The workflow action list depends on the selected recipient; selecting another office creates the recommendation assignment, so there is no separate Forward action. The submitter conversation remains separate from private office-assignment conversations. The action note is optional unless that action requires a reason or recommendation context. If no other office is involved, the responsible office processes and closes the submission itself.
 
 ### 4.4 Request a recommendation
-- In the workflow action panel, the responsible office selects another office as the recipient and chooses **Request recommendation**. This creates the assignment; there is no separate Forward action. Recommendation context is required. The recipient receives the actual document, and the file version sent is recorded on the assignment.
+- In the workflow action panel, the responsible office selects another office as the recipient and chooses **Request recommendation**. This creates the assignment; there is no separate Forward action. A recommendation context is optional. The recipient receives the actual document, and the file version sent is recorded on the assignment.
 - **Sequential by default:** one office at a time. A new assignment is blocked while another assignment is Pending.
 - **Parallel by choice:** the office may explicitly choose “send to several offices at the same time.” Each office gets its own assignment, and closure waits for all of them.
-- Validation: the target must be an active office, different from the responsible office, with at least one active staff member and no Pending assignment on this submission. Creating an assignment is not allowed while the submission is in Changes Requested.
+- Validation: the target must be an active office, different from both the acting office and the responsible office, with at least one active staff member and no other Pending assignment on this submission. Creating an assignment is not allowed while the submission is in Changes Requested.
 - An assignment never changes the responsible office or the submitter’s initial destination.
 - The same office may be consulted again later (a new, linked assignment) once its previous assignment is no longer Pending.
+- When a recipient office forwards its active assignment onward, that assignment is recorded as delegated/completed and a new assignment is opened for the next office. The responsible office remains the overall owner and receives assignment status/outcome updates.
+- Every assignment has a private conversation between only the assigning office and the receiving office. Forwarding onward creates a new conversation for the next pair; the next office does not gain access to earlier conversations.
 
 ### 4.5 Required Clearances
 - When the selected office and document type have configured clearances, the submission shows them as a checklist of **Not yet dispatched** items. Closure is blocked until every one is Completed.
@@ -96,7 +98,8 @@ The responsible office reviews documents, then closes, requests a recommendation
 ### 4.6 Recipient office actions
 - **Complete** the assignment, with an optional note (plus the Formal Decision Record when required).
 - **Return** the assignment to the responsible office with a required reason, for example when information from the submitter is needed. A Returned assignment no longer blocks the responsible office, which can then request changes and create another assignment afterwards.
-- Recipient offices cannot request changes from the submitter, create assignments for other offices, or close. They communicate with the responsible office through the internal thread. If a third office should be involved, they ask the responsible office, which decides whether to create another assignment.
+- **Forward onward** to another office when that office should contribute. This closes the current office’s assignment as delegated work and creates a new assignment to the selected office; it does not transfer overall ownership or let the recipient close the submission.
+- Recipient offices cannot request changes from the submitter or close the submission. They communicate with the assigning office in their private assignment conversation. If they forward onward, that next conversation is private to the immediate assigning and receiving offices. The submitter and earlier offices do not see its messages or files unless they are participants in that specific assignment.
 
 ### 4.7 Request changes
 - The responsible office sends a message describing what is needed. Status becomes **Changes Requested**.
@@ -155,13 +158,16 @@ The workflow action list depends on **To**. **Send message** is not a workflow a
 | | Submitter | Responsible office | Recipient office | System admin |
 |---|---|---|---|---|
 | Submission, files, versions | Yes | Yes | Yes (while assigned) | No by default |
-| Messages with submitter | Yes | Yes | Read only | No |
-| Internal thread | No | Yes | Yes | No |
+| Submitter ↔ responsible-office conversation | Yes | Yes | No | No |
+| Private assignment conversation | No | Only for assignments it created or received | Only for assignments it received or created by forwarding onward | No |
+| Files attached to an assignment conversation | No | Only for assignments it created or received | Only for assignments it received or created by forwarding onward | No |
 | Private staff notes | No | Authoring office only | Authoring office only | No |
 | Workflow history | Yes (offices, actions, statuses; not internal content) | Yes | Yes | Audit access only |
 | Closure note, closure file, post-closure notes | Yes | Yes | Yes | No |
 
-- The submitter hears from one voice: the responsible office. Recipient offices use the internal thread and the Return action instead of messaging the submitter (Proposed default).
+- The submitter hears from one voice: the responsible office. Recipient offices never message the submitter directly.
+- Assignment conversations are scoped to one assignment and its two participants. For an A → B → C chain, A and B can access A ↔ B; B and C can access B ↔ C; A and C and the submitter cannot access B ↔ C.
+- The responsible office can switch between its submitter conversation and the assignment conversations it participates in. A recipient office sees only the assignment conversations in which its office is the receiver or immediate sender; its active assignment conversation is selected by default.
 - Admin access to submission content, if ever needed for support, must be an explicit, logged exception.
 - Tourism Officers do not see other offices’ submissions unless assigned.
 
@@ -176,7 +182,7 @@ The workflow action list depends on **To**. **Send message** is not a workflow a
 
 ## 8. Workflow history (append-only)
 
-Recorded events include: submission created; destination selected (initial or redirect); document type set; received; claimed or released; file version added; recommendation requested (sequential or parallel); clearance dispatched; assignment completed, returned, or withdrawn; formal decision recorded or superseded; changes requested; changes submitted; returned to submitter; withdrawn by submitter; closed; post-closure note added; follow-up created. Each event stores the actor, office, timestamp, and a reason or note where applicable.
+Recorded events include: submission created; destination selected (initial or redirect); document type set; received; claimed or released; file version added; recommendation requested (sequential or parallel); assignment forwarded onward; clearance dispatched; assignment completed, returned, or withdrawn; formal decision recorded or superseded; changes requested; changes submitted; returned to submitter; withdrawn by submitter; closed; post-closure note added; follow-up created. Each event stores the actor, office, timestamp, and a reason or note where applicable. Internal conversation text and attachments are not copied into submitter-visible audit history.
 
 Initial destination selections, redirects, and office-created assignments must remain distinguishable in data, permissions, interface, and history.
 
@@ -199,11 +205,11 @@ Initial destination selections, redirects, and office-created assignments must r
 5. Handle a missing or unreadable profile with an explicit safe sign-in or error path, never a redirect to the same route.
 6. Validate the submitter’s destination server-side against destinations available to that submitter, including Tourism and redirects. Client input must not grant access or authority.
 7. Validate the office and document-type pair against the database catalogue. `Other` requires a bounded custom description; standard types accept none.
-8. Validate every office assignment: target active, different from the responsible office, with active staff, context message present, current document attached, sequential or explicit parallel rule respected, and no open change request.
+8. Validate every office assignment: target active, different from both the acting office and the responsible office, with active staff, current document attached, sequential or explicit parallel rule respected, and no open change request. Recommendation context is optional unless a specific action requires it.
 9. Closure is authorized only for active staff of the responsible office. System administration does not confer this.
 10. Closure fails in the database if any assignment is Pending or any Required Clearance is incomplete. It requires no category, message, or attachment.
 11. Request-changes fails in the database if any assignment is Pending. Creating an assignment fails if status is Changes Requested.
-12. Only the responsible office can create or withdraw assignments, request changes, return, or close. Recipient offices can only complete or return their own assignment.
+12. The responsible office can create or withdraw assignments, request changes, return the submission, or close it. A recipient office can complete or return its own assignment, or forward that assignment onward to a different active office. Recipient offices cannot message the submitter or close the submission.
 13. Submitter withdrawal is allowed only while status is Submitted and `received_at` is null. The database locks the submission row and enforces this cutoff; UI restrictions alone are insufficient.
 14. Formal approval or denial exists only as separate attributable Formal Decision Records where law or configuration requires them. There are no generic approve or reject actions for ordinary processing.
 15. Keep an append-only audit history that cannot be edited or deleted by users or administrators.
@@ -269,7 +275,7 @@ Initial destination selections, redirects, and office-created assignments must r
 | E4 | Recommendation unanswered | Reminders; MO withdraws the assignment and closes without it, or requests a recommendation from another office |
 | E5 | Required Clearance unanswered | Closure stays blocked; escalating reminders; no waiver (see Open decisions) |
 | E6 | Target office has no active staff | Assignment creation is blocked; if staff become inactive after dispatch, MO is notified and may withdraw |
-| E7 | Recipient wants a third office | Recipient asks MO in the internal thread; MO creates the assignment |
+| E7 | Recipient wants a third office | Recipient forwards its active assignment to the third office; the new office gets a separate private assignment conversation |
 | E8 | Consult the same office again | Allowed as a new linked assignment when none is Pending |
 | E9 | Admin tries to close or read content | Denied. Config changes affect only new submissions |
 | E10 | Office or type deactivated mid-flight | In-flight unaffected; cannot be selected for new submissions or redirects |
@@ -292,7 +298,7 @@ Initial destination selections, redirects, and office-created assignments must r
 9. A Returned assignment lets the responsible office request changes.
 10. Parallel assignments require an explicit choice; the default is one at a time.
 11. Return to submitter withdraws Pending assignments; redirect keeps files and history.
-12. Recipient offices cannot create assignments for other offices, close, or request changes.
+12. A recipient office can forward its active assignment onward, but cannot close the submission or request changes from the submitter.
 13. Private staff notes are not readable by the submitter or other offices.
 14. Audit history rows cannot be updated or deleted.
 15. No code path infers formal approval or denial from assignment completion or closure.
@@ -308,6 +314,10 @@ Initial destination selections, redirects, and office-created assignments must r
 25. A missing profile never causes a redirect loop.
 26. Every office role can open the shared File Registry index and detail pages.
 27. Responding to a change request succeeds without a file.
+28. Submitter messages and files are visible only to the submitter and responsible office; recipient offices cannot read them.
+29. Each office-forward assignment has a private two-office conversation. Forwarding A → B → C creates separate A ↔ B and B ↔ C conversations; C cannot read A ↔ B and A cannot read B ↔ C.
+30. Message notifications and storage access follow the same assignment-participant boundary as message reads.
+31. A recipient office cannot read or send messages in the submitter/responsible-office conversation.
 
 ## 13. Legacy mapping and migration notes
 
@@ -338,8 +348,9 @@ When auditing or implementing the project:
 - Treat this document as the source of truth for intended workflow behavior.
 - Compare the actual code and database schema against it. Do not claim a feature is implemented merely because a file or table exists.
 - Identify mismatches and missing requirements before proposing changes.
-- Keep the action list recipient-dependent: To Submitter offers Request changes, Return for redirection, and Close submission; To another office offers Request recommendation or Request clearance, and Withdraw assignment when pending; a recipient office addressing the responsible office offers Complete assignment or Return assignment; a submitter addressing the responsible office offers Submit response, Redirect submission, or Withdraw submission only before receipt. Do not expose a standalone Send message action.
-- Make direct routing, one responsible office, ordinary-office Tourism behavior, Return and redirect, optional parallel assignments, recipient-dependent actions, submitter withdrawal only before receipt, mutual exclusion of change requests and pending assignments, and **Close Submission** (with confirmation and database-enforced checks) consistent across the interface, backend APIs, database functions, authorization policies, and audit history.
+- Keep the action list recipient-dependent: To Submitter offers Request changes, Return for redirection, and Close submission; To another office offers Request recommendation or Request clearance, and Withdraw assignment when pending; a recipient office addressing the responsible office offers Complete assignment or Return assignment; a recipient office addressing another office can forward its active assignment onward; a submitter addressing the responsible office offers Submit response, Redirect submission, or Withdraw submission only before receipt. Do not expose a standalone Send message action.
+- Keep the submitter/responsible-office conversation separate from office-assignment conversations. Enforce assignment participants for message rows, read receipts, attachment metadata, storage uploads/downloads, and notifications in the database; interface-only filtering is not sufficient.
+- Make direct routing, one responsible office, ordinary-office Tourism behavior, Return and redirect, optional parallel assignments, recipient-dependent actions, chained office assignments with pair-scoped conversations, submitter withdrawal only before receipt, mutual exclusion of change requests and pending assignments, and **Close Submission** (with confirmation and database-enforced checks) consistent across the interface, backend APIs, database functions, authorization policies, and audit history.
 - Do not change production data or production configuration without explicit authorization.
 - Do not execute SQL, migrations, or destructive operations during an audit-only task. Never contact a live Supabase project unless explicitly told to.
 - Preserve existing data, uncommitted changes, and existing interface patterns unless the user approves a change.

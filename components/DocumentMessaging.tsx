@@ -13,7 +13,8 @@ import CloseSubmissionDialog from '@/components/CloseSubmissionDialog';
 const PAGE_SIZE = 50;
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
-const MESSAGE_FIELDS = 'id, submission_id, sender_id, sender_name, sender_role, body, created_at';
+const MESSAGE_FIELDS = 'id, submission_id, routing_step_id, sender_id, sender_name, sender_role, body, created_at';
+const EMPTY_ASSIGNMENT_CONVERSATIONS: AssignmentConversation[] = [];
 
 // ─── Icons & small UI helpers ────────────────────────────────────────────────
 type IconName = 'clock' | 'file' | 'info' | 'message' | 'paperclip' | 'send' | 'x';
@@ -39,12 +40,13 @@ function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
 const getInitials = (name: string) =>
   (name || '?').split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || '?';
 
-function AttachControl({ id, inputRef, disabled, limit, onFiles }: {
+function AttachControl({ id, inputRef, disabled, limit, onFiles, compact = false }: {
   id: string;
   inputRef: Ref<HTMLInputElement>;
   disabled: boolean;
   limit: number;
   onFiles: (files: File[]) => void;
+  compact?: boolean;
 }) {
   return (
     <div className="flex min-w-0 items-center gap-3">
@@ -70,9 +72,11 @@ function AttachControl({ id, inputRef, disabled, limit, onFiles }: {
       >
         <Icon name="paperclip" size={15} /> Attach file
       </label>
-      <span className="hidden text-[10px] leading-tight text-muted-text sm:block">
-        Up to {limit} files · 10 MB each
-      </span>
+      {!compact && (
+        <span className="hidden text-[10px] leading-tight text-muted-text sm:block">
+          Up to {limit} files · 10 MB each
+        </span>
+      )}
     </div>
   );
 }
@@ -110,6 +114,7 @@ function FileChips({ files, disabled, onRemove }: {
 interface MessageRow {
   id: string;
   submission_id: string;
+  routing_step_id: string | null;
   sender_id: string;
   sender_name: string;
   sender_role: string;
@@ -129,6 +134,16 @@ interface MessageAttachment {
 
 interface SharedMessageAttachment extends MessageAttachment {
   created_at: string;
+  sender_name: string;
+  sender_role: string;
+  routing_step_id: string | null;
+  conversation_label: string;
+}
+
+interface AssignmentConversation {
+  stepId: string;
+  label: string;
+  canSend: boolean;
 }
 
 interface Message extends MessageRow {
@@ -146,6 +161,11 @@ interface DocumentMessagingProps {
   fileName: string;
   trackingNumber: string | null;
   activity: ReactNode;
+  afterSharedFiles?: ReactNode;
+  assignmentConversations?: AssignmentConversation[];
+  defaultAssignmentStepId?: string | null;
+  showSubmitterConversation?: boolean;
+  canSendSubmitterConversation?: boolean;
   workflowComposer?: {
     recipients: { value: string; label: string }[];
     actionsByRecipient: Record<string, ComposerAction[]>;
@@ -153,6 +173,7 @@ interface DocumentMessagingProps {
     initialAction: string;
     initialMessage?: string;
     statusLine: string;
+    showStatusLine?: boolean;
     processingNote?: string;
     contextNote?: string;
     isClosed?: boolean;
@@ -160,6 +181,8 @@ interface DocumentMessagingProps {
     busy?: boolean;
     pendingAssignmentCount?: number;
     isOfficeWorkspace?: boolean;
+    activeAssignmentStepId?: string | null;
+    showWorkflowActions?: boolean;
     sourceDocument?: {
       filePath: string | null;
       fileType: string;
@@ -216,12 +239,18 @@ export default function DocumentMessaging({
   fileName,
   trackingNumber,
   activity,
+  afterSharedFiles,
+  assignmentConversations = EMPTY_ASSIGNMENT_CONVERSATIONS,
+  defaultAssignmentStepId = null,
+  showSubmitterConversation,
+  canSendSubmitterConversation,
   workflowComposer,
 }: DocumentMessagingProps) {
   const supabase = useMemo(() => createClient(), []);
   const [userId, setUserId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sharedAttachments, setSharedAttachments] = useState<SharedMessageAttachment[]>([]);
+  const [selectedThreadStepId, setSelectedThreadStepId] = useState<string | null>(defaultAssignmentStepId);
   // Office action form state
   const [draft, setDraft] = useState(workflowComposer?.initialMessage ?? '');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -248,6 +277,17 @@ export default function DocumentMessaging({
   const messagesRef = useRef<Message[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
   const isOfficeWorkspace = workflowComposer?.isOfficeWorkspace ?? false;
+  const canViewSubmitterConversation = isOfficeWorkspace
+    ? showSubmitterConversation === true
+    : true;
+  const canSendSubmitterThread = canSendSubmitterConversation
+    ?? !Boolean(workflowComposer?.isClosed);
+  const selectedAssignmentConversation = assignmentConversations.find(
+    (conversation) => conversation.stepId === selectedThreadStepId,
+  );
+  const canSendCurrentConversation = selectedThreadStepId
+    ? Boolean(selectedAssignmentConversation?.canSend)
+    : canViewSubmitterConversation && canSendSubmitterThread;
 
   // Actions depend on the selected recipient. Conversation messages have a separate composer.
   const recipientActions = workflowComposer?.actionsByRecipient[selectedRecipient] ?? [];
@@ -256,7 +296,10 @@ export default function DocumentMessaging({
   const recipientLabel = workflowComposer?.recipients.find((recipient) => recipient.value === selectedRecipient)?.label
     ?? 'recipient';
   const actionDisabled = sending || Boolean(workflowComposer?.busy) || Boolean(workflowComposer?.isClosed);
-  const conversationDisabled = actionDisabled || !userId;
+  const conversationDisabled = sending
+    || Boolean(workflowComposer?.busy)
+    || !userId
+    || !canSendCurrentConversation;
   const actionAttachLimit = currentAction.value === 'forward' ? MAX_ATTACHMENTS - 1 : MAX_ATTACHMENTS;
 
   useEffect(() => {
@@ -264,6 +307,10 @@ export default function DocumentMessaging({
     setSelectedRecipient(workflowComposer.initialRecipient);
     setSelectedAction(workflowComposer.initialAction);
   }, [submissionId, workflowComposer?.initialAction, workflowComposer?.initialRecipient]);
+
+  useEffect(() => {
+    setSelectedThreadStepId(defaultAssignmentStepId);
+  }, [submissionId, defaultAssignmentStepId]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -327,8 +374,40 @@ export default function DocumentMessaging({
       return;
     }
 
-    setSharedAttachments(data ?? []);
-  }, [submissionId, supabase]);
+    const attachments = data ?? [];
+    if (attachments.length === 0) {
+      setSharedAttachments([]);
+      return;
+    }
+
+    const { data: messageRows, error: messagesError } = await supabase
+      .from('workflow_messages')
+      .select('id, sender_name, sender_role, routing_step_id')
+      .in('id', attachments.map((attachment) => attachment.message_id));
+    if (messagesError) {
+      console.error('Could not load shared-file conversation details:', messagesError.message);
+      setConversationError('Could not load file sender details. Refresh the page to try again.');
+      return;
+    }
+
+    const messagesById = new Map((messageRows ?? []).map((message) => [message.id, message]));
+    const labelsByStep = new Map(
+      assignmentConversations.map((conversation) => [conversation.stepId, conversation.label]),
+    );
+    setSharedAttachments(attachments.flatMap((attachment) => {
+      const message = messagesById.get(attachment.message_id);
+      if (!message) return [];
+      return [{
+        ...attachment,
+        sender_name: message.sender_name,
+        sender_role: message.sender_role,
+        routing_step_id: message.routing_step_id,
+        conversation_label: message.routing_step_id
+          ? labelsByStep.get(message.routing_step_id) ?? 'Office assignment conversation'
+          : 'Submitter conversation',
+      }];
+    }));
+  }, [assignmentConversations, submissionId, supabase]);
 
   const markMessagesRead = useCallback(async (rows: MessageRow[], readerId: string) => {
     const unreadMessages = rows.filter((message) => message.sender_id !== readerId);
@@ -366,6 +445,10 @@ export default function DocumentMessaging({
       .order('id', { ascending: false })
       .limit(PAGE_SIZE);
 
+    query = selectedThreadStepId
+      ? query.eq('routing_step_id', selectedThreadStepId)
+      : query.is('routing_step_id', null);
+
     if (before) {
       query = query.or(
         `created_at.lt.${before.created_at},and(created_at.eq.${before.created_at},id.lt.${before.id})`
@@ -379,7 +462,7 @@ export default function DocumentMessaging({
     await markMessagesRead(rows, readerId);
     const page = await refreshMessageMetadata(rows);
     return page.reverse();
-  }, [markMessagesRead, refreshMessageMetadata, submissionId, supabase]);
+  }, [markMessagesRead, refreshMessageMetadata, selectedThreadStepId, submissionId, supabase]);
 
   const refreshLatest = useCallback(async (readerId: string) => {
     const page = await fetchPage(readerId);
@@ -420,7 +503,7 @@ export default function DocumentMessaging({
       if (!active) return;
 
       channel = supabase
-        .channel(`document-messages-${submissionId}-${user.id}`)
+        .channel(`document-messages-${submissionId}-${selectedThreadStepId ?? 'submitter'}-${user.id}`)
         .on('postgres_changes', {
           event: 'INSERT',
           schema: 'public',
@@ -483,7 +566,7 @@ export default function DocumentMessaging({
       active = false;
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [fetchPage, refreshLatest, refreshSharedAttachments, refreshVisibleMetadata, submissionId, supabase]);
+  }, [fetchPage, refreshLatest, refreshSharedAttachments, refreshVisibleMetadata, selectedThreadStepId, submissionId, supabase]);
 
   const loadEarlierMessages = async () => {
     const oldestMessage = messages[0];
@@ -562,6 +645,7 @@ export default function DocumentMessaging({
   const uploadMessageAttachments = async (
     files: File[],
     messageId: string,
+    routingStepId: string | null = selectedThreadStepId,
   ): Promise<{ rows: UploadedAttachment[]; paths: string[] }> => {
     if (!userId) throw new Error('Sign in to send this message.');
     const rows: UploadedAttachment[] = [];
@@ -569,7 +653,9 @@ export default function DocumentMessaging({
     try {
       for (const [index, file] of files.entries()) {
         const safeName = file.name.replace(/[^\w.-]/g, '_');
-        const filePath = `${submissionId}/${userId}/${messageId}/${crypto.randomUUID()}-${index}-${safeName}`;
+        const filePath = routingStepId
+          ? `${submissionId}/${userId}/${routingStepId}/${messageId}/${crypto.randomUUID()}-${index}-${safeName}`
+          : `${submissionId}/${userId}/${messageId}/${crypto.randomUUID()}-${index}-${safeName}`;
         const contentType = getWorkflowFileMimeType(file.name);
         const { error: uploadError } = await supabase.storage
           .from('workflow_message_attachments')
@@ -623,10 +709,11 @@ export default function DocumentMessaging({
     body: string,
     files: File[],
     notify: (text: string) => void = setNotice,
+    routingStepId: string | null = selectedThreadStepId,
   ) => {
     if (!userId) throw new Error('Sign in to send this message.');
     const messageId = crypto.randomUUID();
-    const { rows, paths } = await uploadMessageAttachments(files, messageId);
+    const { rows, paths } = await uploadMessageAttachments(files, messageId, routingStepId);
     let messageSent = false;
     let attachmentsSaved = true;
     try {
@@ -635,6 +722,7 @@ export default function DocumentMessaging({
         .insert({
           id: messageId,
           submission_id: submissionId,
+          routing_step_id: routingStepId,
           sender_id: userId,
           body,
         });
@@ -704,7 +792,10 @@ export default function DocumentMessaging({
     try {
       if (action.value === 'send_message') {
         if (!message) throw new Error('Enter a message before sending.');
-        const attachmentsSaved = await sendPlainMessage(message, files);
+        const actionThreadId = selectedRecipient === 'submitter'
+          ? null
+          : workflowComposer.activeAssignmentStepId ?? selectedThreadStepId;
+        const attachmentsSaved = await sendPlainMessage(message, files, setNotice, actionThreadId);
         if (attachmentsSaved) setNotice('Message sent.');
       } else if (action.value === 'forward') {
         if (!userId) throw new Error('Sign in to forward this submission.');
@@ -724,13 +815,19 @@ export default function DocumentMessaging({
           type: workflowComposer.sourceDocument.fileType || 'application/octet-stream',
         });
         const messageId = crypto.randomUUID();
-        const { rows, paths } = await uploadMessageAttachments([currentDocument, ...files], messageId);
+        const assignmentId = crypto.randomUUID();
+        const { rows, paths } = await uploadMessageAttachments(
+          [currentDocument, ...files],
+          messageId,
+          assignmentId,
+        );
         let forwarded = false;
         try {
           const { error: forwardError } = await supabase.rpc('forward_workflow_submission_to_office', {
             target_submission_id: submissionId,
             target_office_role: selectedRecipient.replace(/^office:/, ''),
             message_id: messageId,
+            target_assignment_id: assignmentId,
             message_body: message || null,
             attachment_records: rows,
           });
@@ -750,7 +847,12 @@ export default function DocumentMessaging({
       } else {
         let actionFiles = files;
         if (files.length > 0 && ['complete_assignment', 'return_assignment'].includes(action.value)) {
-          const attachmentsSaved = await sendPlainMessage('Supporting document shared for this assignment.', files);
+          const attachmentsSaved = await sendPlainMessage(
+            'Supporting document shared for this assignment.',
+            files,
+            setNotice,
+            workflowComposer.activeAssignmentStepId ?? selectedThreadStepId,
+          );
           if (!attachmentsSaved) {
             throw new Error('The workflow action was not completed because the attached document could not be saved.');
           }
@@ -831,7 +933,13 @@ export default function DocumentMessaging({
   const sendConversationMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const body = conversationDraft.trim();
-    if (!userId || sending || workflowComposer?.busy || workflowComposer?.isClosed) return;
+    if (
+      !userId
+      || sending
+      || workflowComposer?.busy
+      || workflowComposer?.isClosed
+      || !canSendCurrentConversation
+    ) return;
     if (!body) {
       setConversationError('Write a message before sending.');
       conversationInputRef.current?.focus();
@@ -990,10 +1098,15 @@ export default function DocumentMessaging({
       )}
     </div>
   );
+  const conversationLabel = selectedThreadStepId
+    ? selectedAssignmentConversation?.label ?? 'Office assignment conversation'
+    : 'Submitter conversation';
+  const canChooseConversation = assignmentConversations.length > 1
+    || (canViewSubmitterConversation && assignmentConversations.length > 0);
 
   return (
     <section className="space-y-5">
-      {workflowComposer && (
+      {workflowComposer && workflowComposer.showStatusLine !== false && (
         <div className="flex items-center gap-2.5 rounded-xl border border-warm-border bg-card px-4 py-2.5 text-[11px] font-medium text-muted-text" role="status">
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-clay" />
           {workflowComposer.statusLine}
@@ -1009,7 +1122,7 @@ export default function DocumentMessaging({
               <div>
                 <h3 className="text-sm font-bold text-warm-text">Messages</h3>
                 <p className="mt-0.5 text-[10px] text-muted-text">
-                  {trackingNumber || fileName} · Shared with the applicant and authorized staff
+                  {trackingNumber || fileName} · {conversationLabel}
                 </p>
               </div>
               <span className="rounded-full bg-clay-soft px-2 py-0.5 text-[10px] font-bold text-clay">{messages.length}</span>
@@ -1021,6 +1134,53 @@ export default function DocumentMessaging({
               {liveStatus === 'connected' ? 'Live' : liveStatus === 'disconnected' ? 'Paused' : 'Connecting...'}
             </span>
           </header>
+
+          {canChooseConversation && (
+            <nav
+              aria-label="Choose conversation"
+              className="flex flex-wrap gap-2 border-b border-warm-border bg-[#fbf9f6] px-4 py-3 md:px-5"
+            >
+              {canViewSubmitterConversation && (
+                <button
+                  type="button"
+                  aria-pressed={selectedThreadStepId === null}
+                  onClick={() => {
+                    setSelectedThreadStepId(null);
+                    setConversationDraft('');
+                    setConversationFiles([]);
+                    setConversationError('');
+                  }}
+                  className={`rounded-full border px-3 py-1.5 text-[10px] font-bold transition-colors ${
+                    selectedThreadStepId === null
+                      ? 'border-clay bg-clay text-white'
+                      : 'border-warm-border bg-white text-warm-text hover:border-clay'
+                  }`}
+                >
+                  Submitter conversation
+                </button>
+              )}
+              {assignmentConversations.map((thread) => (
+                <button
+                  key={thread.stepId}
+                  type="button"
+                  aria-pressed={selectedThreadStepId === thread.stepId}
+                  onClick={() => {
+                    setSelectedThreadStepId(thread.stepId);
+                    setConversationDraft('');
+                    setConversationFiles([]);
+                    setConversationError('');
+                  }}
+                  className={`rounded-full border px-3 py-1.5 text-[10px] font-bold transition-colors ${
+                    selectedThreadStepId === thread.stepId
+                      ? 'border-clay bg-clay text-white'
+                      : 'border-warm-border bg-white text-warm-text hover:border-clay'
+                  }`}
+                >
+                  {thread.label}
+                </button>
+              ))}
+            </nav>
+          )}
 
           <div id={`messages-panel-${submissionId}`}>{conversation}</div>
 
@@ -1038,7 +1198,7 @@ export default function DocumentMessaging({
               <p role="status" className="rounded-xl border border-pending-bg bg-pending-bg/50 px-4 py-3 text-xs font-medium text-pending-text">{conversationNotice}</p>
             )}
             <label htmlFor={`conversation-message-${submissionId}`} className="sr-only">
-              Write a message to the submitter or office staff
+              Write a message in {conversationLabel}
             </label>
             <textarea
               ref={conversationInputRef}
@@ -1057,7 +1217,7 @@ export default function DocumentMessaging({
               maxLength={5000}
               rows={3}
               disabled={conversationDisabled}
-              placeholder="Write a message to the submitter or office staff…"
+              placeholder={`Write a message in ${conversationLabel}…`}
               className="block min-h-20 w-full resize-y rounded-xl border border-warm-border bg-white p-3 text-xs leading-relaxed text-warm-text outline-none placeholder:text-muted-text/70 focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:bg-sidebar disabled:opacity-70"
             />
             <FileChips
@@ -1089,6 +1249,11 @@ export default function DocumentMessaging({
             {workflowComposer?.isClosed && (
               <p role="status" className="text-[11px] font-medium text-muted-text">
                 {workflowComposer.closedMessage ?? 'This submission is closed.'}
+              </p>
+            )}
+            {!canSendCurrentConversation && !workflowComposer?.busy && (
+              <p role="status" className="text-[11px] font-medium text-muted-text">
+                This conversation is closed for new messages.
               </p>
             )}
             {workflowComposer?.busy && !sending && (
@@ -1150,6 +1315,9 @@ export default function DocumentMessaging({
                       {Math.max(1, Math.round(attachment.file_size / 1024))} KB
                       {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
                     </span>
+                    <span className="mt-0.5 block truncate text-[9px] text-muted-text">
+                      {attachment.conversation_label} · {attachment.sender_name}
+                    </span>
                   </span>
                   <span className="shrink-0 text-[10px] font-semibold text-clay">Open</span>
                 </button>
@@ -1159,8 +1327,10 @@ export default function DocumentMessaging({
         </div>
       </section>
 
+      {afterSharedFiles}
+
       {/* ── Your office action ── */}
-      {workflowComposer && (
+      {workflowComposer && workflowComposer.showWorkflowActions !== false && (
         <div className="space-y-3">
           {error && (
             <p role="alert" className="rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">{error}</p>
@@ -1194,63 +1364,9 @@ export default function DocumentMessaging({
               )}
               {workflowComposer.renderActionFields?.(currentAction.value)}
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="min-w-0 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
-                  To
-                  <select
-                    aria-label="To"
-                    value={selectedRecipient}
-                    onChange={(event) => {
-                      const recipient = event.target.value;
-                      setSelectedRecipient(recipient);
-                      setSelectedAction(workflowComposer.actionsByRecipient[recipient]?.[0]?.value ?? '');
-                      setError('');
-                    }}
-                    disabled={actionDisabled}
-                    className="mt-1.5 block h-10 w-full cursor-pointer rounded-xl border border-warm-border bg-white px-3 text-xs font-medium normal-case tracking-normal text-warm-text outline-none focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {workflowComposer.recipients.map((recipient) => (
-                      <option key={recipient.value} value={recipient.value}>{recipient.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="min-w-0 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
-                  Action
-                  <select
-                    aria-label="Action"
-                    value={currentAction.value}
-                    onChange={(event) => {
-                      setSelectedAction(event.target.value);
-                      setError('');
-                    }}
-                    disabled={actionDisabled}
-                    className="mt-1.5 block h-10 w-full cursor-pointer rounded-xl border border-warm-border bg-white px-3 text-xs font-medium normal-case tracking-normal text-warm-text outline-none focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {actionList.map((action) => (
-                      <option
-                        key={action.value}
-                        value={action.value}
-                        aria-disabled={Boolean(action.unavailableReason)}
-                        className={action.unavailableReason ? 'text-muted-text' : undefined}
-                      >
-                        {action.unavailableReason
-                          ? `${action.label} — unavailable: ${action.unavailableReason}`
-                          : action.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              {currentAction.unavailableReason && (
-                <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-pending-text" role="status">
-                  <span className="mt-0.5 shrink-0"><Icon name="info" size={13} /></span>
-                  {currentAction.unavailableReason}
-                </p>
-              )}
-
               <div>
                 <label htmlFor={`message-${submissionId}`} className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
-                  Message to {recipientLabel}
+                  Action details
                 </label>
                 <textarea
                   ref={messageInputRef}
@@ -1268,9 +1384,9 @@ export default function DocumentMessaging({
                   rows={4}
                   placeholder={currentAction.requiresMessage
                     ? currentAction.value === 'respond_changes'
-                      ? 'Write your response (required)…'
-                      : 'Enter a reason (required)…'
-                    : `Add an optional note for ${recipientLabel}…`}
+                      ? 'Explain how you addressed the requested changes (required)…'
+                      : 'Provide the required details for this action…'
+                    : 'Provide context or add a note (optional)…'}
                   className="block min-h-28 w-full resize-y rounded-xl border border-warm-border bg-white p-3 text-xs leading-relaxed text-warm-text outline-none placeholder:text-muted-text/70 focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:bg-sidebar disabled:opacity-70"
                 />
                 <p className="mt-1 text-right text-[9px] text-muted-text">{draft.length}/5000</p>
@@ -1282,22 +1398,74 @@ export default function DocumentMessaging({
                 onRemove={(file) => setSelectedFiles((current) => current.filter((selected) => selected !== file))}
               />
 
-              <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 border-t border-warm-border/70 pt-3">
                 <AttachControl
                   id={`message-files-${submissionId}`}
                   inputRef={fileInputRef}
                   disabled={actionDisabled}
                   limit={actionAttachLimit}
                   onFiles={handleFileSelection}
+                  compact
                 />
+                <div className="flex min-w-0 flex-wrap items-center justify-start gap-2">
+                  <label className="sr-only" htmlFor={`recipient-${submissionId}`}>Recipient</label>
+                  <select
+                    id={`recipient-${submissionId}`}
+                    aria-label="To"
+                    value={selectedRecipient}
+                    onChange={(event) => {
+                      const recipient = event.target.value;
+                      setSelectedRecipient(recipient);
+                      setSelectedAction(workflowComposer.actionsByRecipient[recipient]?.[0]?.value ?? '');
+                      setError('');
+                    }}
+                    disabled={actionDisabled}
+                    className="h-10 w-36 max-w-full cursor-pointer rounded-full border border-warm-border bg-white px-3 text-xs font-medium text-warm-text outline-none transition-colors duration-200 hover:border-clay focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {workflowComposer.recipients.map((recipient) => (
+                      <option key={recipient.value} value={recipient.value}>{recipient.label}</option>
+                    ))}
+                  </select>
+                  <label className="sr-only" htmlFor={`action-${submissionId}`}>Action</label>
+                  <select
+                    id={`action-${submissionId}`}
+                    aria-label="Action"
+                    value={currentAction.value}
+                    onChange={(event) => {
+                      setSelectedAction(event.target.value);
+                      setError('');
+                    }}
+                    disabled={actionDisabled}
+                    className="h-10 w-36 max-w-full cursor-pointer rounded-full border border-warm-border bg-white px-3 text-xs font-medium text-warm-text outline-none transition-colors duration-200 hover:border-clay focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {actionList.map((action) => (
+                      <option
+                        key={action.value}
+                        value={action.value}
+                        aria-disabled={Boolean(action.unavailableReason)}
+                        className={action.unavailableReason ? 'text-muted-text' : undefined}
+                      >
+                        {action.unavailableReason
+                          ? `${action.label} — unavailable: ${action.unavailableReason}`
+                          : action.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <button
                   type="submit"
                   disabled={actionSubmitDisabled}
-                  className={`inline-flex h-10 items-center justify-center gap-2 rounded-full px-6 text-[11px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${actionSubmitClasses}`}
+                  className={`ml-auto inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full px-5 text-[11px] font-bold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 ${actionSubmitClasses}`}
                 >
                   {actionSubmitLabel} <Icon name="send" size={14} />
                 </button>
               </div>
+              {currentAction.unavailableReason && (
+                <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-pending-text" role="status">
+                  <span className="mt-0.5 shrink-0"><Icon name="info" size={13} /></span>
+                  {currentAction.unavailableReason}
+                </p>
+              )}
 
               {workflowComposer.isClosed && (
                 <p className="text-xs font-medium text-muted-text" role="status">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import QRCode from 'qrcode';
 import { createClient } from '@/lib/supabase/client';
@@ -17,12 +17,11 @@ import { getSubmissionStatusLabel, getSubmissionStatusTone } from '@/lib/workflo
 import {
   getWorkflowFileMimeType,
   getWorkflowFilesTypeError,
+  WORKFLOW_DOCUMENT_ACCEPT,
 } from '@/lib/workflow/file-types';
 
-// ─── Styles & Fonts (synced with dashboard) ──────────────────────────────────
 const fonts = {
-  serif: "font-serif",
-  mono: "font-sans text-xs",
+  serif: 'font-serif',
 };
 
 interface Submission {
@@ -65,11 +64,6 @@ interface Attachment {
   file_size: number;
 }
 
-interface SubmissionVersion extends Attachment {
-  version_number: number;
-  created_at: string;
-}
-
 interface AuditLog {
   id: string;
   action_type: string;
@@ -91,9 +85,11 @@ export default function UserFileDetail() {
   const router = useRouter();
   const [sub, setSub] = useState<Submission | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [versions, setVersions] = useState<SubmissionVersion[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [savingResponse, setSavingResponse] = useState(false);
+  const [changeResponse, setChangeResponse] = useState('');
+  const [revisedDocument, setRevisedDocument] = useState<File | null>(null);
+  const [withdrawalReason, setWithdrawalReason] = useState('');
   const [actionError, setActionError] = useState('');
   const [closureActor, setClosureActor] = useState<string | null>(null);
   const [redirectOffice, setRedirectOffice] = useState<OfficeRole | ''>('');
@@ -107,6 +103,10 @@ export default function UserFileDetail() {
   const [qrError, setQrError] = useState('');
   const [qrOriginWarning, setQrOriginWarning] = useState('');
   const [loading, setLoading] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [supportingAttachmentsOpen, setSupportingAttachmentsOpen] = useState(false);
+  const [previewingAttachmentId, setPreviewingAttachmentId] = useState<string | null>(null);
+  const revisedDocumentInput = useRef<HTMLInputElement>(null);
   const supabase = useMemo(() => createClient(), []);
 
   const fetchSubmission = useCallback(async (preserveCurrent = false) => {
@@ -160,7 +160,6 @@ export default function UserFileDetail() {
         }
         const [
           { data: attachmentRows, error: attachmentError },
-          { data: versionRows, error: versionError },
           { data: logs, error: logsError },
         ] = await Promise.all([
           supabase
@@ -169,21 +168,14 @@ export default function UserFileDetail() {
             .eq('submission_id', id)
             .order('created_at', { ascending: true }),
           supabase
-            .from('workflow_submission_versions')
-            .select('id, version_number, file_name, file_path, file_type, file_size, created_at')
-            .eq('submission_id', id)
-            .order('version_number', { ascending: true }),
-          supabase
             .from('workflow_audit_logs')
             .select('id, action_type, old_status, new_status, comments, created_at, profiles:action_by (full_name, role)')
             .eq('submission_id', id)
             .order('created_at', { ascending: true }),
         ]);
         if (attachmentError) console.error('Attachment load failed:', attachmentError.message);
-        if (versionError) console.error('Submission version load failed:', versionError.message);
         if (logsError) console.error('Workflow history load failed:', logsError.message);
         setAttachments(attachmentRows ?? []);
-        setVersions(versionRows ?? []);
         setAuditLogs(logs ?? []);
       }
     } finally {
@@ -387,6 +379,41 @@ export default function UserFileDetail() {
     }
   };
 
+  const handleRequirementsSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setActionError('');
+    try {
+      await submitRequirementsResponse(changeResponse, revisedDocument);
+      setChangeResponse('');
+      setRevisedDocument(null);
+      if (revisedDocumentInput.current) revisedDocumentInput.current.value = '';
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not submit your response.');
+    }
+  };
+
+  const handleRedirectSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setActionError('');
+    try {
+      await redirectReturnedSubmission();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not redirect this submission.');
+    }
+  };
+
+  const handleWithdrawSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!window.confirm('Withdraw this submission? You cannot undo this action.')) return;
+    setActionError('');
+    try {
+      await withdrawSubmission(withdrawalReason);
+      setWithdrawalReason('');
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not withdraw this submission.');
+    }
+  };
+
   const getStatusStyles = (status: string) => {
     const tone = getSubmissionStatusTone(status);
     const classes = tone === 'completed'
@@ -462,7 +489,6 @@ export default function UserFileDetail() {
 
   const isCompleted = sub.status === 'completed' || sub.status === 'approved';
   const isWithdrawn = sub.status === 'withdrawn';
-  const isReturned = sub.status === 'changes_requested' || sub.status === 'returned_for_requirements';
   const isRedirectable = sub.status === 'returned';
   const canWithdraw = sub.status === 'submitted' && !sub.received_at;
   const canRespondToChanges = sub.status === 'changes_requested';
@@ -477,55 +503,6 @@ export default function UserFileDetail() {
   const requirementsRequest = [...auditLogs]
     .reverse()
     .find((log) => ['CHANGES_REQUESTED', 'ROUTE_REQUIREMENTS_REQUESTED'].includes(log.action_type));
-  const submitterActions = [
-    {
-      value: 'respond_changes',
-      label: 'Submit response',
-      buttonLabel: 'Submit response',
-      tone: 'primary' as const,
-      requiresMessage: true,
-      unavailableReason: canRespondToChanges ? undefined : 'Available when changes have been requested',
-    },
-    {
-      value: 'redirect',
-      label: 'Redirect submission',
-      buttonLabel: 'Redirect submission',
-      tone: 'primary' as const,
-      unavailableReason: isRedirectable ? undefined : 'Available when status is Returned',
-    },
-    {
-      value: 'withdraw_submission',
-      label: 'Withdraw submission',
-      tone: 'warning' as const,
-      confirmation: 'You can withdraw only before the responsible office receives this submission. Any pending office assignments will also be withdrawn.',
-      unavailableReason: canWithdraw
-        ? undefined
-        : 'Available only before the responsible office receives the submission',
-    },
-  ];
-
-  const handleSubmitterAction = async (
-    action: string,
-    _recipient: string,
-    message: string,
-    files: File[],
-  ) => {
-    if (action === 'respond_changes') {
-      await submitRequirementsResponse(message, files[0] ?? null);
-      return;
-    }
-    if (action === 'redirect') {
-      if (files.length > 0) throw new Error('Remove attachments before redirecting this submission.');
-      await redirectReturnedSubmission();
-      return;
-    }
-    if (action === 'withdraw_submission') {
-      if (files.length > 0) throw new Error('Remove attachments before withdrawing this submission.');
-      await withdrawSubmission(message);
-      return;
-    }
-    throw new Error('This action is unavailable.');
-  };
 
   const downloadAttachment = async (attachment: Attachment) => {
     const { data, error } = await supabase.storage
@@ -539,154 +516,84 @@ export default function UserFileDetail() {
     await downloadFile(data.signedUrl, attachment.file_name);
   };
 
-  const downloadVersion = async (version: SubmissionVersion) => {
-    const { data, error } = await supabase.storage
-      .from('workflow_uploads')
-      .createSignedUrl(version.file_path, 300);
-    if (error || !data?.signedUrl) {
-      console.error('Could not authorize document version download:', error?.message);
-      setActionError('Could not open this document version. Please try again.');
-      return;
+  const downloadOriginal = async () => {
+    if (!sub) return;
+    try {
+      const url = await getFileUrl(supabase, sub);
+      await downloadFile(url, sub.file_name);
+    } catch (error) {
+      console.error('Could not download the original document:', error);
+      setActionError('Could not download the original document. Please try again.');
     }
-    await downloadFile(data.signedUrl, version.file_name);
   };
 
+  const previewingAttachment = attachments.find((attachment) => attachment.id === previewingAttachmentId);
+
   return (
-    <div className="w-full">
-      {/* Back */}
+    <div className="mx-auto w-full max-w-[1500px] pb-8">
       <div className="mb-5 max-md:mb-4">
         <button
-          onClick={() => router.back()}
-          className="inline-flex h-10 items-center gap-2 rounded-full border border-warm-border px-4 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11"
+          type="button"
+          onClick={() => router.push('/workflow/user/file_registry')}
+          className="inline-flex items-center gap-2 text-xs font-semibold text-muted-text transition-colors hover:text-clay"
         >
-          <span aria-hidden="true">←</span> Back to files
+          <span className="grid h-8 w-8 place-items-center rounded-full border border-warm-border bg-card" aria-hidden="true">←</span>
+          Back to files
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 max-md:gap-3">
-
-        {/* DETAILS COLUMN */}
-        <aside className="space-y-4 lg:col-span-5 max-md:space-y-3">
-
-          {/* Header */}
-          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-            <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Submission ID: {sub.id.split('-')[0]}
+      <section className="mb-5 overflow-hidden rounded-2xl border border-warm-border bg-card shadow-[0_12px_35px_rgba(65,49,39,0.05)]">
+        <div className="flex flex-col gap-5 p-5 md:flex-row md:items-center md:justify-between md:p-7">
+          <div className="min-w-0">
+            <div className="mb-3 flex flex-wrap items-center gap-2.5">
+              <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-bold ${statusConfig.classes}`}>
+                <span className={`h-1.5 w-1.5 rounded-full bg-current ${isCompleted || isWithdrawn ? 'opacity-70' : 'animate-pulse'}`} />
+                {statusConfig.label}
+              </span>
+              <span className="text-[11px] font-medium text-muted-text">
+                Submission ID: {sub.id.split('-')[0]}
+              </span>
+              {isOfficeRole(currentDestinationRole) && (
+                <span className="text-[11px] font-medium text-muted-text">
+                  · {OFFICE_CONFIG[currentDestinationRole].label}
+                </span>
+              )}
+            </div>
+            <h1 className={`${fonts.serif} max-w-4xl break-words text-[28px] font-semibold leading-[1.15] tracking-[-0.02em] text-warm-text md:text-[36px]`}>
+              {sub.file_name}
+            </h1>
+            <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] text-muted-text">
+              <span>Submitted {new Date(sub.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+              <span>{sub.file_type || 'File'} · {sub.file_size ? `${(sub.file_size / 1024).toFixed(2)} KB` : 'Size unavailable'}</span>
+            </div>
+          </div>
+          <div className="shrink-0 rounded-xl border border-warm-border bg-white px-5 py-3.5 md:text-right">
+            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-text">Tracking number</p>
+            <p className="font-mono text-sm font-bold tracking-[0.08em] text-clay">
+              {sub.tracking_number || 'Pending'}
             </p>
-            <h1 className={`${fonts.serif} mb-4 break-words text-[28px] leading-tight text-warm-text max-md:text-[24px]`}>{sub.file_name}</h1>
-            <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${statusConfig.classes}`}>
-              <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
-              {statusConfig.label}
-            </div>
-          </section>
+          </div>
+        </div>
 
-          <section className="receipt-print border-2 border-black bg-white p-6">
-            <p className={`${fonts.mono} text-blue-600 mb-3`}>Submission_Receipt</p>
-            <div className="space-y-2 font-mono text-[11px]">
-              <p><span className="text-gray-400">Tracking_Number:</span> {sub.tracking_number || 'Pending assignment'}</p>
-              <p><span className="text-gray-400">Document:</span> {sub.file_name}</p>
-              <p><span className="text-gray-400">Status:</span> {statusConfig.label}</p>
-              <p><span className="text-gray-400">Submitted:</span> {new Date(sub.created_at).toLocaleString()}</p>
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-            <h2 className="mb-1 text-sm font-semibold text-warm-text">Document retrieval QR code</h2>
-            <p className="mb-4 text-[11px] leading-relaxed text-muted-text">
-              Generate a secure QR code to present when collecting your processed document.
-            </p>
-            {retrievalQr?.retrieval_status === 'released' ? (
-              <p className="rounded-xl bg-approved-bg px-3 py-3 text-xs font-semibold text-approved-text">
-                This document has been released.
-              </p>
-            ) : !isApproved ? (
-              <p className="rounded-xl bg-sidebar px-3 py-3 text-xs text-muted-text">
-                A retrieval QR code will be available after processing is complete.
-              </p>
-            ) : retrievalQr?.retrieval_status === 'active' ? (
-              <div className="retrieval-qr-print rounded-xl border border-warm-border bg-white p-4 text-center">
-                {qrImage ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={qrImage}
-                    alt={`Retrieval QR code for ${sub.tracking_number}`}
-                    className="mx-auto h-64 w-64"
-                  />
-                ) : (
-                  <p className="py-12 text-xs text-muted-text">Preparing QR code...</p>
-                )}
-                <p className="mt-2 text-sm font-bold text-warm-text">
-                  Reference number: {sub.tracking_number}
-                </p>
-                <p className="mt-2 text-xs text-warm-text">
-                  Present this QR code to the authorized officer when claiming your document.
-                </p>
-                <p className="mt-2 text-[10px] text-muted-text">
-                  Valid until {new Date(retrievalQr.expires_at).toLocaleDateString()}
-                </p>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void generateRetrievalQr()}
-                disabled={qrLoading}
-                className="inline-flex h-10 w-full items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {qrLoading ? 'Generating QR code...' : 'Generate QR Code'}
-              </button>
-            )}
-            {retrievalQr?.retrieval_status === 'active' && (
-              <div className="mt-4 flex gap-2 print:hidden">
-                <button
-                  type="button"
-                  onClick={downloadRetrievalQr}
-                  disabled={!qrImage}
-                  className="inline-flex h-10 flex-1 items-center justify-center rounded-full border border-warm-border px-4 text-xs font-semibold text-warm-text disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Download PNG
-                </button>
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  disabled={!qrImage}
-                  className="inline-flex h-10 flex-1 items-center justify-center rounded-full border border-warm-border px-4 text-xs font-semibold text-warm-text disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Print QR Code
-                </button>
-              </div>
-            )}
-            {qrError && <p role="alert" className="mt-3 text-xs text-rejected-text">{qrError}</p>}
-            {qrOriginWarning && (
-              <p role="status" className="mt-3 rounded-xl bg-pending-bg px-3 py-2 text-[11px] leading-relaxed text-pending-text">
-                {qrOriginWarning}
-              </p>
-            )}
-          </section>
-
-          {/* Context Card */}
-          <section className="space-y-5 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+        <section className="border-t border-warm-border px-5 py-6 md:px-7">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="mb-1 text-[11px] font-medium text-muted-text">Category</p>
-              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">
-                {getWorkflowDocumentTypeLabel(sub.category, sub.other_document_type)}
-              </p>
+              <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-clay">Submission context</p>
+              <h2 className="mt-1 font-serif text-xl font-semibold text-warm-text">Request details</h2>
             </div>
+            <span className="rounded-full bg-clay-soft px-3 py-1.5 text-[10px] font-bold text-clay">
+              {getWorkflowDocumentTypeLabel(sub.category, sub.other_document_type)}
+            </span>
+          </div>
+          <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
             <div>
-              <p className="mb-1.5 text-[11px] font-medium text-muted-text">Description</p>
-              <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
-                &quot;{sub.description || 'No description provided.'}&quot;
-              </p>
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-text">Intended recipient</p>
+              <p className="text-xs font-semibold text-warm-text">{sub.intended_recipient || 'Not specified.'}</p>
             </div>
-            <div>
-              <p className="mb-1.5 text-[11px] font-medium text-muted-text">Intended recipient</p>
-              <p className="text-xs leading-relaxed text-warm-text">{sub.intended_recipient || 'Not specified.'}</p>
-            </div>
-            {(sub.initial_destination_role || sub.selected_office_role) && (
+            {currentDestinationRole && (
               <div>
-                <p className="mb-1.5 text-[11px] font-medium text-muted-text">Current responsible office</p>
-                <p className="text-xs font-semibold text-warm-text">
-                  {currentDestinationLabel}
-                </p>
+                <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-text">Responsible office</p>
+                <p className="text-xs font-semibold text-warm-text">{currentDestinationLabel}</p>
                 {isOfficeRole(initialDestinationRole) && initialDestinationRole !== currentDestinationRole && (
                   <p className="mt-1 text-[10px] text-muted-text">
                     Originally selected: {OFFICE_CONFIG[initialDestinationRole].label}
@@ -694,21 +601,456 @@ export default function UserFileDetail() {
                 )}
               </div>
             )}
-            <div className="flex items-end justify-between gap-4 border-t border-warm-border pt-4">
+            <div className="md:col-span-2">
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-text">Description</p>
+              <blockquote className="whitespace-pre-wrap break-words border-l-2 border-clay pl-3 font-serif text-[14px] italic leading-relaxed text-warm-text/75">
+                {sub.description || 'No description provided.'}
+              </blockquote>
+            </div>
+          </div>
+        </section>
+
+        <section className="border-t border-warm-border">
+          <div className={`flex items-center gap-3 px-5 py-4 md:px-7 ${previewOpen ? 'border-b border-warm-border' : ''}`}>
+            <button
+              type="button"
+              onClick={() => setPreviewOpen((open) => !open)}
+              aria-expanded={previewOpen}
+              aria-controls={`document-preview-${sub.id}`}
+              className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left"
+            >
+              <span className="min-w-0">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.15em] text-clay">Document preview</span>
+                <span className="mt-1 block truncate text-xs font-semibold text-warm-text">{sub.file_name}</span>
+                <span className="mt-1 block text-[10px] font-medium text-muted-text">
+                  {previewOpen ? 'Hide full document preview' : 'Select to view the full document'}
+                </span>
+              </span>
+              <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full border border-warm-border text-muted-text transition-transform ${previewOpen ? 'rotate-90' : ''}`} aria-hidden="true">
+                ›
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void downloadOriginal()}
+              aria-label={`Download ${sub.file_name}`}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-warm-border px-3.5 text-[11px] font-bold text-warm-text hover:bg-sidebar"
+            >
+              <span aria-hidden="true">↓</span>
+              <span className="hidden sm:inline">Download</span>
+            </button>
+            {attachments.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSupportingAttachmentsOpen((open) => !open)}
+                aria-label={`${supportingAttachmentsOpen ? 'Hide' : 'Show'} ${attachments.length} supporting documents`}
+                aria-expanded={supportingAttachmentsOpen}
+                aria-controls={`supporting-attachments-${sub.id}`}
+                title={`${attachments.length} supporting ${attachments.length === 1 ? 'document' : 'documents'}`}
+                className={`relative grid h-9 w-9 shrink-0 place-items-center rounded-full border transition-colors ${
+                  supportingAttachmentsOpen
+                    ? 'border-clay bg-clay-soft text-clay'
+                    : 'border-warm-border text-warm-text hover:bg-sidebar'
+                }`}
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m20 11-8.5 8.5a5 5 0 0 1-7-7L14 3a3.5 3.5 0 0 1 5 5l-9.5 9.5a2 2 0 0 1-3-3L15 6" />
+                </svg>
+                <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-clay px-1 text-[9px] font-bold leading-none text-white">
+                  {attachments.length}
+                </span>
+              </button>
+            )}
+          </div>
+          {attachments.length > 0 && (
+            <div
+              id={`supporting-attachments-${sub.id}`}
+              hidden={!supportingAttachmentsOpen}
+              className="border-b border-warm-border bg-sidebar/40 px-5 py-4 md:px-7"
+            >
+              <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-text">Supporting documents</p>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {attachments.map((attachment) => (
+                  <div key={attachment.id} className="flex min-w-0 items-center gap-3 rounded-xl border border-warm-border bg-card p-3 text-warm-text">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-clay-soft text-clay" aria-hidden="true">▤</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[11px] font-bold">{attachment.file_name}</span>
+                      <span className="mt-0.5 block text-[9px] text-muted-text">
+                        {Math.max(1, Math.round(attachment.file_size / 1024))} KB
+                        {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
+                      </span>
+                    </span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewingAttachmentId((current) => current === attachment.id ? null : attachment.id)}
+                        aria-label={`${previewingAttachmentId === attachment.id ? 'Close preview of' : 'Preview'} ${attachment.file_name}`}
+                        aria-pressed={previewingAttachmentId === attachment.id}
+                        className={`grid h-9 w-9 place-items-center rounded-full transition-colors ${
+                          previewingAttachmentId === attachment.id ? 'bg-clay-soft text-clay' : 'text-muted-text hover:bg-sidebar hover:text-warm-text'
+                        }`}
+                      >
+                        <span aria-hidden="true">⌕</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void downloadAttachment(attachment)}
+                        aria-label={`Download ${attachment.file_name}`}
+                        className="grid h-9 w-9 place-items-center rounded-full text-muted-text transition-colors hover:bg-sidebar hover:text-warm-text"
+                      >
+                        <span aria-hidden="true">↓</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {previewingAttachment && (
+                <section className="mt-4 overflow-hidden rounded-xl border border-warm-border bg-card">
+                  <header className="flex items-center justify-between gap-3 border-b border-warm-border px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-clay">Supporting document preview</p>
+                      <h3 className="mt-1 truncate text-xs font-semibold text-warm-text">{previewingAttachment.file_name}</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewingAttachmentId(null)}
+                      aria-label="Close supporting document preview"
+                      className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-warm-border text-muted-text hover:bg-sidebar"
+                    >
+                      ×
+                    </button>
+                  </header>
+                  <div className="relative flex h-[min(65vh,680px)] min-h-[360px] items-center justify-center overflow-auto bg-[#eae5df] p-4 md:p-6">
+                    <FilePreview file={{
+                      file_name: previewingAttachment.file_name,
+                      file_url: '',
+                      file_path: previewingAttachment.file_path,
+                      file_type: previewingAttachment.file_type,
+                    }} />
+                  </div>
+                </section>
+              )}
+            </div>
+          )}
+          <div id={`document-preview-${sub.id}`} hidden={!previewOpen}>
+            {previewOpen && (
+              <div className="relative flex h-[min(70vh,760px)] min-h-[540px] items-center justify-center overflow-auto bg-[#eae5df] p-5 md:p-8">
+                <FilePreview file={sub} />
+              </div>
+            )}
+          </div>
+        </section>
+      </section>
+
+      <DocumentMessaging
+        key={sub.id}
+        submissionId={sub.id}
+        fileName={sub.file_name}
+        trackingNumber={sub.tracking_number}
+        canSendSubmitterConversation={!isCompleted && !isWithdrawn}
+        afterSharedFiles={(
+          <section className={`overflow-hidden rounded-2xl border ${
+            showFeedback && officialNote
+              ? isApproved
+                ? 'border-approved-bg bg-approved-bg/40'
+                : 'border-rejected-bg bg-rejected-bg/40'
+              : 'border-clay/30 bg-clay-soft/40'
+          }`}>
+            <header className="flex flex-wrap items-center justify-between gap-3 border-b border-current/10 px-5 py-4 md:px-6">
               <div>
-                <p className="text-[10px] font-medium text-muted-text">Submitted on</p>
-                <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{new Date(sub.created_at).toLocaleDateString()} at {new Date(sub.created_at).toLocaleTimeString()}</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-clay">Review update</p>
+                <h2 className="mt-1 text-sm font-bold text-warm-text">Official feedback</h2>
               </div>
-              <div className="text-right">
-                <p className="text-[10px] font-medium text-muted-text">File size</p>
-                <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{(sub.file_size / 1024).toFixed(2)} KB</p>
-              </div>
+              <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${
+                showFeedback && officialNote
+                  ? isApproved
+                    ? 'bg-approved-bg text-approved-text'
+                    : 'bg-rejected-bg text-rejected-text'
+                  : 'bg-card text-muted-text'
+              }`}>
+                {showFeedback && officialNote ? 'From the responsible office' : 'Awaiting review'}
+              </span>
+            </header>
+            <div className="px-5 py-4 md:px-6">
+              {showFeedback && officialNote ? (
+                <p className="whitespace-pre-wrap break-words font-serif text-sm leading-relaxed text-warm-text">
+                  {officialNote}
+                </p>
+              ) : (
+                <p className="text-xs leading-relaxed text-muted-text">
+                  The responsible office’s decision and feedback will appear here after it completes its review.
+                </p>
+              )}
             </div>
           </section>
+        )}
+        activity={(
+          <WorkflowActivityTimeline
+            emptyMessage="No workflow events recorded yet."
+            events={auditLogs.map((log) => {
+              const profile = Array.isArray(log.profiles) ? log.profiles[0] : log.profiles;
+              return {
+                id: log.id,
+                actionType: log.action_type,
+                label: getWorkflowActionLabel(log.action_type),
+                createdAt: log.created_at,
+                actor: profile?.full_name || 'System',
+                actorRole: profile?.role,
+                comments: log.comments,
+              };
+            })}
+          />
+        )}
+      />
 
+      {(canRespondToChanges || isRedirectable || canWithdraw) && (
+        <section className="mt-5 overflow-hidden rounded-2xl border border-warm-border bg-card">
+          <header className="border-b border-warm-border px-5 py-4 md:px-6">
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-clay">Submission actions</p>
+            <h2 className="mt-1 font-serif text-xl font-semibold text-warm-text">What would you like to do?</h2>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-muted-text">
+              These actions are available based on the current status of your submission.
+            </p>
+          </header>
+          <div className="grid gap-4 bg-[#f8f5f1] p-5 md:grid-cols-2 md:p-6">
+            {canRespondToChanges && (
+              <form onSubmit={(event) => void handleRequirementsSubmit(event)} className="space-y-3 rounded-xl border border-warm-border bg-card p-4 md:col-span-2">
+                <div>
+                  <h3 className="text-xs font-semibold text-warm-text">Respond to requested changes</h3>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-text">
+                    {requirementsRequest?.comments || sub.office_comments || sub.mayor_comments || 'The responsible office has requested changes to your submission.'}
+                  </p>
+                </div>
+                <label htmlFor={`changes-response-${sub.id}`} className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+                  Your response <span className="text-rejected-text">*</span>
+                  <textarea
+                    id={`changes-response-${sub.id}`}
+                    value={changeResponse}
+                    onChange={(event) => setChangeResponse(event.target.value)}
+                    required
+                    maxLength={5000}
+                    rows={4}
+                    disabled={savingResponse}
+                    className="mt-1.5 block min-h-24 w-full resize-y rounded-xl border border-warm-border bg-white p-3 text-xs font-normal normal-case leading-relaxed tracking-normal text-warm-text outline-none focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:opacity-60"
+                    placeholder="Explain how you addressed the requested changes."
+                  />
+                </label>
+                <label htmlFor={`revised-document-${sub.id}`} className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+                  Revised document <span className="font-normal normal-case tracking-normal">(optional)</span>
+                  <input
+                    ref={revisedDocumentInput}
+                    id={`revised-document-${sub.id}`}
+                    type="file"
+                    accept={WORKFLOW_DOCUMENT_ACCEPT}
+                    disabled={savingResponse}
+                    onChange={(event) => setRevisedDocument(event.target.files?.[0] ?? null)}
+                    className="mt-1.5 block w-full rounded-xl border border-warm-border bg-white p-2 text-xs font-normal normal-case tracking-normal text-warm-text file:mr-3 file:rounded-full file:border-0 file:bg-clay-soft file:px-3 file:py-1.5 file:text-[10px] file:font-semibold file:text-clay"
+                  />
+                  <span className="mt-1 block font-normal normal-case tracking-normal">Supported document formats, up to 10 MB.</span>
+                </label>
+                <button
+                  type="submit"
+                  disabled={savingResponse || !changeResponse.trim()}
+                  className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingResponse ? 'Submitting response...' : 'Submit changes'}
+                </button>
+              </form>
+            )}
+
+            {isRedirectable && (
+              <form onSubmit={(event) => void handleRedirectSubmit(event)} className="space-y-3 rounded-xl border border-warm-border bg-card p-4">
+                <div>
+                  <h3 className="text-xs font-semibold text-warm-text">Redirect submission</h3>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-text">
+                    Choose the correct office. Your existing document will be sent with the redirected submission.
+                  </p>
+                </div>
+                <label className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+                  Destination office
+                  <select
+                    aria-label="New destination office"
+                    value={redirectOffice}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setRedirectOffice(isOfficeRole(value) ? value : '');
+                      setRedirectDocumentType('');
+                      setRedirectOtherDocumentType('');
+                    }}
+                    disabled={savingRedirect}
+                    className="mt-1.5 block h-10 w-full rounded-xl border border-warm-border bg-white px-3 text-xs font-medium normal-case tracking-normal text-warm-text outline-none focus:border-clay"
+                  >
+                    <option value="">Select an office</option>
+                    {Object.entries(OFFICE_CONFIG).map(([officeRole, office]) => (
+                      <option key={officeRole} value={officeRole}>{office.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+                  Document type
+                  <select
+                    aria-label="Redirect document type"
+                    value={redirectDocumentType}
+                    onChange={(event) => {
+                      setRedirectDocumentType(event.target.value);
+                      setRedirectOtherDocumentType('');
+                    }}
+                    disabled={savingRedirect || !isOfficeRole(redirectOffice)}
+                    className="mt-1.5 block h-10 w-full rounded-xl border border-warm-border bg-white px-3 text-xs font-medium normal-case tracking-normal text-warm-text outline-none focus:border-clay"
+                  >
+                    <option value="">Select a document type</option>
+                    {isOfficeRole(redirectOffice) && OFFICE_CONFIG[redirectOffice].categories.map((category) => (
+                      <option key={category} value={category}>{category}</option>
+                    ))}
+                  </select>
+                </label>
+                {redirectDocumentType === 'Other' && (
+                  <label className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+                    Describe the document type
+                    <input
+                      value={redirectOtherDocumentType}
+                      onChange={(event) => setRedirectOtherDocumentType(event.target.value)}
+                      maxLength={120}
+                      disabled={savingRedirect}
+                      className="mt-1.5 block h-10 w-full rounded-xl border border-warm-border bg-white px-3 text-xs font-medium normal-case tracking-normal text-warm-text outline-none focus:border-clay"
+                    />
+                  </label>
+                )}
+                <button
+                  type="submit"
+                  disabled={savingRedirect || !isOfficeRole(redirectOffice) || !redirectDocumentType || (redirectDocumentType === 'Other' && !redirectOtherDocumentType.trim())}
+                  className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingRedirect ? 'Redirecting...' : 'Redirect submission'}
+                </button>
+              </form>
+            )}
+
+            {canWithdraw && (
+              <form onSubmit={(event) => void handleWithdrawSubmit(event)} className="space-y-3 rounded-xl border border-pending-bg bg-card p-4">
+                <div>
+                  <h3 className="text-xs font-semibold text-warm-text">Withdraw submission</h3>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-text">
+                    Available only before the responsible office receives it. Any pending office assignments will also be withdrawn.
+                  </p>
+                </div>
+                <label htmlFor={`withdrawal-reason-${sub.id}`} className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+                  Reason <span className="font-normal normal-case tracking-normal">(optional)</span>
+                  <textarea
+                    id={`withdrawal-reason-${sub.id}`}
+                    value={withdrawalReason}
+                    onChange={(event) => setWithdrawalReason(event.target.value)}
+                    maxLength={1000}
+                    rows={3}
+                    disabled={withdrawing}
+                    className="mt-1.5 block min-h-20 w-full resize-y rounded-xl border border-warm-border bg-white p-3 text-xs font-normal normal-case leading-relaxed tracking-normal text-warm-text outline-none focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:opacity-60"
+                    placeholder="Optional reason for withdrawing."
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={withdrawing}
+                  className="inline-flex h-10 items-center justify-center rounded-full border border-pending-text bg-pending-bg px-5 text-xs font-semibold text-pending-text transition-colors hover:bg-pending-bg/70 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {withdrawing ? 'Withdrawing...' : 'Withdraw submission'}
+                </button>
+              </form>
+            )}
+          </div>
+        </section>
+      )}
+      {actionError && (
+        <p role="alert" className="mt-4 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">
+          {actionError}
+        </p>
+      )}
+
+      <div className="mt-5">
+        <section className="rounded-2xl border border-warm-border bg-card p-5 md:p-6">
+          <div className="mb-4">
+            <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-clay">For your records</p>
+            <h2 className="mt-1 font-serif text-xl font-semibold text-warm-text">Document retrieval</h2>
+          </div>
+          <p className="mb-4 text-[11px] leading-relaxed text-muted-text">
+            Generate a secure QR code to present when collecting your processed document.
+          </p>
+          {retrievalQr?.retrieval_status === 'released' ? (
+            <p className="rounded-xl bg-approved-bg px-3 py-3 text-xs font-semibold text-approved-text">
+              This document has been released.
+            </p>
+          ) : !isApproved ? (
+            <p className="rounded-xl bg-sidebar px-3 py-3 text-xs text-muted-text">
+              A retrieval QR code will be available after processing is complete.
+            </p>
+          ) : retrievalQr?.retrieval_status === 'active' ? (
+            <div className="retrieval-qr-print rounded-xl border border-warm-border bg-white p-4 text-center">
+              {qrImage ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={qrImage}
+                  alt={`Retrieval QR code for ${sub.tracking_number}`}
+                  className="mx-auto h-64 w-64 max-w-full"
+                />
+              ) : (
+                <p className="py-12 text-xs text-muted-text">Preparing QR code...</p>
+              )}
+              <p className="mt-2 text-sm font-bold text-warm-text">Reference number: {sub.tracking_number}</p>
+              <p className="mt-2 text-xs text-warm-text">
+                Present this QR code to the authorized officer when claiming your document.
+              </p>
+              <p className="mt-2 text-[10px] text-muted-text">
+                Valid until {new Date(retrievalQr.expires_at).toLocaleDateString()}
+              </p>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void generateRetrievalQr()}
+              disabled={qrLoading}
+              className="inline-flex h-10 w-full items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {qrLoading ? 'Generating QR code...' : 'Generate QR Code'}
+            </button>
+          )}
+          {retrievalQr?.retrieval_status === 'active' && (
+            <div className="mt-4 flex gap-2 print:hidden">
+              <button
+                type="button"
+                onClick={downloadRetrievalQr}
+                disabled={!qrImage}
+                className="inline-flex h-10 flex-1 items-center justify-center rounded-full border border-warm-border px-4 text-xs font-semibold text-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Download PNG
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                disabled={!qrImage}
+                className="inline-flex h-10 flex-1 items-center justify-center rounded-full border border-warm-border px-4 text-xs font-semibold text-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Print QR Code
+              </button>
+            </div>
+          )}
+          {qrError && <p role="alert" className="mt-3 text-xs text-rejected-text">{qrError}</p>}
+          {qrOriginWarning && (
+            <p role="status" className="mt-3 rounded-xl bg-pending-bg px-3 py-2 text-[11px] leading-relaxed text-pending-text">
+              {qrOriginWarning}
+            </p>
+          )}
           {isCompleted && (
-            <section className="space-y-3 rounded-2xl border border-approved-bg bg-approved-bg/40 p-5 max-md:p-3.5">
-              <h2 className="text-xs font-semibold text-approved-text">Processing completed</h2>
+            <div className="mt-4 space-y-3 rounded-xl border border-approved-bg bg-approved-bg/40 p-4">
+              <p className="text-xs font-semibold text-approved-text">Processing completed</p>
               <p className="text-[11px] text-warm-text">
                 Closed by {closureActor || 'an authorized office representative'}
                 {sub.completed_at ? ` on ${new Date(sub.completed_at).toLocaleString()}` : ''}.
@@ -734,220 +1076,11 @@ export default function UserFileDetail() {
                   Download closure document: {sub.closure_file_name}
                 </button>
               )}
-            </section>
-          )}
-
-          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-            <h2 className="mb-3 text-xs font-semibold text-warm-text">Supporting attachments</h2>
-            {attachments.length === 0 ? (
-              <p className="text-[11px] text-muted-text">No supporting attachments.</p>
-            ) : (
-              <ul className="space-y-2">
-                {attachments.map((attachment) => (
-                  <li key={attachment.id} className="flex items-center justify-between gap-3 text-[11px]">
-                    <span className="min-w-0 truncate text-warm-text">{attachment.file_name}</span>
-                    <button
-                      type="button"
-                      onClick={() => void downloadAttachment(attachment)}
-                      className="shrink-0 font-semibold text-clay underline"
-                    >
-                      Download
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-            <h2 className="mb-3 text-xs font-semibold text-warm-text">Document version history</h2>
-            {versions.length === 0 ? (
-              <p className="text-[11px] text-muted-text">No document versions are available.</p>
-            ) : (
-              <ol className="space-y-2">
-                {versions.map((version) => (
-                  <li
-                    key={version.id}
-                    className="flex items-center justify-between gap-3 text-[11px]"
-                  >
-                    <span className="min-w-0 truncate text-warm-text">
-                      Version {version.version_number}: {version.file_name}
-                      <span className="ml-2 text-muted-text">
-                        {new Date(version.created_at).toLocaleDateString()}
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void downloadVersion(version)}
-                      className="shrink-0 font-semibold text-clay underline"
-                    >
-                      Download
-                    </button>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </section>
-
-          <DocumentMessaging
-            key={sub.id}
-            submissionId={sub.id}
-            fileName={sub.file_name}
-            trackingNumber={sub.tracking_number}
-            workflowComposer={{
-              recipients: [{ value: 'responsible_office', label: 'Responsible office' }],
-              actionsByRecipient: { responsible_office: submitterActions },
-              initialRecipient: 'responsible_office',
-              initialAction: isRedirectable
-                ? 'redirect'
-                : canRespondToChanges
-                  ? 'respond_changes'
-                  : submitterActions.find((action) => !action.unavailableReason)?.value ?? 'respond_changes',
-              statusLine: statusConfig.label,
-              contextNote: isReturned
-                ? requirementsRequest?.comments || sub.office_comments || sub.mayor_comments || undefined
-                : undefined,
-              isClosed: isCompleted || isWithdrawn,
-              closedMessage: isWithdrawn ? 'This submission is withdrawn.' : 'This submission is closed.',
-              busy: savingResponse || savingRedirect || withdrawing,
-              renderActionFields: (action) => action === 'redirect' ? (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <label className="block text-[11px] font-medium text-warm-text">
-                    New destination office
-                    <select
-                      aria-label="New destination office"
-                      value={redirectOffice}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setRedirectOffice(isOfficeRole(value) ? value : '');
-                        setRedirectDocumentType('');
-                        setRedirectOtherDocumentType('');
-                      }}
-                      disabled={savingRedirect}
-                      className="mt-1 block min-h-10 w-full rounded-xl border border-warm-border bg-card px-3 text-xs text-warm-text outline-none focus:border-clay"
-                    >
-                      <option value="">Select an office</option>
-                      {Object.entries(OFFICE_CONFIG).map(([officeRole, office]) => (
-                        <option key={officeRole} value={officeRole}>{office.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block text-[11px] font-medium text-warm-text">
-                    Document type
-                    <select
-                      aria-label="Redirect document type"
-                      value={redirectDocumentType}
-                      onChange={(event) => {
-                        setRedirectDocumentType(event.target.value);
-                        setRedirectOtherDocumentType('');
-                      }}
-                      disabled={savingRedirect || !isOfficeRole(redirectOffice)}
-                      className="mt-1 block min-h-10 w-full rounded-xl border border-warm-border bg-card px-3 text-xs text-warm-text outline-none focus:border-clay"
-                    >
-                      <option value="">Select a document type</option>
-                      {isOfficeRole(redirectOffice) && OFFICE_CONFIG[redirectOffice].categories.map((category) => (
-                        <option key={category} value={category}>{category}</option>
-                      ))}
-                    </select>
-                  </label>
-                  {redirectDocumentType === 'Other' && (
-                    <label className="block text-[11px] font-medium text-warm-text sm:col-span-2">
-                      Describe the document type
-                      <input
-                        value={redirectOtherDocumentType}
-                        onChange={(event) => setRedirectOtherDocumentType(event.target.value)}
-                        maxLength={120}
-                        disabled={savingRedirect}
-                        className="mt-1 block min-h-10 w-full rounded-xl border border-warm-border bg-card px-3 text-xs text-warm-text outline-none focus:border-clay"
-                      />
-                    </label>
-                  )}
-                  <p className="text-[10px] leading-relaxed text-muted-text sm:col-span-2">
-                    The same submission and document will be redirected; you do not need to upload it again.
-                  </p>
-                </div>
-              ) : null,
-              onWorkflowAction: handleSubmitterAction,
-            }}
-            activity={(
-              <WorkflowActivityTimeline
-                emptyMessage="No workflow events recorded yet."
-                events={auditLogs.map((log) => {
-                  const profile = Array.isArray(log.profiles) ? log.profiles[0] : log.profiles;
-                  return {
-                    id: log.id,
-                    actionType: log.action_type,
-                    label: getWorkflowActionLabel(log.action_type),
-                    createdAt: log.created_at,
-                    actor: profile?.full_name || 'System',
-                    actorRole: profile?.role,
-                    comments: log.comments,
-                  };
-                })}
-              />
-            )}
-          />
-          {actionError && <p role="alert" className="text-xs text-rejected-text">{actionError}</p>}
-
-          {/* Official Feedback Section */}
-          {showFeedback && officialNote && (
-            <section
-              className={`animate-in fade-in slide-in-from-bottom-4 rounded-2xl border p-5 duration-700 max-md:p-3.5 ${
-                isApproved
-                  ? 'border-approved-bg bg-approved-bg/50'
-                  : 'border-rejected-bg bg-rejected-bg/50'
-              }`}
-            >
-              <div className="mb-2 flex items-center justify-between">
-                <p className={`text-xs font-semibold ${isApproved ? 'text-approved-text' : 'text-rejected-text'}`}>Official feedback</p>
-                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${isApproved ? 'bg-approved-bg text-approved-text' : 'bg-rejected-bg text-rejected-text'}`}>Official</span>
-              </div>
-              <p className="break-words font-serif text-base leading-relaxed text-warm-text">
-                &quot;{officialNote}&quot;
-              </p>
-            </section>
-          )}
-
-          {/* Locked Status for Active Review */}
-          {!showFeedback && (
-            <section className="rounded-2xl border border-dashed border-warm-border bg-sidebar p-5 max-md:p-3.5">
-              <p className="text-center text-xs leading-relaxed text-muted-text">
-                Official feedback will appear here once the review is complete.
-              </p>
-            </section>
-          )}
-
-          {/* Footer Actions */}
-          <button
-            onClick={async () => {
-              const url = await getFileUrl(supabase, sub);
-              await downloadFile(url, sub.file_name);
-            }}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
-          >
-            Download original file
-          </button>
-        </aside>
-
-        {/* PREVIEW PANEL */}
-        <main className="lg:col-span-7">
-          <div className="flex flex-col overflow-hidden rounded-2xl border border-warm-border bg-card lg:sticky lg:top-10">
-            <div className="flex min-h-12 items-center border-b border-warm-border px-5 py-3 max-md:px-3.5">
-              <div className="flex min-w-0 flex-col">
-                <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">Document preview</span>
-                <span className="truncate text-[11px] font-medium text-warm-text">
-                  {sub.file_name}
-                </span>
-              </div>
             </div>
+          )}
+        </section>
 
-            <div className="relative flex h-[60vh] min-h-[380px] items-center justify-center overflow-hidden bg-cream lg:h-[75vh]">
-              <FilePreview file={sub} />
-            </div>
-          </div>
-        </main>
       </div>
-
     </div>
   );
 }
