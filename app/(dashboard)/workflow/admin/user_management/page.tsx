@@ -27,7 +27,17 @@ interface UserProfile {
   role: string;
   created_at: string;
   is_active: boolean;
+  verificationStatus: VerificationStatus;
 }
+
+const ROLES: Role[] = [
+  'submitter',
+  'tourism_officer',
+  'system_admin',
+  'municipal_treasurer',
+  'mayor_office',
+  'sangguniang_bayan',
+];
 
 const OFFICIAL_ROLES: Role[] = [
   'tourism_officer',
@@ -100,11 +110,10 @@ export default function UserManagementPage() {
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
   const [showInactive, setShowInactive] = useState(false);
   const [updating, setUpdating] = useState<string | null>(null);
-<<<<<<< HEAD
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [roleUpdateError, setRoleUpdateError] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [userFetchError, setUserFetchError] = useState('');
-=======
   const [newAccountDetails, setNewAccountDetails] = useState({
     firstName: '',
     middleName: '',
@@ -120,14 +129,13 @@ export default function UserManagementPage() {
   const [accountCreationStatus, setAccountCreationStatus] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
   const [invitationLink, setInvitationLink] = useState<{ email: string; fullName: string; role: Role; url: string } | null>(null);
   const [linkActionStatus, setLinkActionStatus] = useState('');
->>>>>>> team-2/workflow-revision-integration
 
   // ─── Data actions ──────────────────────────────────────────────────────────
   const fetchUsers = useCallback(async () => {
     setUsersError('');
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, email, role, created_at, is_active')
+      .select('id, email, full_name, role, created_at, is_active')
       .eq('is_active', !showInactive)
       .order('created_at', { ascending: false });
 
@@ -138,9 +146,54 @@ export default function UserManagementPage() {
       return;
     }
     setUserFetchError('');
-    setUsers(data ?? []);
+    const profiles = data ?? [];
+    try {
+      const response = await fetch('/api/admin/accounts', { cache: 'no-store' });
+      const result = await response.json() as {
+        error?: string;
+        verificationStatuses?: Record<string, Exclude<VerificationStatus, 'unknown'>>;
+      };
+      if (!response.ok || !result.verificationStatuses) {
+        throw new Error(result.error || 'Could not load account verification statuses.');
+      }
+      setUsers(profiles.map((profile) => ({
+        ...profile,
+        verificationStatus: result.verificationStatuses?.[profile.id] ?? 'unknown',
+      })));
+    } catch (verificationError) {
+      const message = verificationError instanceof Error
+        ? verificationError.message
+        : 'Could not load account verification statuses.';
+      console.error('Account verification status refresh failed:', message);
+      setUsers(profiles.map((profile) => ({ ...profile, verificationStatus: 'unknown' as const })));
+      setUsersError(message);
+    }
     setLoading(false);
   }, [showInactive, supabase]);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setCurrentUserId(data.user?.id ?? null));
+  }, [supabase]);
+
+  const updateRole = async (userId: string, newRole: Role) => {
+    if (userId === currentUserId) {
+      setRoleUpdateError('You cannot change the role of the account you are signed in with.');
+      return;
+    }
+    setUpdating(userId);
+    setRoleUpdateError('');
+    const { error } = await supabase.rpc('admin_update_profile_role', {
+      target_user_id: userId,
+      new_role: newRole,
+    });
+    if (error) {
+      console.error('Role update failed:', error.message);
+      setRoleUpdateError(error.message);
+    } else {
+      setUsers(prev => prev.map(u => (u.id === userId ? { ...u, role: newRole } : u)));
+    }
+    setUpdating(null);
+  };
 
   const createOfficialAccount = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -242,14 +295,20 @@ export default function UserManagementPage() {
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    fetchUsers();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void fetchUsers();
+    });
 
     const channel = supabase
       .channel('realtime-user-management')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, fetchUsers)
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
   }, [supabase, fetchUsers]);
 
   // ─── Filtering ─────────────────────────────────────────────────────────────
@@ -497,6 +556,14 @@ export default function UserManagementPage() {
           <button type="button" onClick={() => void fetchUsers()} className="font-semibold underline">Retry</button>
         </div>
       )}
+      {roleUpdateError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text"
+        >
+          Role update failed: {roleUpdateError}
+        </p>
+      )}
       {deleteError && (
         <p
           role="alert"
@@ -632,6 +699,7 @@ export default function UserManagementPage() {
                     <select
                       value={user.role}
                       onChange={(e) => updateRole(user.id, e.target.value as Role)}
+                      disabled={!user.is_active || user.id === currentUserId}
                       aria-label={`Change role for ${user.email}`}
                       className="h-10 cursor-pointer rounded-full border border-warm-border bg-card px-4 text-xs font-medium text-warm-text outline-none transition-colors hover:bg-sidebar focus:border-clay max-md:h-11 max-md:w-full"
                     >

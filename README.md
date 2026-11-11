@@ -49,21 +49,23 @@ cp .env.example .env
 
 ## Five-stage document workflow
 
-1. A submitter uploads a primary document, optional supporting files, the
-   document type, request summary, and optional recipient.
-   The system creates a tracking number and records the submission.
-2. The approver proposes an ordered set of municipal offices based on the request.
-   The Mayor's Office is optional and, when needed, is the final route step.
-3. An administrator reviews, edits, and finalizes the route, or rejects and
-   archives the request.
-4. Finalized municipal offices review the request one at a time. The workflow
-   advances only after each office approves its step. Any active office may
-   return the request to the sender for additional information; after the sender
-   responds, it resumes at the same office.
-5. If the route includes the Mayor's Office, the Mayor makes the final office
-   decision. Otherwise, that step is skipped. After all required offices approve,
-   the request returns to the Administrator for completion; the sender is notified.
-   A rejection is archived, and the sender must submit a new request.
+1. A submitter uploads a primary document, optional supporting files, document
+   type, and request summary, then selects the destination.
+2. Selecting MTO, Sangguniang Bayan, or the Mayor's Office sends the request
+   directly to that office as `pending_office`. The Approver/Tourism Officer
+   review stage is bypassed, and the selected office is notified.
+3. Selecting the Daet Tourism Office sends the request to the Approver/Tourism
+   Officer as `pending_approver`. Tourism Office requests are reviewed and
+   completed there; they cannot be routed to municipal offices.
+4. Municipal offices process their assigned steps, may request additional
+   information, upload supporting documents, and record decisions. Supporting
+   documents retain uploader and timestamp history. An MTO-only request stays
+   with MTO and cannot be forwarded to the Tourism Officer. The requester
+   receives status notifications throughout the workflow.
+
+Destination and document classifications are selected at submission time.
+Tourism Officer review is therefore optional per submission rather than
+mandatory for every request.
 
 The three office roles are Municipal Treasurer's Office, Mayor's Office, and
 Sangguniang Bayan Office. The Admin workspace dashboard monitors accounts in
@@ -76,6 +78,31 @@ assigned role dashboard. The server restricts account creation to administrators
 and those official roles.
 Workflow decisions are recorded in the document history, and sender milestone
 notifications are delivered in-app and by email.
+
+## Inter-office request workflow
+
+The Municipal Treasurer's Office, Sangguniang Bayan, and Mayor's Office can
+create separately tracked office-to-office requests and route each through one
+or two receiving offices, with the requesting office optionally configured as
+the first processing step. A request may optionally link to an existing citizen
+submission; the citizen's original file versions remain unchanged and accessible
+to participating offices. The last configured office has final approval
+authority, and earlier offices can receive a request returned for revision.
+
+Each route step can optionally require a typed supporting document before
+forwarding. The database enforces required uploads, office-level transitions,
+and final-office approval. Private request-scoped storage, immutable document
+versions, request-specific messages, activity history, role notifications,
+and hourly reminders are included. Office users can open Inter-Office Requests
+from their dashboard navigation.
+
+Apply `20261110230000_add_interoffice_request_management.sql` after the existing
+workflow migrations, including
+`20261110194204_submitter_direct_office_routing.sql`. The migration creates the
+inter-office schema and its private Storage bucket, extends notifications and
+the email outbox, and schedules pending reminders with `pg_cron`. Verify the
+migration state and review the target Supabase project before applying it; do
+not push the full migration history to a project whose history is unreconciled.
 
 Apply the migrations in `supabase/migrations/` in filename order to enable the
 office roles, workflow transitions, attachment access, archive behavior, and

@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
 
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('role')
+    .select('role, is_active')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
     console.error('Could not verify account status access:', profileError.message);
     return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
   }
-  if (profile?.role !== 'system_admin') {
+  if (profile?.role !== 'system_admin' || profile.is_active === false) {
     return withAuthCookies(NextResponse.json({ error: 'Only administrators can view account verification status.' }, { status: 403 }));
   }
 
@@ -128,7 +128,7 @@ export async function POST(request: NextRequest) {
 
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('role')
+    .select('role, is_active')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -136,7 +136,7 @@ export async function POST(request: NextRequest) {
     console.error('Could not verify account creation permission:', profileError.message);
     return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
   }
-  if (profile?.role !== 'system_admin') {
+  if (profile?.role !== 'system_admin' || profile.is_active === false) {
     return withAuthCookies(NextResponse.json({ error: 'Only administrators can create official accounts.' }, { status: 403 }));
   }
 
@@ -297,7 +297,7 @@ export async function DELETE(request: NextRequest) {
 
   const { data: requesterProfile, error: requesterProfileError } = await supabase
     .from('profiles')
-    .select('role')
+    .select('role, is_active')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -305,7 +305,7 @@ export async function DELETE(request: NextRequest) {
     console.error('Could not verify profile deletion permission:', requesterProfileError.message);
     return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
   }
-  if (requesterProfile?.role !== 'system_admin') {
+  if (requesterProfile?.role !== 'system_admin' || requesterProfile.is_active === false) {
     return withAuthCookies(NextResponse.json({ error: 'Only administrators can delete profiles.' }, { status: 403 }));
   }
 

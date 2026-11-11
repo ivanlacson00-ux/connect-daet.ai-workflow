@@ -39,6 +39,13 @@ export type OfficeRole = keyof typeof OFFICE_CONFIG;
 export const TOURISM_OFFICE_ROLE = 'tourism_officer' as const;
 export const TOURISM_OFFICE_LABEL = 'Daet Tourism Office';
 export type SubmissionDestinationRole = OfficeRole | typeof TOURISM_OFFICE_ROLE;
+export type WorkflowInitialDestinationRole = OfficeRole | typeof TOURISM_OFFICE_ROLE;
+
+export function getWorkflowInitialDestinationRole(
+  role: SubmissionDestinationRole
+): WorkflowInitialDestinationRole {
+  return role;
+}
 
 export const SUBMISSION_DESTINATION_CONFIG = {
   ...OFFICE_CONFIG,

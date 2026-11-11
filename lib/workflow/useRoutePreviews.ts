@@ -15,10 +15,13 @@ export interface WorkflowRoutePreview {
   finalDecisionOfficeRole: string | null;
   status: string | null;
   finalizedAt: string | null;
+  auditEvents: { action_type: string; created_at: string }[];
   steps: {
     sequence_number: number;
     office_role: string;
     status: string;
+    responsibility: string;
+    assignment_source: string;
     started_at: string | null;
     decided_at: string | null;
     requirements_requested_at: string | null;
@@ -44,7 +47,7 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
     }
 
     const loadRoutes = async () => {
-      const [routeResult, submissionResult] = await Promise.all([
+      const [routeResult, submissionResult, auditResult] = await Promise.all([
         supabase
           .from('workflow_routing_plans')
           .select(`
@@ -68,13 +71,33 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
           .from('workflow_submissions')
           .select('id, initial_destination_role, final_decision_office_role')
           .in('id', submissionIds),
+        supabase
+          .from('workflow_audit_logs')
+          .select('submission_id, action_type, created_at')
+          .in('submission_id', submissionIds)
+          .in('action_type', [
+            'SUBMITTED',
+            'OFFICE_FORWARDED_TO_TOURISM_OFFICER',
+            'TOURISM_OFFICER_ASSIGNMENTS_CREATED',
+            'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED',
+            'TOURISM_OFFICE_APPROVED',
+            'OFFICE_ROUTE_STEP_ASSIGNED',
+            'OFFICE_FINAL_DECISION',
+            'MAYOR_APPROVED',
+            'MAYOR_REJECTED',
+            'WORKFLOW_COMPLETED',
+          ])
+          .order('created_at', { ascending: true })
+          .limit(2000),
       ]);
 
       if (!active) return;
-      if (routeResult.error || submissionResult.error) {
+      if (routeResult.error || submissionResult.error || auditResult.error) {
         console.error(
           'Could not load workflow route previews:',
-          routeResult.error?.message ?? submissionResult.error?.message
+          routeResult.error?.message
+            ?? submissionResult.error?.message
+            ?? auditResult.error?.message
         );
         setRoutesBySubmission(
           Object.fromEntries(
@@ -85,6 +108,7 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
                 finalDecisionOfficeRole: null,
                 status: null,
                 finalizedAt: null,
+                auditEvents: [],
                 steps: [],
                 loadFailed: true,
               },
@@ -105,6 +129,9 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
             finalDecisionOfficeRole: initialDestinationById.get(id)?.final_decision_office_role ?? null,
             status: null,
             finalizedAt: null,
+            auditEvents: (auditResult.data ?? [])
+              .filter((event) => event.submission_id === id)
+              .map(({ action_type, created_at }) => ({ action_type, created_at })),
             steps: [],
             loadFailed: false,
           },
@@ -116,6 +143,7 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
           ...previews[route.submission_id],
           status: route.status,
           finalizedAt: route.finalized_at,
+          auditEvents: previews[route.submission_id]?.auditEvents ?? [],
           steps: route.workflow_routing_steps ?? [],
         };
       }

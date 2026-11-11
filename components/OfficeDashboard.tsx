@@ -416,7 +416,7 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
                       selectedOfficeRole={submission.selected_office_role}
                       initialDestinationRole={routesBySubmission[submission.id]?.initialDestinationRole}
                       finalDecisionOfficeRole={routesBySubmission[submission.id]?.finalDecisionOfficeRole}
-                      auditEvents={[]}
+                      auditEvents={routesBySubmission[submission.id]?.auditEvents ?? []}
                       routeLoadFailed={routesBySubmission[submission.id]?.loadFailed ?? false}
                     />
                   </div>

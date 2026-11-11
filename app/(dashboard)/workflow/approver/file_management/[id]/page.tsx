@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
@@ -17,6 +17,11 @@ import {
   type OfficeRole,
   type OfficeRoutingMode,
 } from '@/lib/workflow/offices';
+import {
+  getWorkflowFileMimeType,
+  getWorkflowFileTypeError,
+  WORKFLOW_DOCUMENT_ACCEPT,
+} from '@/lib/workflow/file-types';
 
 // ─── Styles & Fonts (synced with the user file page) ─────────────────────────
 const fonts = {
@@ -57,6 +62,10 @@ interface SupportingAttachment {
   file_path: string;
   file_type: string | null;
   file_size: number;
+  uploaded_by: string;
+  created_at: string;
+  uploader_name: string;
+  uploader_office: string;
 }
 
 interface RouteStep {
@@ -98,7 +107,7 @@ const DECLINED_STATUSES = [
 
 const getStatusStyles = (status: string) => {
   const s = (status || '').toLowerCase();
-  if (QUEUE_STATUSES.includes(s)) return { label: 'Awaiting approver review', classes: 'bg-pending-bg text-pending-text' };
+  if (QUEUE_STATUSES.includes(s)) return { label: 'Awaiting Tourism Office review', classes: 'bg-pending-bg text-pending-text' };
   if (s === 'pending_admin') return { label: 'Administrative review', classes: 'bg-review-bg text-review-text' };
   if (s === 'pending_office') return { label: 'Municipal office review', classes: 'bg-review-bg text-review-text' };
   if (s === 'pending_mayor') return { label: "Mayor's final review", classes: 'bg-review-bg text-review-text' };
@@ -119,7 +128,12 @@ const getActionLabel = (type: string) => {
     case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Office route step assigned';
     case 'OFFICE_ROUTE_STEP_APPROVED': return 'Office route step approved';
     case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Municipal office forwarded for Tourism Officer review';
-    case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer assigned additional offices';
+    case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer requested municipal office review';
+    case 'TOURISM_OFFICE_APPROVED': return 'Tourism Office approved and completed request';
+    case 'TOURISM_OFFICE_ROUTE_STEP_ASSIGNED': return 'Tourism Office assigned municipal review';
+    case 'TOURISM_OFFICE_ROUTE_STEP_APPROVED': return 'Municipal review completed for Tourism Office';
+    case 'APPROVER_COMPLETED': return 'Tourism Officer completed request after municipal office review';
+    case 'OFFICE_SUPPORTING_DOCUMENT_UPLOADED': return 'Office uploaded a supporting document';
     case 'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED': return 'Additional office assignments completed';
     case 'OFFICE_FINAL_DECISION': return 'Final decision by authorized office';
     case 'ROUTE_PROPOSED': return 'Tourism Officer proposed office route';
@@ -146,6 +160,11 @@ export default function ApproverManagePage() {
   const [sender, setSender] = useState<SenderProfile | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [attachments, setAttachments] = useState<SupportingAttachment[]>([]);
+  const [supportingDocument, setSupportingDocument] = useState<File | null>(null);
+  const [uploadingSupportingDocument, setUploadingSupportingDocument] = useState(false);
+  const [supportingDocumentError, setSupportingDocumentError] = useState('');
+  const [supportingDocumentNotice, setSupportingDocumentNotice] = useState('');
+  const supportingDocumentInput = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [actionError, setActionError] = useState('');
@@ -155,7 +174,6 @@ export default function ApproverManagePage() {
     Partial<Record<OfficeRole, OfficeResponsibility>>
   >({});
   const [routingMode, setRoutingMode] = useState<OfficeRoutingMode>('sequential');
-  const [finalDecisionOfficeRole, setFinalDecisionOfficeRole] = useState<OfficeRole | ''>('');
   const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
   const [routeStatus, setRouteStatus] = useState<string | null>(null);
   const [hasFinalizedRoute, setHasFinalizedRoute] = useState(false);
@@ -212,11 +230,6 @@ export default function ApproverManagePage() {
 
       if (submission) {
         setSub(submission);
-        setFinalDecisionOfficeRole(
-          isOfficeRole(submission.final_decision_office_role)
-            ? submission.final_decision_office_role
-            : ''
-        );
         setComment(
           currentRole === 'mayor_office' && submission.status === 'pending_mayor'
             ? submission.mayor_comments || ''
@@ -289,11 +302,30 @@ export default function ApproverManagePage() {
 
         const { data: supportingFiles, error: attachmentError } = await supabase
           .from('workflow_submission_attachments')
-          .select('id, file_name, file_path, file_type, file_size')
+          .select('id, file_name, file_path, file_type, file_size, uploaded_by, created_at')
           .eq('submission_id', id)
           .order('created_at', { ascending: true });
-        if (attachmentError) console.error('Could not load supporting attachments:', attachmentError.message);
-        setAttachments(supportingFiles ?? []);
+        if (attachmentError) {
+          console.error('Could not load supporting attachments:', attachmentError.message);
+          setAttachments([]);
+        } else {
+          const uploaderIds = [...new Set((supportingFiles ?? []).map((file) => file.uploaded_by))];
+          const { data: uploaders, error: uploaderError } = uploaderIds.length
+            ? await supabase.from('profiles').select('id, full_name, role').in('id', uploaderIds)
+            : { data: [], error: null };
+          if (uploaderError) console.error('Could not load attachment uploader names:', uploaderError.message);
+          const uploaderProfiles = new Map((uploaders ?? []).map((profile) => [profile.id, profile]));
+          setAttachments((supportingFiles ?? []).map((file) => ({
+            ...file,
+            uploader_name: uploaderProfiles.get(file.uploaded_by)?.full_name || 'Unknown uploader',
+            uploader_office: (() => {
+              const uploaderRole = String(uploaderProfiles.get(file.uploaded_by)?.role ?? '');
+              if (isOfficeRole(uploaderRole)) return OFFICE_CONFIG[uploaderRole].label;
+              if (uploaderRole === TOURISM_OFFICE_ROLE) return TOURISM_OFFICE_LABEL;
+              return uploaderRole === 'submitter' ? 'Submitter' : 'Workflow staff';
+            })(),
+          })));
+        }
       }
     } catch (err) {
       console.error('Failed to load submission:', err);
@@ -316,27 +348,171 @@ export default function ApproverManagePage() {
     await downloadFile(data.signedUrl, attachment.file_name);
   };
 
+  const uploadOfficeSupportingDocument = async () => {
+    if (!sub || !supportingDocument) {
+      setSupportingDocumentError('Choose a supporting document to upload.');
+      return;
+    }
+
+    const fileError = getWorkflowFileTypeError(supportingDocument.name, false);
+    if (fileError) {
+      setSupportingDocumentError(fileError);
+      return;
+    }
+
+    setUploadingSupportingDocument(true);
+    setSupportingDocumentError('');
+    setSupportingDocumentNotice('');
+    let uploadedPath: string | null = null;
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      if (!user) throw new Error('Your session has expired. Please sign in again.');
+
+      const contentType = getWorkflowFileMimeType(supportingDocument.name);
+      if (!contentType) throw new Error('This file type is not supported.');
+
+      const safeName = supportingDocument.name.replace(/[^\w.-]/g, '_');
+      uploadedPath = `${user.id}/${sub.id}/office-support/${crypto.randomUUID()}-${safeName}`;
+      const { error: storageError } = await supabase.storage
+        .from('workflow_uploads')
+        .upload(uploadedPath, supportingDocument, {
+          contentType,
+          cacheControl: '3600',
+          upsert: false,
+        });
+      if (storageError) throw storageError;
+
+      const { error: metadataError } = await supabase.rpc(
+        'add_workflow_office_supporting_document',
+        {
+          target_submission_id: sub.id,
+          document_name: supportingDocument.name,
+          document_path: uploadedPath,
+          document_type: contentType,
+          document_size: supportingDocument.size,
+        }
+      );
+      if (metadataError) {
+        const { error: cleanupError } = await supabase.storage
+          .from('workflow_uploads')
+          .remove([uploadedPath]);
+        if (cleanupError) console.error('Could not clean up unlinked office document:', cleanupError.message);
+        throw metadataError;
+      }
+
+      setSupportingDocument(null);
+      if (supportingDocumentInput.current) supportingDocumentInput.current.value = '';
+      setSupportingDocumentNotice('Supporting document uploaded and added to the request history.');
+      await fetchDetails();
+    } catch (error) {
+      console.error('Could not upload office supporting document:', error);
+      setSupportingDocumentError(
+        error instanceof Error ? error.message : 'Could not upload the supporting document.'
+      );
+    } finally {
+      setUploadingSupportingDocument(false);
+    }
+  };
+
   const handleWorkflowAction = async (
-    decision: 'approve' | 'reject' | 'return' | 'forward'
+    decision: 'approve' | 'reject' | 'return' | 'forward' | 'complete' | 'route'
   ) => {
     if (!sub) return;
     setUpdating(true);
     setActionError('');
 
-    if (role === 'tourism_officer' && QUEUE_STATUSES.includes(sub.status) && decision === 'approve') {
+    if (decision === 'complete') {
       if (
-        proposedOffices.length === 0
-        && sub.initial_destination_role !== TOURISM_OFFICE_ROLE
+        role !== 'tourism_officer'
+        || sub.status !== 'pending_approver'
+        || sub.initial_destination_role === TOURISM_OFFICE_ROLE
       ) {
-        setActionError('Select at least one additional municipal office.');
+        setActionError('This submission is not eligible for Tourism Officer completion.');
         setUpdating(false);
         return;
       }
+
+      const { error } = await supabase.rpc('complete_office_forwarded_submission', {
+        target_submission_id: sub.id,
+        decision_comments: comment.trim() || null,
+      });
+      if (error) {
+        setActionError(error.message || 'Could not complete this submission.');
+      } else {
+        await fetchDetails();
+      }
+      setUpdating(false);
+      return;
+    }
+
+    if (decision === 'route') {
       if (
-        sub.initial_destination_role === TOURISM_OFFICE_ROLE
-        && !finalDecisionOfficeRole
+        role !== 'tourism_officer'
+        || sub.status !== 'pending_approver'
+        || sub.initial_destination_role !== TOURISM_OFFICE_ROLE
+        || routeSteps.length > 0
+        || routeStateError
       ) {
-        setActionError('Select the municipal office that will make the final decision.');
+        setActionError('This Tourism Office submission cannot be routed to municipal offices.');
+        setUpdating(false);
+        return;
+      }
+      if (proposedOffices.length === 0) {
+        setActionError('Select at least one municipal office for approval.');
+        setUpdating(false);
+        return;
+      }
+
+      const { error } = await supabase.rpc('route_tourism_submission_to_municipal_offices', {
+        target_submission_id: sub.id,
+        assignment_records: proposedOffices.map((officeRole) => ({
+          office_role: officeRole,
+          responsibility: officeResponsibilities[officeRole] ?? 'mandatory_approval_clearance',
+        })),
+        routing_mode: routingMode,
+        assignment_comments: comment.trim() || null,
+      });
+      if (error) {
+        setActionError(error.message || 'Could not route this submission to municipal offices.');
+      } else {
+        setProposedOffices([]);
+        await fetchDetails();
+      }
+      setUpdating(false);
+      return;
+    }
+
+    if (role === 'tourism_officer' && QUEUE_STATUSES.includes(sub.status) && decision === 'approve') {
+      if (sub.initial_destination_role === TOURISM_OFFICE_ROLE) {
+        if (routeStateError) {
+          setActionError('Could not verify the municipal route. Refresh and try again before deciding.');
+          setUpdating(false);
+          return;
+        }
+        if (routeSteps.length > 0 && routeSteps.some((step) => step.status !== 'approved')) {
+          setActionError('All assigned municipal offices must complete their review before final Tourism Office approval.');
+          setUpdating(false);
+          return;
+        }
+        const completionRpc = routeSteps.length > 0
+          ? 'complete_routed_tourism_submission'
+          : 'complete_tourism_office_submission';
+        const { error } = await supabase.rpc(completionRpc, {
+          target_submission_id: sub.id,
+          decision_comments: comment.trim() || null,
+        });
+        if (error) {
+          setActionError(error.message || 'Could not complete this Tourism Office request.');
+        } else {
+          await fetchDetails();
+        }
+        setUpdating(false);
+        return;
+      }
+
+      if (proposedOffices.length === 0) {
+        setActionError('Select at least one additional municipal office.');
         setUpdating(false);
         return;
       }
@@ -350,7 +526,7 @@ export default function ApproverManagePage() {
             })),
             routing_mode: routingMode,
             assignment_comments: comment.trim() || null,
-            final_decision_office_role: finalDecisionOfficeRole || null,
+            final_decision_office_role: null,
           })
         : await supabase.rpc('propose_workflow_route', {
             target_submission_id: sub.id,
@@ -412,8 +588,12 @@ export default function ApproverManagePage() {
         setUpdating(false);
         return;
       }
+
       if (activeOfficeRouteStep) {
-        const { error } = await supabase.rpc('decide_workflow_route_step', {
+        const decisionRpc = sub.initial_destination_role === TOURISM_OFFICE_ROLE
+          ? 'decide_tourism_submission_route_step'
+          : 'decide_workflow_route_step';
+        const { error } = await supabase.rpc(decisionRpc, {
           target_submission_id: sub.id,
           approve_step: decision === 'approve',
           decision_comments: comment.trim() || null,
@@ -536,10 +716,6 @@ export default function ApproverManagePage() {
     );
   }
 
-  const finalDecisionOfficeRoleValue = sub.final_decision_office_role ?? null;
-  const finalDecisionOfficeLabel = isOfficeRole(finalDecisionOfficeRoleValue)
-    ? OFFICE_CONFIG[finalDecisionOfficeRoleValue].label
-    : 'Not designated yet';
   const statusConfig = sub.status === 'pending_office' && sub.selected_office_role === 'mayor_office'
     ? { label: "Mayor's final route decision", classes: 'bg-review-bg text-review-text' }
     : getStatusStyles(sub.status);
@@ -645,8 +821,7 @@ export default function ApproverManagePage() {
               )}
               {sub.initial_destination_role === TOURISM_OFFICE_ROLE && (
                 <p className="mt-2 text-[11px] text-muted-text">
-                  Final-decision office:{' '}
-                  <span className="font-semibold text-warm-text">{finalDecisionOfficeLabel}</span>
+                  This request is handled and completed within the Tourism Office.
                 </p>
               )}
               {routeStatus === 'proposed' && (
@@ -714,23 +889,77 @@ export default function ApproverManagePage() {
             </div>
           </section>
 
-          {attachments.length > 0 && (
+          {(attachments.length > 0 || officeReview || mayorReview) && (
             <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-              <h2 className="mb-3 text-xs font-semibold text-warm-text">Supporting attachments</h2>
-              <ul className="space-y-2">
-                {attachments.map((attachment) => (
-                  <li key={attachment.id} className="flex items-center justify-between gap-3 text-[11px]">
-                    <span className="min-w-0 truncate text-warm-text">{attachment.file_name}</span>
-                    <button
-                      type="button"
-                      onClick={() => void downloadAttachment(attachment)}
-                      className="shrink-0 font-semibold text-clay underline"
-                    >
-                      Download
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <h2 className="mb-3 text-xs font-semibold text-warm-text">Supporting documents</h2>
+              {(officeReview || mayorReview) && (
+                <div className="mb-4 space-y-3 rounded-xl bg-sidebar p-4">
+                  <label htmlFor="office-supporting-document" className="block text-[11px] font-medium text-warm-text">
+                    Upload a supporting document (PDF, DOC, DOCX, JPG, PNG, and other supported document formats)
+                  </label>
+                  <input
+                    ref={supportingDocumentInput}
+                    id="office-supporting-document"
+                    type="file"
+                    accept={WORKFLOW_DOCUMENT_ACCEPT}
+                    onChange={(event) => {
+                      setSupportingDocument(event.target.files?.[0] ?? null);
+                      setSupportingDocumentError('');
+                      setSupportingDocumentNotice('');
+                    }}
+                    className="block w-full text-[11px] text-muted-text file:mr-3 file:rounded-full file:border-0 file:bg-card file:px-3 file:py-2 file:text-[11px] file:font-semibold file:text-warm-text"
+                  />
+                  {supportingDocument && (
+                    <p className="truncate text-[11px] text-muted-text">
+                      Selected: {supportingDocument.name}
+                    </p>
+                  )}
+                  {supportingDocumentError && (
+                    <p role="alert" className="text-[11px] font-medium text-rejected-text">
+                      {supportingDocumentError}
+                    </p>
+                  )}
+                  {supportingDocumentNotice && (
+                    <p role="status" className="text-[11px] font-medium text-approved-text">
+                      {supportingDocumentNotice}
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void uploadOfficeSupportingDocument()}
+                    disabled={uploadingSupportingDocument || !supportingDocument}
+                    className="inline-flex h-10 w-full items-center justify-center rounded-full bg-clay px-4 text-[11px] font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
+                  >
+                    {uploadingSupportingDocument ? 'Uploading...' : 'Upload Supporting Document'}
+                  </button>
+                </div>
+              )}
+              {attachments.length > 0 ? (
+                <ul className="space-y-3">
+                  {attachments.map((attachment) => (
+                    <li key={attachment.id} className="flex items-start justify-between gap-3 border-t border-warm-border pt-3 text-[11px]">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-warm-text">{attachment.file_name}</p>
+                        <p className="mt-1 text-muted-text">
+                          {attachment.uploader_office} · {attachment.uploader_name} · {new Date(attachment.created_at).toLocaleString()}
+                        </p>
+                        <p className="mt-0.5 text-muted-text">
+                          {attachment.file_type || 'Document'} · {(attachment.file_size / 1024).toFixed(1)} KB
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void downloadAttachment(attachment)}
+                        className="shrink-0 font-semibold text-clay underline"
+                      >
+                        Download
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[11px] text-muted-text">No supporting documents have been uploaded yet.</p>
+              )}
             </section>
           )}
 
@@ -773,32 +1002,23 @@ export default function ApproverManagePage() {
               </div>
             ) : (
               <>
-                {approverReview && (
-                  sub.initial_destination_role === TOURISM_OFFICE_ROLE && (
-                    <label className="mb-4 block text-xs font-semibold text-warm-text">
-                      Municipal office responsible for the final decision
-                      <select
-                        value={finalDecisionOfficeRole}
-                        onChange={(event) => {
-                          const officeRole = event.target.value;
-                          setFinalDecisionOfficeRole(isOfficeRole(officeRole) ? officeRole : '');
-                        }}
-                        required
-                        className="mt-2 h-11 w-full rounded-xl border border-warm-border bg-card px-3 text-xs font-normal text-warm-text"
-                      >
-                        <option value="">Select a municipal office</option>
-                        {Object.entries(OFFICE_CONFIG).map(([officeRole, office]) => (
-                          <option key={officeRole} value={officeRole}>{office.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                  )
+                {approverReview
+                  && sub.initial_destination_role === TOURISM_OFFICE_ROLE
+                  && routeSteps.length > 0
+                  && routeSteps.every((step) => step.status === 'approved') && (
+                  <p className="mb-4 rounded-xl bg-sidebar p-3 text-xs leading-relaxed text-muted-text">
+                    Municipal reviews are complete. Review their findings, then approve or reject this request.
+                  </p>
                 )}
-                {approverReview && (
+                {approverReview
+                  && (
+                    sub.initial_destination_role !== TOURISM_OFFICE_ROLE
+                    || routeSteps.length === 0 && !routeStateError && routeStatus === null
+                  ) && (
                   <fieldset className="mb-4 space-y-3">
                     <legend className="mb-2 text-xs font-semibold text-warm-text">
                       {sub.initial_destination_role === TOURISM_OFFICE_ROLE
-                        ? 'Optional additional office assignments after review'
+                        ? 'Request municipal approval (optional)'
                         : 'Assign additional offices after reviewing this submission'}
                     </legend>
                     <div className="space-y-2">
@@ -869,7 +1089,9 @@ export default function ApproverManagePage() {
                       </ol>
                     )}
                     <p className="text-[11px] text-muted-text">
-                      Additional assignments do not replace the final-decision office or grant final decision authority.
+                      {sub.initial_destination_role === TOURISM_OFFICE_ROLE
+                        ? 'Assigned municipal offices will review the document and return it to Tourism for a final decision.'
+                        : 'Additional assignments do not replace the final-decision office or grant final decision authority.'}
                     </p>
                   </fieldset>
                 )}
@@ -880,7 +1102,9 @@ export default function ApproverManagePage() {
                       ? activeRouteStep
                         ? 'Evaluation, clearance, or recommendation notes'
                         : 'Final office decision notes'
-                      : 'Tourism Officer remarks'}
+                      : sub.initial_destination_role === TOURISM_OFFICE_ROLE
+                        ? 'Tourism Office decision notes'
+                        : 'Tourism Officer remarks'}
                 </label>
                 <textarea
                   id="approver-notes"
@@ -914,7 +1138,7 @@ export default function ApproverManagePage() {
                         {updating
                           ? 'Saving...'
                           : sub.initial_destination_role === TOURISM_OFFICE_ROLE
-                            ? 'Route submission'
+                            ? 'Approve and complete'
                             : 'Assign additional offices'}
                       </button>
                       <button
@@ -924,6 +1148,31 @@ export default function ApproverManagePage() {
                       >
                         Reject and archive
                       </button>
+                      {sub.initial_destination_role === TOURISM_OFFICE_ROLE
+                        && routeSteps.length === 0
+                        && !routeStateError
+                        && routeStatus === null
+                        && proposedOffices.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => void handleWorkflowAction('route')}
+                          disabled={updating}
+                          className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar disabled:opacity-50"
+                        >
+                          {updating ? 'Sending...' : 'Send for municipal approval'}
+                        </button>
+                      )}
+                      {sub.status === 'pending_approver'
+                        && sub.initial_destination_role !== TOURISM_OFFICE_ROLE && (
+                        <button
+                          type="button"
+                          onClick={() => void handleWorkflowAction('complete')}
+                          disabled={updating}
+                          className="inline-flex h-11 w-full items-center justify-center rounded-full border border-approved-bg px-6 text-xs font-semibold text-approved-text transition-colors hover:bg-approved-bg/50 disabled:opacity-50"
+                        >
+                          {updating ? 'Saving...' : 'Complete document'}
+                        </button>
+                      )}
                     </>
                   )}
                   {officeReview && (
@@ -947,7 +1196,9 @@ export default function ApproverManagePage() {
                             ? 'Record assignment complete'
                             : 'Approve and complete'}
                       </button>
-                      {role === sub.initial_destination_role && !activeRouteStep && (
+                      {role === sub.initial_destination_role
+                        && role !== 'municipal_treasurer'
+                        && !activeRouteStep && (
                         <button
                           type="button"
                           onClick={() => void handleWorkflowAction('forward')}

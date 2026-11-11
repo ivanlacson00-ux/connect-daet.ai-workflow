@@ -94,6 +94,7 @@ export default function WorkflowLayout({
     if (isOfficeRole(role)) {
       return [
         { href: getRoleHomePath(role), label: 'Office Dashboard', icon: '▤' },
+        { href: '/workflow/inter-office', label: 'Inter-Office Requests', icon: '⇄' },
         { href: '/workflow/retrieval', label: 'Scan QR Code', icon: '⌗' },
       ];
     }

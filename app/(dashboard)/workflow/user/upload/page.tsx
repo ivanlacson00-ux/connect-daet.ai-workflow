@@ -8,6 +8,7 @@ import {
   getWorkflowFilesTypeError,
 } from '@/lib/workflow/file-types';
 import {
+  getWorkflowInitialDestinationRole,
   SUBMISSION_DESTINATION_CONFIG,
   TOURISM_OFFICE_ROLE,
   type SubmissionDestinationRole,
@@ -29,6 +30,7 @@ export default function UploadPage() {
   const [attachments, setAttachments] = useState<File[]>([]);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [routeMode, setRouteMode] = useState<'direct_office' | 'tourism_review'>('direct_office');
   const [selectedOfficeRole, setSelectedOfficeRole] = useState<SubmissionDestinationRole | ''>('');
   const [category, setCategory] = useState('');
   const [otherDocumentType, setOtherDocumentType] = useState('');
@@ -214,7 +216,7 @@ export default function UploadPage() {
           submission_purpose: null,
           submission_requested_action: null,
           submission_intended_recipient: null,
-          submission_office_role: selectedOfficeRole,
+          submission_office_role: getWorkflowInitialDestinationRole(selectedOfficeRole),
           attachment_records: attachmentRecords,
           ...(category === 'Other'
             ? { submission_other_document_type: otherDocumentType.trim() }
@@ -274,6 +276,10 @@ export default function UploadPage() {
     setCategory('');
     setOtherDocumentType('');
   };
+  const handleRouteModeChange = (nextMode: 'direct_office' | 'tourism_review') => {
+    setRouteMode(nextMode);
+    handleDestinationChange(nextMode === 'tourism_review' ? TOURISM_OFFICE_ROLE : '');
+  };
 
   return (
     <div className="mx-auto w-full max-w-5xl rounded-2xl border border-warm-border bg-card p-5 shadow-sm sm:p-8">
@@ -299,33 +305,75 @@ export default function UploadPage() {
       </header>
 
       <div className="grid grid-cols-1 gap-x-4 gap-y-5 md:grid-cols-2">
-        <div>
-          <label className={labelClass} htmlFor="submission-destination">
-            Destination office
-          </label>
-          <select
-            id="submission-destination"
-            value={selectedOfficeRole}
-            onChange={(event) => handleDestinationChange(event.target.value as SubmissionDestinationRole | '')}
-            className={`${fieldClass} cursor-pointer`}
-            required
-          >
-            <option value="" disabled>Select the office that should receive this submission</option>
-            {Object.entries(SUBMISSION_DESTINATION_CONFIG).map(([officeRole, office]) => (
-              <option key={officeRole} value={officeRole}>{office.label}</option>
-            ))}
-          </select>
-          <p className="mt-2 text-[11px] leading-relaxed text-muted-text">
-            {selectedOfficeRole === TOURISM_OFFICE_ROLE
-              ? 'Your submission goes directly to the Daet Tourism Office for review and municipal-office assignment.'
-              : 'Your submission goes directly to this office. It does not need Tourism Officer review first.'}
-          </p>
-          {selectionNotice && (
-            <p role="status" className="mt-2 text-[11px] text-pending-text">
-              {selectionNotice}
-            </p>
+        <fieldset className="space-y-3 md:col-span-2">
+          <legend className={labelClass}>How should this request be routed?</legend>
+          <div className="grid gap-3 md:grid-cols-2">
+            <button
+              type="button"
+              aria-pressed={routeMode === 'direct_office'}
+              onClick={() => handleRouteModeChange('direct_office')}
+              className={`rounded-2xl border p-4 text-left transition-colors ${
+                routeMode === 'direct_office'
+                  ? 'border-clay bg-clay-soft/30'
+                  : 'border-warm-border hover:bg-sidebar'
+              }`}
+            >
+              <span className="block text-xs font-semibold text-warm-text">Direct to a municipal office</span>
+              <span className="mt-1 block text-[11px] leading-relaxed text-muted-text">
+                Send it straight to MTO, Sangguniang Bayan, or the Mayor&apos;s Office. Tourism Officer review is skipped.
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={routeMode === 'tourism_review'}
+              onClick={() => handleRouteModeChange('tourism_review')}
+              className={`rounded-2xl border p-4 text-left transition-colors ${
+                routeMode === 'tourism_review'
+                  ? 'border-clay bg-clay-soft/30'
+                  : 'border-warm-border hover:bg-sidebar'
+              }`}
+            >
+              <span className="block text-xs font-semibold text-warm-text">Tourism Officer review and routing</span>
+              <span className="mt-1 block text-[11px] leading-relaxed text-muted-text">
+                Use this when the request needs Tourism Officer review before municipal-office processing.
+              </span>
+            </button>
+          </div>
+          {routeMode === 'direct_office' ? (
+            <div className="max-w-xl">
+              <label className={labelClass} htmlFor="submission-destination">
+                Receiving municipal office
+              </label>
+              <select
+                id="submission-destination"
+                value={selectedOfficeRole}
+                onChange={(event) => handleDestinationChange(event.target.value as SubmissionDestinationRole | '')}
+                className={`${fieldClass} cursor-pointer`}
+                required
+              >
+                <option value="" disabled>Select the office that should receive this submission</option>
+                {Object.entries(SUBMISSION_DESTINATION_CONFIG)
+                  .filter(([officeRole]) => officeRole !== TOURISM_OFFICE_ROLE)
+                  .map(([officeRole, office]) => (
+                    <option key={officeRole} value={officeRole}>{office.label}</option>
+                  ))}
+              </select>
+              <p className="mt-2 text-[11px] leading-relaxed text-muted-text">
+                The selected office receives the request directly and can begin processing it.
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-warm-border bg-sidebar px-4 py-3">
+              <p className="text-xs font-semibold text-warm-text">{SUBMISSION_DESTINATION_CONFIG[TOURISM_OFFICE_ROLE].label}</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-text">
+                The Tourism Officer reviews the request and determines the municipal-office route.
+              </p>
+            </div>
           )}
-        </div>
+          {selectionNotice && (
+            <p role="status" className="text-[11px] text-pending-text">{selectionNotice}</p>
+          )}
+        </fieldset>
 
         <div>
           <label className={labelClass} htmlFor="submission-category">
@@ -351,7 +399,7 @@ export default function UploadPage() {
               <option key={documentType} value={documentType}>{documentType}</option>
             ))}
           </select>
-          {selectedOfficeRole ? (
+          {selectedOfficeRole && routeMode === 'direct_office' ? (
             <p className="mt-2 text-[11px] leading-relaxed text-muted-text">
               Options are specific to {SUBMISSION_DESTINATION_CONFIG[selectedOfficeRole].label}.
             </p>

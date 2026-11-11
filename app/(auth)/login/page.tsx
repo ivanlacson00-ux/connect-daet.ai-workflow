@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { getRoleHomePath } from '@/lib/workflow/offices';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
@@ -23,6 +24,7 @@ export default function LoginPage() {
   const [resendingConfirmation, setResendingConfirmation] = useState(false);
   const [confirmationMessage, setConfirmationMessage] = useState('');
   const supabase = useMemo(() => createClient(), []);
+  const router = useRouter();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -45,6 +47,11 @@ export default function LoginPage() {
       params.delete('verification');
     }
 
+    if (params.get('session') === 'expired') {
+      setError('Your session expired. Please sign in again.');
+      params.delete('session');
+    }
+
     const query = params.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
   }, []);
@@ -56,44 +63,50 @@ export default function LoginPage() {
     setCanResendConfirmation(false);
     setConfirmationMessage('');
 
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
-      password,
-    });
+    try {
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      });
 
-    if (signInError) {
-      setError(
-        signInError.code === 'email_not_confirmed'
-          ? 'Confirm your email address before signing in.'
-          : signInError.message
+      if (signInError) {
+        setError(
+          signInError.code === 'email_not_confirmed'
+            ? 'Confirm your email address before signing in.'
+            : signInError.message
+        );
+        setCanResendConfirmation(signInError.code === 'email_not_confirmed');
+        return;
+      }
+
+      if (!data.user || !data.session) {
+        setError('Sign-in did not establish a session. Please try again.');
+        return;
+      }
+
+      const { data: role, error: profileError } = await supabase.rpc(
+        'ensure_current_user_profile'
       );
-      setCanResendConfirmation(signInError.code === 'email_not_confirmed');
-      setLoading(false);
-      return;
-    }
 
-    const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+      if (profileError || typeof role !== 'string') {
+        await supabase.auth.signOut();
+        console.error('Login profile setup failed:', profileError?.message ?? 'No role was returned.');
+        setError(
+          'We could not set up your account profile. Please try again; if the problem continues, contact an administrator to check the database migration and your account role.'
+        );
+        return;
+      }
 
-    if (refreshError || !refreshed.user) {
-      setError('Session error. Please try again.');
-      setLoading(false);
-      return;
-    }
-
-    const { data: role, error: profileError } = await supabase.rpc(
-      'ensure_current_user_profile'
-    );
-
-    if (profileError || typeof role !== 'string') {
-      await supabase.auth.signOut();
-      setError(
-        'We could not set up your account profile. Please try again; if the problem continues, contact an administrator to check the database migration and your account role.'
+      router.replace(getRoleHomePath(role));
+    } catch (loginError) {
+      console.error(
+        'Login request failed:',
+        loginError instanceof Error ? loginError.message : loginError
       );
+      setError('We could not complete sign-in. Check your connection and try again.');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    window.location.href = getRoleHomePath(role);
   };
 
   const handleResendConfirmation = async () => {

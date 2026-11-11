@@ -9,6 +9,13 @@ export async function proxy(req: NextRequest) {
       headers: req.headers,
     },
   })
+  const redirectWithSessionCookies = (url: URL) => {
+    const redirectResponse = NextResponse.redirect(url)
+    res.cookies.getAll().forEach(({ name, value, ...options }) => {
+      redirectResponse.cookies.set(name, value, options)
+    })
+    return redirectResponse
+  }
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -22,9 +29,15 @@ export async function proxy(req: NextRequest) {
           cookiesToSet.forEach(({ name, value }) =>
             req.cookies.set(name, value)
           )
-          res = NextResponse.next({
-            request: req,
+          const nextResponse = NextResponse.next({
+            request: {
+              headers: req.headers,
+            },
           })
+          res.cookies.getAll().forEach(({ name, value, ...options }) => {
+            nextResponse.cookies.set(name, value, options)
+          })
+          res = nextResponse
           cookiesToSet.forEach(({ name, value, options }) =>
             res.cookies.set(name, value, options)
           )
@@ -33,16 +46,24 @@ export async function proxy(req: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
 
   if (!user) {
-    return NextResponse.redirect(new URL('/login', req.url))
+    if (authError?.code === 'refresh_token_not_found') {
+      const loginUrl = new URL('/login', req.url)
+      loginUrl.searchParams.set('session', 'expired')
+      return redirectWithSessionCookies(loginUrl)
+    }
+    if (authError) {
+      console.error('Could not verify workflow session:', authError.message)
+    }
+    return redirectWithSessionCookies(new URL('/login', req.url))
   }
 
   if (!user.email_confirmed_at) {
     const loginUrl = new URL('/login', req.url)
     loginUrl.searchParams.set('verification', 'required')
-    return NextResponse.redirect(loginUrl)
+    return redirectWithSessionCookies(loginUrl)
   }
 
   const { data: profile } = await supabase
@@ -52,23 +73,19 @@ export async function proxy(req: NextRequest) {
     .single()
   if (profile?.is_active === false) {
     await supabase.auth.signOut()
-    const disabledResponse = NextResponse.redirect(
+    return redirectWithSessionCookies(
       new URL('/login?account=disabled', req.url)
     )
-    res.cookies.getAll().forEach(({ name, value, ...options }) => {
-      disabledResponse.cookies.set(name, value, options)
-    })
-    return disabledResponse
   }
   const role = profile?.role ?? null
   const pathname = req.nextUrl.pathname
 
   if (pathname.startsWith('/workflow/user') && role !== 'submitter') {
-    return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
+    return redirectWithSessionCookies(new URL(getRoleHomePath(role), req.url))
   }
 
   if (pathname.startsWith('/workflow/admin') && role !== 'system_admin') {
-    return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
+    return redirectWithSessionCookies(new URL(getRoleHomePath(role), req.url))
   }
 
   const officeRoutes = [
@@ -79,7 +96,7 @@ export async function proxy(req: NextRequest) {
   const requestedOffice = officeRoutes.find(({ path }) => pathname.startsWith(path))
 
   if (requestedOffice && role !== requestedOffice.role) {
-    return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
+    return redirectWithSessionCookies(new URL(getRoleHomePath(role), req.url))
   }
 
   if (pathname.startsWith('/workflow/approver')) {
@@ -90,7 +107,7 @@ export async function proxy(req: NextRequest) {
       if (officeReviewPage && isOfficeRole(role)) {
         return res
       }
-      return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
+      return redirectWithSessionCookies(new URL(getRoleHomePath(role), req.url))
     }
   }
 

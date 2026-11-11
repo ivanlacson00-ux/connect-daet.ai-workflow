@@ -253,7 +253,7 @@ export default function UserFileRegistry() {
                         selectedOfficeRole={file.selected_office_role}
                         initialDestinationRole={route?.initialDestinationRole}
                         finalDecisionOfficeRole={route?.finalDecisionOfficeRole}
-                        auditEvents={[]}
+                        auditEvents={route?.auditEvents ?? []}
                         routeLoadFailed={route?.loadFailed ?? false}
                       />
                     </div>
