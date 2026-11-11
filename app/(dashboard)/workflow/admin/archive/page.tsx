@@ -255,7 +255,7 @@ export default function ArchiveRegistryPage() {
                   selectedOfficeRole={record.selected_office_role}
                   initialDestinationRole={routesBySubmission[record.id]?.initialDestinationRole}
                   finalDecisionOfficeRole={routesBySubmission[record.id]?.finalDecisionOfficeRole}
-                  auditEvents={[]}
+                  auditEvents={routesBySubmission[record.id]?.auditEvents ?? []}
                   routeLoadFailed={routesBySubmission[record.id]?.loadFailed ?? false}
                 />
               </div>
