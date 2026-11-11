@@ -185,7 +185,7 @@ export default function ApproverNotificationsPage() {
       {/* Header */}
       <div className="mb-8 max-md:mb-5">
         <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
-          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Tourism Officer workspace
+          <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Office workspace
         </p>
         <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>Notifications</h1>
         <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">

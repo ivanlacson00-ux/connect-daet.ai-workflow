@@ -52,7 +52,7 @@ type Filter = 'all' | 'pending' | 'completed' | 'rejected';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'pending', label: 'Pending' },
-  { key: 'completed', label: 'Approved' },
+  { key: 'completed', label: 'Processed' },
   { key: 'rejected', label: 'Rejected' },
 ];
 
@@ -78,16 +78,17 @@ function StatusStamp({ status }: { status: string }) {
       case 'pending_approver':
         return { label: 'Pending', styles: 'bg-pending-bg text-pending-text' };
       case 'pending_admin':
-        return { label: 'Under review', styles: 'bg-review-bg text-review-text' };
+        return { label: 'Administrative processing', styles: 'bg-review-bg text-review-text' };
       case 'pending_office':
         return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
       case 'pending_mayor':
-        return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
+        return { label: "Mayor's office processing", styles: 'bg-review-bg text-review-text' };
       case 'returned_for_requirements':
         return { label: 'Additional requirements requested', styles: 'bg-pending-bg text-pending-text' };
       case 'approved':
-      case 'completed':
         return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
+      case 'completed':
+        return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
       case 'declined_by_approver':
       case 'declined_by_admin':
       case 'declined_by_office':
@@ -279,7 +280,7 @@ export default function WorkflowDashboard() {
                 </span>
               </div>
               <p className={`${fonts.serif} mt-3 text-[34px] leading-none text-warm-text max-md:mt-2 max-md:text-[27px]`}>{stat.value}</p>
-              <p className="mt-3 text-[11px] text-muted-text max-md:mt-1.5">{index === 0 ? 'All your submitted documents' : index === 1 ? 'Reviewed and approved' : 'Earned for approved submissions'}</p>
+              <p className="mt-3 text-[11px] text-muted-text max-md:mt-1.5">{index === 0 ? 'All your submitted documents' : index === 1 ? 'Processed and closed' : 'Earned for eligible submissions'}</p>
             </div>
           ))}
         </div>

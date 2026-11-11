@@ -12,23 +12,21 @@ const fonts = {
   serif: 'font-serif',
 };
 
-type FilterStatus = 'all' | 'pending' | 'approved' | 'declined';
+type FilterStatus = 'all' | 'pending' | 'processed' | 'declined';
 
 const STATUS_FILTERS: { value: FilterStatus; label: string }[] = [
   { value: 'all', label: 'All' },
-  { value: 'pending', label: 'Pending approval' },
-  { value: 'approved', label: 'Approved' },
+  { value: 'pending', label: 'Needs processing' },
+  { value: 'processed', label: 'Processed' },
   { value: 'declined', label: 'Declined' },
 ];
 
-// "Pending" looks specifically for items waiting on the admin.
-// "Approved" includes completed files, since completing is the step after approval.
 const matchesStatus = (status: string, filter: FilterStatus) => {
   const s = status.toLowerCase();
   switch (filter) {
     case 'pending':
       return ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'returned_for_requirements'].includes(s);
-    case 'approved':
+    case 'processed':
       return s === 'approved' || s === 'completed';
     case 'declined':
       return s.includes('declined');
@@ -48,7 +46,7 @@ function StatusStamp({ status }: { status: string }) {
     // Admin stage logic
     if (s === 'pending_admin') return { label: 'Administrative review', styles: 'bg-review-bg text-review-text' };
     if (s === 'pending_office') return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
-    if (s === 'pending_mayor') return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
+    if (s === 'pending_mayor') return { label: "Mayor's office processing", styles: 'bg-review-bg text-review-text' };
     if (s === 'returned_for_requirements') return { label: 'Returned for requirements', styles: 'bg-pending-bg text-pending-text' };
     if (s === 'completed') return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
     if (s.includes('approved')) return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
@@ -113,9 +111,9 @@ export default function SubmissionsPage() {
   }, [submissions, searchQuery, categoryFilter, fileTypeFilter, fromDate, toDate]);
 
   const statusCounts = useMemo(() => {
-    const counts: Record<FilterStatus, number> = { all: baseFiltered.length, pending: 0, approved: 0, declined: 0 };
+    const counts: Record<FilterStatus, number> = { all: baseFiltered.length, pending: 0, processed: 0, declined: 0 };
     baseFiltered.forEach((sub) => {
-      (['pending', 'approved', 'declined'] as const).forEach((key) => {
+      (['pending', 'processed', 'declined'] as const).forEach((key) => {
         if (matchesStatus(sub.status, key)) counts[key]++;
       });
     });

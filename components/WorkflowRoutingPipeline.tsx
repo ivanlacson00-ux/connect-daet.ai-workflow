@@ -7,6 +7,7 @@ import {
   type OfficeRole,
   type OfficeResponsibility,
 } from '@/lib/workflow/offices';
+import { getSubmissionStatusLabel as getFriendlyStatusLabel } from '@/lib/workflow/status';
 
 type PipelineState = 'complete' | 'active' | 'pending' | 'rejected' | 'skipped';
 
@@ -18,6 +19,7 @@ interface PipelineRouteStep {
   assignment_source?: string;
   started_at?: string | null;
   decided_at?: string | null;
+  completed_at?: string | null;
   requirements_requested_at?: string | null;
 }
 
@@ -80,6 +82,113 @@ export default function WorkflowRoutingPipeline({
   variant = 'full',
 }: WorkflowRoutingPipelineProps) {
   const status = submissionStatus.toLowerCase();
+  const isMvpStatus = [
+    'submitted',
+    'in_process',
+    'changes_requested',
+    'returned',
+    'withdrawn',
+    'completed',
+  ].includes(status);
+  if (isMvpStatus) {
+    const responsibleRoleCandidate = selectedOfficeRole ?? initialDestinationRole ?? null;
+    const responsibleRole = isOfficeRole(responsibleRoleCandidate) ? responsibleRoleCandidate : null;
+    const responsibleOffice = responsibleRole ? OFFICE_CONFIG[responsibleRole].label : 'Not assigned';
+    const mvpSteps = [
+      {
+        key: 'submitted',
+        title: 'Submitted',
+        detail: formatTimestamp(submittedAt) ?? 'Submission received',
+        state: 'complete' as const,
+      },
+      {
+        key: 'responsible-office',
+        title: 'Responsible office',
+        detail: status === 'submitted'
+          ? `${responsibleOffice} — awaiting receipt`
+          : status === 'returned'
+            ? `${responsibleOffice} — returned to submitter`
+            : `${responsibleOffice} — ${getFriendlyStatusLabel(status)}`,
+        state: status === 'withdrawn'
+          ? 'skipped' as const
+          : status === 'submitted'
+            ? 'active' as const
+            : 'complete' as const,
+      },
+      ...[...routeSteps]
+        .sort((first, second) => first.sequence_number - second.sequence_number)
+        .filter((step): step is PipelineRouteStep & { office_role: OfficeRole } => isOfficeRole(step.office_role))
+        .map((step) => ({
+          key: `assignment-${step.sequence_number}-${step.office_role}`,
+          title: `Recommendation assignment ${step.sequence_number}`,
+          detail: `${OFFICE_CONFIG[step.office_role].label} — ${
+            step.status === 'pending' || step.status === 'in_progress'
+              ? 'Pending'
+              : step.status === 'completed'
+                ? 'Completed'
+                : step.status === 'returned'
+                  ? 'Returned to responsible office'
+                  : step.status === 'withdrawn'
+                    ? 'Withdrawn'
+                    : step.status.replaceAll('_', ' ')
+          }`,
+          state: step.status === 'completed' || step.status === 'approved'
+            ? 'complete' as const
+            : step.status === 'withdrawn' || step.status === 'returned' || step.status === 'skipped'
+              ? 'skipped' as const
+              : step.status === 'in_progress'
+                ? 'active' as const
+                : 'pending' as const,
+        })),
+      {
+        key: 'completion',
+        title: 'Submission status',
+        detail: getFriendlyStatusLabel(status),
+        state: status === 'completed'
+          ? 'complete' as const
+          : status === 'withdrawn'
+            ? 'skipped' as const
+            : status === 'submitted'
+              ? 'pending' as const
+              : 'active' as const,
+      },
+    ];
+
+    return (
+      <section
+        aria-label="Submission workflow"
+        className={variant === 'compact'
+          ? 'w-full rounded-xl border border-warm-border/80 bg-sidebar/40 px-3 py-3'
+          : 'mb-4 rounded-2xl border border-warm-border bg-card p-5 shadow-sm max-md:p-4'}
+      >
+        <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">
+          {variant === 'compact' ? 'Workflow' : 'Submission workflow'}
+        </p>
+        <ol className="space-y-2">
+          {mvpSteps.map((step, index) => (
+            <li key={step.key} className="flex items-start gap-3 rounded-xl border border-warm-border bg-card/70 px-3 py-2.5">
+              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                step.state === 'complete'
+                  ? 'bg-approved-bg text-approved-text'
+                  : step.state === 'active'
+                    ? 'bg-review-bg text-review-text'
+                    : step.state === 'skipped'
+                      ? 'bg-sidebar text-muted-text'
+                      : 'bg-pending-bg text-pending-text'
+              }`}>
+                {index + 1}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[11px] font-semibold text-warm-text">{step.title}</span>
+                <span className="mt-0.5 block text-[10px] leading-relaxed text-muted-text">{step.detail}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      </section>
+    );
+  }
+
   const sortedEvents = [...auditEvents].sort(
     (first, second) =>
       new Date(first.created_at).getTime() - new Date(second.created_at).getTime()
@@ -106,7 +215,7 @@ export default function WorkflowRoutingPipeline({
     : [];
   const activeAssignments = routeForDisplay.some((step) => step.status === 'in_progress');
   const allAssignmentsComplete = routeForDisplay.length > 0
-    && routeForDisplay.every((step) => step.status === 'approved');
+    && routeForDisplay.every((step) => step.status === 'completed' || step.status === 'approved');
   const legacyAdminReview =
     !initialOfficeRole
     && (status === 'pending_admin' || routeStatus === 'proposed');
@@ -140,7 +249,7 @@ export default function WorkflowRoutingPipeline({
             ? 'active'
             : 'pending',
       detail: status === 'completed'
-        ? 'Final decision recorded'
+        ? 'Processing closed'
         : status === 'returned_for_requirements'
           ? 'Waiting for submitter'
           : officeHasReceived
@@ -163,7 +272,7 @@ export default function WorkflowRoutingPipeline({
       detail: status === 'pending_approver'
         ? 'Tourism Officer review and municipal-office selection'
         : finalOfficeRole
-          ? `Final decision assigned to ${OFFICE_CONFIG[finalOfficeRole].label}`
+          ? `Responsible office: ${OFFICE_CONFIG[finalOfficeRole].label}`
           : 'Tourism Officer review completed',
       timestamp: eventTime('SUBMISSION_ROUTED_TO_TOURISM_OFFICER', 'TOURISM_OFFICER_ASSIGNMENTS_CREATED'),
     });
@@ -217,14 +326,14 @@ export default function WorkflowRoutingPipeline({
           ? 'rejected'
           : step.status === 'skipped'
             ? 'skipped'
-            : step.status === 'approved'
+            : step.status === 'completed' || step.status === 'approved'
               ? 'complete'
               : stepIsActive
                 ? 'active'
                 : 'pending',
         detail: waitingOnSubmitter
           ? 'Waiting for submitter'
-          : step.status === 'approved'
+          : step.status === 'completed' || step.status === 'approved'
             ? 'Assignment complete'
             : step.status === 'rejected'
               ? 'Declined'
@@ -233,7 +342,7 @@ export default function WorkflowRoutingPipeline({
                 : step.status === 'skipped'
                   ? 'Skipped'
                   : 'Pending',
-        timestamp: step.decided_at ?? step.started_at,
+        timestamp: step.completed_at ?? step.decided_at ?? step.started_at,
       });
     }
   } else {
@@ -267,9 +376,9 @@ export default function WorkflowRoutingPipeline({
     && (!routeForDisplay.length || allAssignmentsComplete);
   pipelineSteps.push({
     key: 'completion',
-    title: 'Final decision',
+    title: 'Submission closure',
     subtitle: finalOfficeRole
-      ? `${OFFICE_CONFIG[finalOfficeRole].label} authorized decision-maker`
+      ? `${OFFICE_CONFIG[finalOfficeRole].label} responsible office`
       : tourismOfficeWasSelected
         ? 'Municipal office designated by Tourism Officer'
       : legacyAdminReview
@@ -283,15 +392,15 @@ export default function WorkflowRoutingPipeline({
           ? 'active'
           : 'pending',
     detail: status === 'completed'
-      ? 'Final decision recorded'
+      ? 'Processing closed'
       : status === 'returned_for_requirements'
         ? 'Waiting for submitter response'
         : finalOfficeIsActive
-          ? 'Awaiting authorized office decision'
+          ? 'Ready for office to close'
           : declined
             ? 'Not reached'
             : 'Pending',
-    timestamp: eventTime('OFFICE_FINAL_DECISION', 'WORKFLOW_COMPLETED', 'FINAL_AUTHORIZATION'),
+    timestamp: eventTime('WORKFLOW_COMPLETED', 'OFFICE_FINAL_DECISION', 'FINAL_AUTHORIZATION'),
   });
 
   const statusLabel = getSubmissionStatusLabel(status);

@@ -1,27 +1,57 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
+import WorkflowActivityTimeline from '@/components/WorkflowActivityTimeline';
 import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
+import {
+  getWorkflowFileMimeType,
+  getWorkflowFilesTypeError,
+} from '@/lib/workflow/file-types';
+import { getSubmissionStatusLabel, getSubmissionStatusTone } from '@/lib/workflow/status';
 import {
   getRoleHomePath,
   getWorkflowDocumentTypeLabel,
   isOfficeRole,
   OFFICE_CONFIG,
   OFFICE_RESPONSIBILITIES,
-  TOURISM_OFFICE_LABEL,
-  TOURISM_OFFICE_ROLE,
   type OfficeResponsibility,
   type OfficeRole,
-  type OfficeRoutingMode,
 } from '@/lib/workflow/offices';
 
 // ─── Styles & Fonts (synced with the user file page) ─────────────────────────
 const fonts = {
   serif: 'font-serif',
 };
+
+// ─── Icons & small UI helpers ────────────────────────────────────────────────
+type IconName = 'arrow-left' | 'calendar' | 'chevron-right' | 'download' | 'file' | 'paperclip' | 'user';
+
+function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
+  const paths: Record<IconName, ReactNode> = {
+    'arrow-left': (<><path d="m15 18-6-6 6-6" /><path d="M21 12H9" /></>),
+    calendar: (<><path d="M8 2v4M16 2v4M3 10h18" /><rect x="3" y="4" width="18" height="18" rx="2" /></>),
+    'chevron-right': <path d="m9 18 6-6-6-6" />,
+    download: (<><path d="M12 3v12m0 0 4-4m-4 4-4-4" /><path d="M5 20h14" /></>),
+    file: (<><path d="M6 2h8l4 4v16H6z" /><path d="M14 2v5h5M9 13h6M9 17h6" /></>),
+    paperclip: <path d="m20 11-8.5 8.5a5 5 0 0 1-7-7L14 3a3.5 3.5 0 0 1 5 5l-9.5 9.5a2 2 0 0 1-3-3L15 6" />,
+    user: (<><circle cx="12" cy="8" r="4" /><path d="M4 22a8 8 0 0 1 16 0" /></>),
+  };
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {paths[name]}
+    </svg>
+  );
+}
+
+function Label({ children }: { children: ReactNode }) {
+  return (
+    <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-text">{children}</p>
+  );
+}
 
 interface Submission extends PreviewableFile {
   id: string;
@@ -49,6 +79,14 @@ interface Submission extends PreviewableFile {
   sender_response?: string | null;
   created_at: string;
   updated_at: string;
+  received_by?: string | null;
+  received_at?: string | null;
+  closed_by?: string | null;
+  closure_note?: string | null;
+  closure_file_path?: string | null;
+  closure_file_name?: string | null;
+  closure_file_type?: string | null;
+  closure_file_size?: number | null;
 }
 
 interface SupportingAttachment {
@@ -67,6 +105,7 @@ interface RouteStep {
   assignment_source: string;
   started_at: string | null;
   decided_at: string | null;
+  completed_at: string | null;
   requirements_requested_at: string | null;
   requirements_comments: string | null;
 }
@@ -86,7 +125,6 @@ interface AuditLog {
 }
 
 // ─── Status groups ───────────────────────────────────────────────────────────
-// Approving a file passes it to the admin, so 'pending_admin' reads as approved here
 const QUEUE_STATUSES = ['pending', 'pending_approver'];
 const DECLINED_STATUSES = [
   'declined_by_approver',
@@ -98,18 +136,38 @@ const DECLINED_STATUSES = [
 
 const getStatusStyles = (status: string) => {
   const s = (status || '').toLowerCase();
-  if (QUEUE_STATUSES.includes(s)) return { label: 'Awaiting approver review', classes: 'bg-pending-bg text-pending-text' };
+  const tone = getSubmissionStatusTone(s);
+  if (tone === 'pending') return { label: getSubmissionStatusLabel(s), classes: 'bg-pending-bg text-pending-text' };
+  if (tone === 'progress') return { label: getSubmissionStatusLabel(s), classes: 'bg-review-bg text-review-text' };
+  if (tone === 'completed') return { label: getSubmissionStatusLabel(s), classes: 'bg-approved-bg text-approved-text' };
+  if (tone === 'returned') return { label: getSubmissionStatusLabel(s), classes: 'bg-pending-bg text-pending-text' };
+  if (tone === 'withdrawn') return { label: getSubmissionStatusLabel(s), classes: 'bg-sidebar text-muted-text' };
+  if (QUEUE_STATUSES.includes(s)) return { label: 'Tourism Office processing', classes: 'bg-pending-bg text-pending-text' };
   if (s === 'pending_admin') return { label: 'Administrative review', classes: 'bg-review-bg text-review-text' };
-  if (s === 'pending_office') return { label: 'Municipal office review', classes: 'bg-review-bg text-review-text' };
-  if (s === 'pending_mayor') return { label: "Mayor's final review", classes: 'bg-review-bg text-review-text' };
+  if (s === 'pending_office') return { label: 'Office processing', classes: 'bg-review-bg text-review-text' };
+  if (s === 'pending_mayor') return { label: "Mayor's office processing", classes: 'bg-review-bg text-review-text' };
   if (s === 'returned_for_requirements') return { label: 'Additional requirements requested', classes: 'bg-pending-bg text-pending-text' };
-  if (s === 'completed' || s === 'approved') return { label: 'Approved and completed', classes: 'bg-approved-bg text-approved-text' };
+  if (s === 'completed') return { label: 'Completed', classes: 'bg-approved-bg text-approved-text' };
+  if (s === 'approved') return { label: 'Approved', classes: 'bg-approved-bg text-approved-text' };
   if (DECLINED_STATUSES.includes(s)) return { label: 'Rejected', classes: 'bg-rejected-bg text-rejected-text' };
   return { label: s.replaceAll('_', ' ') || 'Unknown', classes: 'bg-sidebar text-muted-text' };
 };
 
 const getActionLabel = (type: string) => {
   switch (type) {
+    case 'DESTINATION_SELECTED': return 'Destination selected by submitter';
+    case 'SUBMISSION_REDIRECTED': return 'Submission redirected';
+    case 'SUBMISSION_RECEIVED': return 'Submission received by office';
+    case 'SUBMISSION_FORWARDED': return 'Forwarded for Recommendation';
+    case 'ASSIGNMENT_COMPLETED': return 'Office assignment completed';
+    case 'ASSIGNMENT_RETURNED': return 'Office assignment returned';
+    case 'ASSIGNMENT_WITHDRAWN': return 'Office assignment withdrawn';
+    case 'CHANGES_REQUESTED': return 'Changes requested';
+    case 'CHANGES_RESPONDED': return 'Submitter responded to changes';
+    case 'RETURNED_TO_SUBMITTER': return 'Returned to submitter for redirection';
+    case 'SUBMISSION_WITHDRAWN': return 'Submission withdrawn';
+    case 'SUBMISSION_CLOSED': return 'Submission closed';
+    case 'FILE_VERSION_ADDED': return 'Document version added';
     case 'STAGE_1_AUTHORIZED': return 'Stage 1 approved';
     case 'STAGE_1_REJECTED': return 'Stage 1 rejected';
     case 'FINAL_AUTHORIZATION': return 'Final approval';
@@ -118,6 +176,8 @@ const getActionLabel = (type: string) => {
     case 'RETURNED_FOR_CORRECTION': return 'Returned for correction';
     case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Office route step assigned';
     case 'OFFICE_ROUTE_STEP_APPROVED': return 'Office route step approved';
+    case 'OFFICE_ASSIGNMENT_COMPLETED': return 'Office assignment completed';
+    case 'OFFICE_ASSIGNMENT_FORWARDED': return 'Office forwarded submission for Recommendation';
     case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Municipal office forwarded for Tourism Officer review';
     case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer assigned additional offices';
     case 'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED': return 'Additional office assignments completed';
@@ -149,46 +209,12 @@ export default function ApproverManagePage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [actionError, setActionError] = useState('');
-  const [comment, setComment] = useState('');
-  const [proposedOffices, setProposedOffices] = useState<OfficeRole[]>([]);
-  const [officeResponsibilities, setOfficeResponsibilities] = useState<
-    Partial<Record<OfficeRole, OfficeResponsibility>>
-  >({});
-  const [routingMode, setRoutingMode] = useState<OfficeRoutingMode>('sequential');
-  const [finalDecisionOfficeRole, setFinalDecisionOfficeRole] = useState<OfficeRole | ''>('');
   const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
   const [routeStatus, setRouteStatus] = useState<string | null>(null);
-  const [hasFinalizedRoute, setHasFinalizedRoute] = useState(false);
   const [routeStateError, setRouteStateError] = useState(false);
   const [role, setRole] = useState<string | null>(null);
-
-  const toggleProposedOffice = (officeRole: OfficeRole) => {
-    setProposedOffices((current) => {
-      if (current.includes(officeRole)) {
-        setOfficeResponsibilities((responsibilities) => {
-          const next = { ...responsibilities };
-          delete next[officeRole];
-          return next;
-        });
-        return current.filter((entry) => entry !== officeRole);
-      }
-      setOfficeResponsibilities((responsibilities) => ({
-        ...responsibilities,
-        [officeRole]: 'mandatory_approval_clearance',
-      }));
-      return [...current, officeRole];
-    });
-  };
-
-  const moveProposedOffice = (index: number, offset: -1 | 1) => {
-    setProposedOffices((current) => {
-      const target = index + offset;
-      if (target < 0 || target >= current.length) return current;
-      const updated = [...current];
-      [updated[index], updated[target]] = [updated[target], updated[index]];
-      return updated;
-    });
-  };
+  const [activeOfficeRoles, setActiveOfficeRoles] = useState<OfficeRole[]>([]);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const fetchDetails = useCallback(async () => {
     try {
@@ -203,31 +229,53 @@ export default function ApproverManagePage() {
         currentRole = currentProfile?.role ?? null;
         setRole(currentRole);
       }
+      const { data: activeProfiles, error: activeProfilesError } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('is_active', true);
+      if (activeProfilesError) {
+        console.error('Could not load active office representatives:', activeProfilesError.message);
+        setActiveOfficeRoles([]);
+        setActionError('Could not load active offices. Refresh and try again.');
+      } else {
+        setActiveOfficeRoles([...new Set((activeProfiles ?? [])
+          .map((profile) => profile.role)
+          .filter(isOfficeRole))]);
+      }
 
-      const { data: submission } = await supabase
+      let { data: submission } = await supabase
         .from('workflow_submissions')
         .select('*')
         .eq('id', id)
         .single();
 
+      if (
+        submission
+        && submission.status === 'submitted'
+        && currentRole === submission.selected_office_role
+      ) {
+        const { error: receiveError } = await supabase.rpc('receive_workflow_submission', {
+          target_submission_id: submission.id,
+        });
+        if (receiveError) {
+          console.error('Could not mark submission received:', receiveError.message);
+          setActionError(receiveError.message || 'Could not receive this submission.');
+        } else {
+          const { data: receivedSubmission, error: refreshError } = await supabase
+            .from('workflow_submissions')
+            .select('*')
+            .eq('id', id)
+            .single();
+          if (refreshError) {
+            console.error('Could not refresh received submission:', refreshError.message);
+          } else {
+            submission = receivedSubmission;
+          }
+        }
+      }
+
       if (submission) {
         setSub(submission);
-        setFinalDecisionOfficeRole(
-          isOfficeRole(submission.final_decision_office_role)
-            ? submission.final_decision_office_role
-            : ''
-        );
-        setComment(
-          currentRole === 'mayor_office' && submission.status === 'pending_mayor'
-            ? submission.mayor_comments || ''
-            : currentRole === 'mayor_office'
-              && submission.status === 'pending_office'
-              && submission.selected_office_role === 'mayor_office'
-              ? ''
-            : isOfficeRole(currentRole) && submission.status === 'pending_office'
-              ? submission.office_comments || ''
-              : submission.approver_comments || ''
-        );
 
         const { data: currentRoute, error: routeError } = await supabase
           .from('workflow_routing_plans')
@@ -245,7 +293,7 @@ export default function ApproverManagePage() {
           if (currentRoute) {
             const { data: steps, error: stepsError } = await supabase
               .from('workflow_routing_steps')
-              .select('sequence_number, office_role, status, responsibility, assignment_source, started_at, decided_at, requirements_requested_at, requirements_comments')
+              .select('sequence_number, office_role, status, responsibility, assignment_source, started_at, decided_at, completed_at, requirements_requested_at, requirements_comments')
               .eq('routing_plan_id', currentRoute.id)
               .order('sequence_number', { ascending: true });
 
@@ -262,13 +310,11 @@ export default function ApproverManagePage() {
               );
               setRouteSteps(validSteps);
               setRouteStatus(currentRoute.status);
-              setHasFinalizedRoute(currentRoute.status === 'finalized');
               setRouteStateError(false);
             }
           } else {
             setRouteSteps([]);
             setRouteStatus(null);
-            setHasFinalizedRoute(false);
             setRouteStateError(false);
           }
         }
@@ -317,203 +363,116 @@ export default function ApproverManagePage() {
   };
 
   const handleWorkflowAction = async (
-    decision: 'approve' | 'reject' | 'return' | 'forward'
+    action: string,
+    recipient: string,
+    message: string,
+    files: File[],
   ) => {
-    if (!sub) return;
+    if (!sub) throw new Error('Submission is unavailable.');
+    if (action === 'close_submission') {
+      await closeSubmission(message, files[0] ?? null);
+      return;
+    }
     setUpdating(true);
     setActionError('');
-
-    if (role === 'tourism_officer' && QUEUE_STATUSES.includes(sub.status) && decision === 'approve') {
-      if (
-        proposedOffices.length === 0
-        && sub.initial_destination_role !== TOURISM_OFFICE_ROLE
-      ) {
-        setActionError('Select at least one additional municipal office.');
-        setUpdating(false);
-        return;
-      }
-      if (
-        sub.initial_destination_role === TOURISM_OFFICE_ROLE
-        && !finalDecisionOfficeRole
-      ) {
-        setActionError('Select the municipal office that will make the final decision.');
-        setUpdating(false);
-        return;
+    try {
+      if (routeStateError && ['complete_assignment', 'return_assignment', 'withdraw_assignment'].includes(action)) {
+        throw new Error('Could not verify the office assignment. Refresh and try again.');
       }
 
-      const { error } = sub.status === 'pending_approver'
-        ? await supabase.rpc('create_tourism_officer_assignments', {
-            target_submission_id: sub.id,
-            assignment_records: proposedOffices.map((officeRole) => ({
-              office_role: officeRole,
-              responsibility: officeResponsibilities[officeRole] ?? 'mandatory_approval_clearance',
-            })),
-            routing_mode: routingMode,
-            assignment_comments: comment.trim() || null,
-            final_decision_office_role: finalDecisionOfficeRole || null,
-          })
-        : await supabase.rpc('propose_workflow_route', {
-            target_submission_id: sub.id,
-            proposed_office_roles: proposedOffices,
-            proposal_comments: comment.trim() || null,
-          });
-      if (error) {
-        setActionError(error.message || 'Could not create the office assignments.');
-      } else {
-        await fetchDetails();
-      }
-      setUpdating(false);
-      return;
-    }
-
-    const activeOfficeRouteStep = isOfficeRole(role)
-      ? routeSteps.find((step) => step.office_role === role && step.status === 'in_progress')
-      : undefined;
-    const officeIsAssigned = isOfficeRole(role)
-      && sub.status === 'pending_office'
-      && (role === sub.selected_office_role || Boolean(activeOfficeRouteStep));
-
-    if (officeIsAssigned && isOfficeRole(role)) {
-      if (decision === 'forward') {
-        const { error } = await supabase.rpc('forward_workflow_submission_to_tourism_officer', {
-          target_submission_id: sub.id,
-          forwarding_comments: comment.trim() || null,
-        });
-        if (error) {
-          setActionError(error.message || 'Could not forward the reviewed submission.');
-        } else {
-          await fetchDetails();
-        }
-        setUpdating(false);
-        return;
-      }
-
-      if (decision === 'return') {
-        if (!comment.trim()) {
-          setActionError('Explain the changes required before returning this submission.');
-          setUpdating(false);
-          return;
-        }
-        const { error } = await supabase.rpc('request_workflow_submission_changes', {
-          target_submission_id: sub.id,
-          request_comments: comment.trim(),
-        });
-        if (error) {
-          setActionError(error.message || 'Could not request changes.');
-        } else {
-          await fetchDetails();
-        }
-        setUpdating(false);
-        return;
-      }
-
-      if (routeStateError) {
-        setActionError('Could not verify the finalized route. Refresh and try again.');
-        setUpdating(false);
-        return;
-      }
-      if (activeOfficeRouteStep) {
-        const { error } = await supabase.rpc('decide_workflow_route_step', {
-          target_submission_id: sub.id,
-          approve_step: decision === 'approve',
-          decision_comments: comment.trim() || null,
-        });
-        if (error) {
-          setActionError(error.message || 'Could not save the municipal office decision.');
-        } else {
-          await fetchDetails();
-        }
-        setUpdating(false);
-        return;
-      }
-
-      if (decision === 'approve') {
-        const { error } = await supabase.rpc('finalize_workflow_submission', {
-          target_submission_id: sub.id,
-          decision_comments: comment.trim() || null,
-        });
-        if (error) {
-          setActionError(error.message || 'Could not record the final office decision.');
-        } else {
-          await fetchDetails();
-        }
-        setUpdating(false);
-        return;
-      }
-    }
-
-    const update: Record<string, string> = {
-      updated_at: new Date().toISOString(),
-    };
-
-    if (role === 'tourism_officer' && QUEUE_STATUSES.includes(sub.status)) {
-      if (decision === 'approve') {
-        setUpdating(false);
-        return;
-      } else if (decision === 'reject') {
-        if (!comment.trim()) {
-          setActionError('Add a rejection reason before declining this document.');
-          setUpdating(false);
-          return;
-        }
-        update.status = 'declined_by_approver';
-        update.approver_comments = comment;
-      }
-    } else if (
-      isOfficeRole(role)
-      && role === sub.selected_office_role
-      && sub.status === 'pending_office'
-    ) {
-      update.office_comments = comment;
-      update.status = decision === 'approve' ? 'pending_mayor' : 'declined_by_office';
-      if (decision === 'reject' && !comment.trim()) {
-        setActionError('Add a rejection reason before declining this document.');
-        setUpdating(false);
-        return;
-      }
-    } else if (role === 'mayor_office' && sub.status === 'pending_mayor') {
-      update.mayor_comments = comment;
-      if (decision === 'approve') update.status = 'completed';
-      else if (decision === 'reject') update.status = 'declined_by_mayor';
-      else update.status = 'returned_for_requirements';
-      if (decision !== 'approve' && !comment.trim()) {
-        setActionError('Add remarks before rejecting or requesting additional requirements.');
-        setUpdating(false);
-        return;
-      }
-    } else {
-      setUpdating(false);
-      return;
-    }
-
-    const decisionComments = role === 'mayor_office'
-      ? update.mayor_comments
-      : isOfficeRole(role) && sub.status === 'pending_office'
-        ? update.office_comments
-        : update.approver_comments;
-    const { error: updateError } = await supabase.rpc('decide_workflow_submission', {
-      target_submission_id: sub.id,
-      next_status: update.status,
-      decision_comments: decisionComments ?? null,
-      routed_office_role: update.selected_office_role ?? null,
-    });
-
-    if (updateError) {
-      const errorMessage = [
-        updateError.message,
-        updateError.details,
-        updateError.hint,
-        updateError.code ? `Database code: ${updateError.code}` : '',
-      ].filter(Boolean).join('\n');
-      setActionError(
-        errorMessage
-          || JSON.stringify(updateError)
-          || 'The database rejected this decision without returning details. Refresh and try again.'
+      const targetOfficeRole = recipient.replace(/^office:/, '');
+      const activeAssignment = routeSteps.find((step) =>
+        step.office_role === targetOfficeRole
+        && (step.status === 'pending' || step.status === 'in_progress')
       );
-    } else {
+      let rpcName:
+        | 'request_workflow_submission_changes'
+        | 'return_workflow_submission_to_submitter'
+        | 'complete_workflow_assignment'
+        | 'return_workflow_assignment'
+        | 'withdraw_workflow_assignment';
+      let rpcArgs:
+        | { target_submission_id: string; request_comments: string }
+        | { target_submission_id: string; return_reason: string }
+        | { target_submission_id: string; completion_notes: string | null }
+        | { target_submission_id: string; target_assignment_office_role: string; withdrawal_reason: string };
+      if (action === 'request_changes') {
+        rpcName = 'request_workflow_submission_changes';
+        rpcArgs = { target_submission_id: sub.id, request_comments: message.trim() };
+      } else if (action === 'return_to_submitter') {
+        rpcName = 'return_workflow_submission_to_submitter';
+        rpcArgs = { target_submission_id: sub.id, return_reason: message.trim() };
+      } else if (action === 'complete_assignment') {
+        rpcName = 'complete_workflow_assignment';
+        rpcArgs = { target_submission_id: sub.id, completion_notes: message.trim() || null };
+      } else if (action === 'return_assignment') {
+        rpcName = 'return_workflow_assignment';
+        rpcArgs = { target_submission_id: sub.id, return_reason: message.trim() };
+      } else if (action === 'withdraw_assignment' && activeAssignment) {
+        rpcName = 'withdraw_workflow_assignment';
+        rpcArgs = {
+          target_submission_id: sub.id,
+          target_assignment_office_role: activeAssignment.office_role,
+          withdrawal_reason: message.trim(),
+        };
+      } else {
+        throw new Error('This action is unavailable for the selected office.');
+      }
+
+      const { error } = await supabase.rpc(rpcName, rpcArgs);
+      if (error) throw new Error(error.message || 'Could not complete the workflow action.');
       await fetchDetails();
+    } finally {
+      setUpdating(false);
     }
-    setUpdating(false);
+  };
+
+  const closeSubmission = async (closureNote: string, closureFile: File | null) => {
+    if (!sub) throw new Error('Submission is unavailable.');
+    setUpdating(true);
+    setActionError('');
+    let filePath: string | null = null;
+    try {
+      let userId: string | null = null;
+      let fileType: string | null = null;
+      if (closureFile) {
+        const fileError = getWorkflowFilesTypeError([closureFile], false);
+        if (fileError) throw new Error(fileError);
+        if (closureFile.size > 10 * 1024 * 1024) {
+          throw new Error('The closure file must be 10 MB or smaller.');
+        }
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (userError || !user) throw userError ?? new Error('You must sign in to close this submission.');
+        userId = user.id;
+        fileType = getWorkflowFileMimeType(closureFile.name);
+        if (!fileType) throw new Error('The closure file type is not supported.');
+        filePath = `${userId}/${crypto.randomUUID()}-closure-${closureFile.name.replace(/[^\w.-]/g, '_')}`;
+        const { error: uploadError } = await supabase.storage
+          .from('workflow_uploads')
+          .upload(filePath, closureFile, { contentType: fileType, upsert: false });
+        if (uploadError) throw uploadError;
+      }
+
+      const { error } = await supabase.rpc('close_workflow_submission_with_details', {
+        target_submission_id: sub.id,
+        closure_note: closureNote.trim() || null,
+        closure_file_path: filePath,
+        closure_file_name: closureFile?.name ?? null,
+        closure_file_type: fileType,
+        closure_file_size: closureFile?.size ?? null,
+      });
+      if (error) throw error;
+
+      await fetchDetails();
+    } catch (error) {
+      if (filePath) {
+        const { error: cleanupError } = await supabase.storage.from('workflow_uploads').remove([filePath]);
+        if (cleanupError) console.error('Could not clean up unlinked closure file:', cleanupError.message);
+      }
+      throw error instanceof Error ? error : new Error('Could not close this submission.');
+    } finally {
+      setUpdating(false);
+    }
   };
 
   if (loading) {
@@ -536,536 +495,386 @@ export default function ApproverManagePage() {
     );
   }
 
-  const finalDecisionOfficeRoleValue = sub.final_decision_office_role ?? null;
-  const finalDecisionOfficeLabel = isOfficeRole(finalDecisionOfficeRoleValue)
-    ? OFFICE_CONFIG[finalDecisionOfficeRoleValue].label
-    : 'Not designated yet';
-  const statusConfig = sub.status === 'pending_office' && sub.selected_office_role === 'mayor_office'
-    ? { label: "Mayor's final route decision", classes: 'bg-review-bg text-review-text' }
-    : getStatusStyles(sub.status);
+  const statusConfig = getStatusStyles(sub.status);
   const activeRouteStep = isOfficeRole(role)
-    ? routeSteps.find((step) => step.office_role === role && step.status === 'in_progress')
+    ? routeSteps.find((step) => step.office_role === role && ['pending', 'in_progress'].includes(step.status))
     : undefined;
-  const officeReview =
-    isOfficeRole(role)
-    && sub.status === 'pending_office'
-    && (role === sub.selected_office_role || Boolean(activeRouteStep));
-  const mayorRouteStep = role === 'mayor_office' && officeReview && Boolean(activeRouteStep);
-  const mayorReview = role === 'mayor_office' && sub.status === 'pending_mayor';
-  const approverReview = role === 'tourism_officer' && QUEUE_STATUSES.includes(sub.status);
-  const canAct = officeReview || mayorReview || approverReview;
-  const isLocked = !canAct;
-  const isDeclined = DECLINED_STATUSES.includes(sub.status.toLowerCase());
-  const reviewNotes = mayorReview
-    ? sub.mayor_comments
-    : officeReview
-      ? sub.office_comments
-      : sub.approver_comments;
+  const selectedOfficeRole = sub.selected_office_role ?? null;
+  const initialDestinationRole = sub.initial_destination_role ?? null;
+  const isResponsibleOffice = isOfficeRole(role) && role === selectedOfficeRole;
+  const isRecipientOffice = Boolean(activeRouteStep) && !isResponsibleOffice;
+  const officeReview = isResponsibleOffice || isRecipientOffice;
+  const pendingAssignments = routeSteps.filter((step) =>
+    step.status === 'pending' || step.status === 'in_progress'
+  );
+  const pendingAssignmentCount = pendingAssignments.length;
+  const isCompleted = sub.status === 'completed' || sub.status === 'approved';
+  const isWithdrawn = sub.status === 'withdrawn';
+  const currentPendingAssignment = pendingAssignments[0];
+  const pendingAssignmentReason = currentPendingAssignment
+    ? `Pending assignment with ${OFFICE_CONFIG[currentPendingAssignment.office_role].label}`
+    : '';
+  const statusLine = `${statusConfig.label}${pendingAssignments.length === 1
+    ? ` · 1 assignment pending with ${OFFICE_CONFIG[pendingAssignments[0].office_role].label}`
+    : pendingAssignments.length > 1
+      ? ` · ${pendingAssignments.length} assignments pending`
+      : ''}`;
+  const responsibleOfficeActions = [
+    { value: 'send_message', label: 'Send message', buttonLabel: 'Send', tone: 'neutral' as const, requiresMessage: true },
+    {
+      value: 'request_changes',
+      label: 'Request changes',
+      tone: 'primary' as const,
+      requiresMessage: true,
+      unavailableReason: routeStateError
+        ? 'Could not verify whether an assignment is pending'
+        : pendingAssignmentReason
+          || (sub.status !== 'in_process' ? 'Available only while status is In Process' : undefined),
+    },
+    {
+      value: 'return_to_submitter',
+      label: 'Return to submitter (wrong office)',
+      tone: 'warning' as const,
+      requiresMessage: true,
+      confirmation: 'The submission will be returned to the submitter for redirection. This is not a rejection.',
+      unavailableReason: !['submitted', 'in_process'].includes(sub.status)
+        ? 'Available only while status is Submitted or In Process'
+        : undefined,
+    },
+    {
+      value: 'close_submission',
+      label: 'Close submission',
+      tone: 'strong' as const,
+      unavailableReason: routeStateError
+        ? 'Could not verify whether an assignment is pending'
+        : pendingAssignmentReason
+          || (!['in_process', 'changes_requested'].includes(sub.status)
+            ? 'Available only while status is In Process or Changes Requested'
+            : undefined),
+    },
+  ];
+  const actionsByRecipient: Record<string, {
+    value: string;
+    label: string;
+    buttonLabel?: string;
+    tone?: 'neutral' | 'primary' | 'warning' | 'strong';
+    requiresMessage?: boolean;
+    unavailableReason?: string;
+    confirmation?: string;
+  }[]> = {};
+  const recipients: { value: string; label: string }[] = [];
+  let initialRecipient = 'responsible_office';
+  let initialAction = 'send_message';
+
+  if (isResponsibleOffice) {
+    recipients.push({ value: 'submitter', label: 'Submitter' });
+    actionsByRecipient.submitter = responsibleOfficeActions;
+    for (const officeRole of activeOfficeRoles.filter((office) => office !== role)) {
+      const targetAssignment = pendingAssignments.find((step) => step.office_role === officeRole);
+      const forwardReason = routeStateError
+        ? 'Could not verify the office assignment'
+        : pendingAssignmentReason
+          || (sub.status !== 'in_process' ? 'Available only while status is In Process' : undefined)
+          || (officeRole === selectedOfficeRole ? 'Choose an office other than your own' : undefined);
+      const recipientValue = `office:${officeRole}`;
+      recipients.push({ value: recipientValue, label: OFFICE_CONFIG[officeRole].label });
+      const currentDocumentReason = !sub.file_path
+        ? 'Current document is unavailable for automatic forwarding'
+        : sub.file_size > 10 * 1024 * 1024
+          ? 'Current document exceeds the 10 MB forwarding limit'
+          : undefined;
+      actionsByRecipient[recipientValue] = [
+        {
+          value: 'forward',
+          label: 'Forward for recommendation',
+          buttonLabel: 'Forward',
+          tone: 'primary',
+          requiresMessage: true,
+          unavailableReason: currentDocumentReason || forwardReason,
+        },
+        {
+          value: 'withdraw_assignment',
+          label: 'Withdraw forward',
+          tone: 'warning',
+          requiresMessage: true,
+          confirmation: `The pending assignment with ${OFFICE_CONFIG[officeRole].label} will be withdrawn.`,
+          unavailableReason: targetAssignment
+            ? undefined
+            : `No pending assignment with ${OFFICE_CONFIG[officeRole].label}`,
+        },
+      ];
+    }
+    initialRecipient = 'submitter';
+  } else if (isRecipientOffice) {
+    recipients.push({ value: 'responsible_office', label: 'Responsible office' });
+    actionsByRecipient.responsible_office = [
+      { value: 'send_message', label: 'Send message', buttonLabel: 'Send', tone: 'neutral', requiresMessage: true },
+      {
+        value: 'complete_assignment',
+        label: 'Mark assignment completed',
+        buttonLabel: 'Mark completed',
+        tone: 'primary',
+        unavailableReason: routeStateError ? 'Could not verify your office assignment' : undefined,
+      },
+      {
+        value: 'return_assignment',
+        label: 'Return assignment',
+        tone: 'warning',
+        requiresMessage: true,
+        confirmation: 'The assignment will be returned to the responsible office with your reason.',
+        unavailableReason: routeStateError ? 'Could not verify your office assignment' : undefined,
+      },
+    ];
+  }
+  const composerClosed = isCompleted || isWithdrawn;
+  const processingNote = sub.office_comments || sub.mayor_comments || sub.approver_comments || '';
+  const workspaceSidebar = (
+    <>
+      {attachments.length > 0 && (
+        <section className="rounded-2xl border border-warm-border bg-card p-5">
+          <div className="mb-4 flex items-center gap-2 text-warm-text">
+            <Icon name="paperclip" size={16} />
+            <h2 className="text-sm font-bold">Supporting attachments</h2>
+            <span className="ml-auto rounded-full bg-sidebar px-2 py-0.5 text-[10px] font-bold">{attachments.length}</span>
+          </div>
+          <div className="space-y-2">
+            {attachments.map((attachment) => (
+              <button
+                key={attachment.id}
+                type="button"
+                onClick={() => void downloadAttachment(attachment)}
+                className="flex w-full items-center gap-3 rounded-xl border border-warm-border bg-white p-3 text-left text-warm-text transition-colors hover:border-clay"
+              >
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-clay-soft text-clay">
+                  <Icon name="file" size={17} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[11px] font-bold">{attachment.file_name}</span>
+                  <span className="mt-0.5 block text-[9px] text-muted-text">
+                    {Math.max(1, Math.round(attachment.file_size / 1024))} KB
+                    {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
+                  </span>
+                </span>
+                <Icon name="download" size={15} />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+    </>
+  );
+
+  const downloadOriginal = async () => {
+    const url = await getFileUrl(supabase, sub);
+    await downloadFile(url, sub.file_name);
+  };
 
   return (
-    <div className="w-full">
-      {/* Back */}
-      <div className="mb-5 max-md:mb-4">
-        <button
-          onClick={() => {
-            if (officeReview) router.push(getRoleHomePath(role));
-            else router.back();
-          }}
-          className="inline-flex h-10 items-center gap-2 rounded-full border border-warm-border px-4 text-xs font-medium text-warm-text transition-colors hover:bg-sidebar max-md:h-11"
-        >
-          <span aria-hidden="true">←</span> Back to queue
-        </button>
-      </div>
+    <div className="mx-auto w-full max-w-[1500px] pb-8">
+      <button
+        type="button"
+        onClick={() => { if (officeReview) router.push(getRoleHomePath(role)); else router.back(); }}
+        className="mb-5 inline-flex items-center gap-2 text-xs font-semibold text-muted-text transition-colors hover:text-clay"
+      >
+        <span className="grid h-8 w-8 place-items-center rounded-full border border-warm-border bg-card">
+          <Icon name="arrow-left" size={16} />
+        </span>
+        Back to queue
+      </button>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 max-md:gap-3">
-
-        {/* DETAILS COLUMN */}
-        <aside className="space-y-4 lg:col-span-5 max-md:space-y-3">
-
-          {/* Header */}
-          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-            <p className="mb-3 flex items-center gap-2 text-[11px] font-medium text-muted-text max-md:mb-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Submission ID: {String(sub.id).split('-')[0]}
+      {/* ── Header card ── */}
+      <section className="mb-5 overflow-hidden rounded-2xl border border-warm-border bg-card shadow-[0_12px_35px_rgba(65,49,39,0.05)]">
+        <div className="flex flex-col gap-5 p-5 md:flex-row md:items-center md:justify-between md:p-7">
+          <div className="min-w-0">
+            <div className="mb-3 flex flex-wrap items-center gap-2.5">
+              <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-bold ${statusConfig.classes}`}>
+                <span className={`h-1.5 w-1.5 rounded-full bg-current ${isCompleted || isWithdrawn ? 'opacity-70' : 'animate-pulse'}`} />
+                {statusConfig.label}
+              </span>
+              <span className="text-[11px] font-medium text-muted-text">
+                Submission ID: {String(sub.id).split('-')[0]}
+              </span>
+              {isOfficeRole(selectedOfficeRole) && (
+                <span className="text-[11px] font-medium text-muted-text">
+                  · {OFFICE_CONFIG[selectedOfficeRole].label}
+                </span>
+              )}
+            </div>
+            <h1 className={`${fonts.serif} max-w-4xl break-words text-[28px] font-semibold leading-[1.15] tracking-[-0.02em] text-warm-text md:text-[36px]`}>
+              {sub.file_name}
+            </h1>
+            <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] text-muted-text">
+              <span className="inline-flex items-center gap-1.5">
+                <Icon name="user" size={14} /> {sender?.full_name || 'Unknown submitter'}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Icon name="calendar" size={14} /> Submitted{' '}
+                {new Date(sub.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Icon name="file" size={14} /> {sub.file_type || 'File'} ·{' '}
+                {sub.file_size ? `${(sub.file_size / 1024).toFixed(2)} KB` : 'Size unavailable'}
+              </span>
+            </div>
+          </div>
+          <div className="shrink-0 rounded-xl border border-warm-border bg-white px-5 py-3.5 md:text-right">
+            <Label>Tracking number</Label>
+            <p className="font-mono text-sm font-bold tracking-[0.08em] text-clay">
+              {sub.tracking_number || 'Pending'}
             </p>
-            <h1 className={`${fonts.serif} mb-4 break-words text-[28px] leading-tight text-warm-text max-md:text-[24px]`}>{sub.file_name}</h1>
-            <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${statusConfig.classes}`}>
-              <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
-              {statusConfig.label}
-            </div>
-            <div className="mt-4 border-t border-warm-border pt-4">
-              <p className="text-[10px] font-medium text-muted-text">Tracking number</p>
-              <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{sub.tracking_number || 'Pending assignment'}</p>
-            </div>
-          </section>
+          </div>
+        </div>
 
-          {/* Context Card */}
-          <section className="space-y-5 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
+        {/* ── Submission context ── */}
+        <section className="border-t border-warm-border px-5 py-6 md:px-7">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="mb-1 text-[11px] font-medium text-muted-text">Document type</p>
-              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">
-                {getWorkflowDocumentTypeLabel(sub.category ?? null, sub.other_document_type)}
-              </p>
+              <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-clay">Submission context</p>
+              <h2 className="mt-1 font-serif text-xl font-semibold text-warm-text">Request details</h2>
             </div>
-            <div>
-              <p className="mb-1 text-[11px] font-medium text-muted-text">
-                {routeSteps.length > 0 || proposedOffices.length > 0
-                  ? 'Additional office assignments'
-                  : 'Submitter-selected destination'}
-              </p>
-              {routeSteps.length > 0 ? (
-                <ol className="space-y-1.5 text-xs font-semibold text-warm-text">
-                  {routeSteps.map((step) => (
-                    <li key={`${step.sequence_number}-${step.office_role}`} className="flex items-center justify-between gap-3">
-                      <span>
-                        {step.sequence_number}. {OFFICE_CONFIG[step.office_role].label}
-                        <span className="ml-2 font-normal text-muted-text">
-                          {OFFICE_RESPONSIBILITIES[step.responsibility]}
-                        </span>
-                      </span>
-                      <span className="text-[10px] font-normal capitalize text-muted-text">
-                        {step.status.replaceAll('_', ' ')}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              ) : proposedOffices.length > 0 ? (
-                <ol className="space-y-1.5 text-xs font-semibold text-warm-text">
-                  {proposedOffices.map((officeRole, index) => (
-                    <li key={officeRole}>{index + 1}. {OFFICE_CONFIG[officeRole].label}</li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="text-xs font-semibold text-warm-text">
-                  {sub.initial_destination_role === TOURISM_OFFICE_ROLE
-                    ? TOURISM_OFFICE_LABEL
-                    : typeof sub.initial_destination_role === 'string' && isOfficeRole(sub.initial_destination_role)
-                      ? OFFICE_CONFIG[sub.initial_destination_role].label
-                      : 'Not selected yet'}
-                </p>
-              )}
-              {sub.initial_destination_role === TOURISM_OFFICE_ROLE && (
-                <p className="mt-2 text-[11px] text-muted-text">
-                  Final-decision office:{' '}
-                  <span className="font-semibold text-warm-text">{finalDecisionOfficeLabel}</span>
-                </p>
-              )}
-              {routeStatus === 'proposed' && (
-                <p className="mt-1 text-[10px] text-muted-text">Proposed; awaiting Admin review</p>
-              )}
-            </div>
+            <span className="rounded-full bg-clay-soft px-3 py-1.5 text-[10px] font-bold text-clay">
+              {getWorkflowDocumentTypeLabel(sub.category ?? null, sub.other_document_type)}
+            </span>
+          </div>
+          <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
             {sub.intended_recipient && (
               <div>
-                <p className="mb-1 text-[11px] font-medium text-muted-text">Intended recipient</p>
-                <p className="text-xs text-warm-text">{sub.intended_recipient}</p>
-              </div>
-            )}
-            {activeRouteStep?.requirements_requested_at && activeRouteStep.requirements_comments && (
-              <div className="rounded-xl border border-warm-border bg-sidebar p-4">
-                <p className="mb-2 text-[11px] font-semibold text-warm-text">
-                  Requirements requested by this office
-                </p>
-                <p className="whitespace-pre-wrap text-xs leading-relaxed text-warm-text">
-                  {activeRouteStep.requirements_comments}
-                </p>
-              </div>
-            )}
-            {activeRouteStep?.requirements_requested_at && sub.sender_response && (
-              <div className="rounded-xl border border-warm-border bg-sidebar p-4">
-                <p className="mb-2 text-[11px] font-semibold text-warm-text">Sender response</p>
-                <p className="whitespace-pre-wrap text-xs leading-relaxed text-warm-text">
-                  {sub.sender_response}
-                </p>
+                <Label>Intended recipient</Label>
+                <p className="text-xs font-semibold text-warm-text">{sub.intended_recipient}</p>
               </div>
             )}
             {sub.purpose && (
               <div>
-                <p className="mb-1 text-[11px] font-medium text-muted-text">Purpose</p>
+                <Label>Purpose</Label>
                 <p className="whitespace-pre-wrap text-xs leading-relaxed text-warm-text">{sub.purpose}</p>
               </div>
             )}
             {sub.requested_action && (
-              <div>
-                <p className="mb-1 text-[11px] font-medium text-muted-text">Requested action</p>
+              <div className="md:col-span-2">
+                <Label>Requested action</Label>
                 <p className="whitespace-pre-wrap text-xs leading-relaxed text-warm-text">{sub.requested_action}</p>
               </div>
             )}
-            <div>
-              <p className="mb-1.5 text-[11px] font-medium text-muted-text">Sender notes</p>
-              <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
-                &quot;{sub.description || 'No description provided.'}&quot;
-              </p>
+            <div className="md:col-span-2">
+              <Label>Sender notes</Label>
+              <blockquote className="whitespace-pre-wrap break-words border-l-2 border-clay pl-3 font-serif text-[14px] italic leading-relaxed text-warm-text/75">
+                {sub.description || 'No description provided.'}
+              </blockquote>
             </div>
             <div className="border-t border-warm-border pt-4">
-              <p className="text-[10px] font-medium text-muted-text">Submitted by</p>
-              <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{sender?.full_name || 'Unknown'}</p>
-              <p className="text-[11px] text-muted-text">{sender?.email}</p>
+              <Label>Submitted by</Label>
+              <p className="text-xs font-bold text-warm-text">{sender?.full_name || 'Unknown submitter'}</p>
+              {sender?.email && <p className="mt-0.5 text-[10px] text-muted-text">{sender.email}</p>}
             </div>
-            <div className="flex items-end justify-between gap-4 border-t border-warm-border pt-4">
-              <div>
-                <p className="text-[10px] font-medium text-muted-text">Submitted on</p>
-                <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{new Date(sub.created_at).toLocaleDateString()} at {new Date(sub.created_at).toLocaleTimeString()}</p>
-              </div>
-              {sub.file_size ? (
-                <div className="text-right">
-                  <p className="text-[10px] font-medium text-muted-text">File size</p>
-                  <p className="mt-0.5 text-[11px] font-semibold text-warm-text">{(sub.file_size / 1024).toFixed(2)} KB</p>
-                </div>
-              ) : null}
-            </div>
-          </section>
-
-          {attachments.length > 0 && (
-            <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-              <h2 className="mb-3 text-xs font-semibold text-warm-text">Supporting attachments</h2>
-              <ul className="space-y-2">
-                {attachments.map((attachment) => (
-                  <li key={attachment.id} className="flex items-center justify-between gap-3 text-[11px]">
-                    <span className="min-w-0 truncate text-warm-text">{attachment.file_name}</span>
-                    <button
-                      type="button"
-                      onClick={() => void downloadAttachment(attachment)}
-                      className="shrink-0 font-semibold text-clay underline"
-                    >
-                      Download
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {/* Review Actions */}
-          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-            {officeReview && (
-              <p className="mb-4 text-[11px] leading-relaxed text-muted-text">
-                Review the request and record your office decision. Rejections are archived; the sender must submit a new request.
+            <div className="border-t border-warm-border pt-4">
+              <Label>Submitted on</Label>
+              <p className="text-xs font-bold text-warm-text">
+                {new Date(sub.created_at).toLocaleDateString([], { dateStyle: 'medium' })}
               </p>
-            )}
-            {mayorReview && (
-              <p className="mb-4 text-[11px] leading-relaxed text-muted-text">
-                Record the final decision, or return the request to the sender for additional requirements without changing its tracking number.
+              <p className="mt-0.5 text-[10px] text-muted-text">
+                {new Date(sub.created_at).toLocaleTimeString([], { timeStyle: 'short' })}
               </p>
-            )}
-            {isLocked ? (
-              <div className="space-y-3">
-                <p className="text-xs font-semibold text-warm-text">Review record</p>
-                {reviewNotes ? (
-                  <div className={`rounded-xl border p-4 ${isDeclined ? 'border-rejected-bg bg-rejected-bg/50' : 'border-approved-bg bg-approved-bg/50'}`}>
-                    <p className={`mb-2 text-xs font-semibold ${isDeclined ? 'text-rejected-text' : 'text-approved-text'}`}>Your notes</p>
-                    <p className="whitespace-pre-wrap break-words font-serif text-base leading-relaxed text-warm-text">
-                      &quot;{reviewNotes}&quot;
-                    </p>
-                    <p className="mt-3 text-[10px] text-muted-text">{new Date(sub.updated_at).toLocaleDateString()}</p>
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-text">No notes are recorded for this stage.</p>
-                )}
-                <div className="rounded-xl border border-dashed border-warm-border bg-sidebar p-4 text-center text-xs leading-relaxed text-muted-text">
-                  {sub.status === 'declined_by_approver'
-                    || sub.status === 'declined_by_admin'
-                    || sub.status === 'declined_by_office'
-                    || sub.status === 'declined_by_mayor'
-                    ? 'This request is archived. The sender must submit a new request.'
-                    : sub.status === 'returned_for_requirements'
-                      ? 'Waiting for the sender to provide the requested information.'
-                      : 'This review stage is closed.'}
-                </div>
-              </div>
-            ) : (
-              <>
-                {approverReview && (
-                  sub.initial_destination_role === TOURISM_OFFICE_ROLE && (
-                    <label className="mb-4 block text-xs font-semibold text-warm-text">
-                      Municipal office responsible for the final decision
-                      <select
-                        value={finalDecisionOfficeRole}
-                        onChange={(event) => {
-                          const officeRole = event.target.value;
-                          setFinalDecisionOfficeRole(isOfficeRole(officeRole) ? officeRole : '');
-                        }}
-                        required
-                        className="mt-2 h-11 w-full rounded-xl border border-warm-border bg-card px-3 text-xs font-normal text-warm-text"
-                      >
-                        <option value="">Select a municipal office</option>
-                        {Object.entries(OFFICE_CONFIG).map(([officeRole, office]) => (
-                          <option key={officeRole} value={officeRole}>{office.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                  )
-                )}
-                {approverReview && (
-                  <fieldset className="mb-4 space-y-3">
-                    <legend className="mb-2 text-xs font-semibold text-warm-text">
-                      {sub.initial_destination_role === TOURISM_OFFICE_ROLE
-                        ? 'Optional additional office assignments after review'
-                        : 'Assign additional offices after reviewing this submission'}
-                    </legend>
-                    <div className="space-y-2">
-                      {Object.entries(OFFICE_CONFIG).map(([officeRole, office]) => (
-                        sub.initial_destination_role !== officeRole && (
-                          <div key={officeRole} className="rounded-xl border border-warm-border bg-card p-3 text-xs text-warm-text">
-                            <label className="flex items-start gap-3">
-                              <input
-                                type="checkbox"
-                                checked={proposedOffices.includes(officeRole as OfficeRole)}
-                                onChange={() => toggleProposedOffice(officeRole as OfficeRole)}
-                                className="mt-0.5 accent-clay"
-                              />
-                              <span>{office.label}</span>
-                            </label>
-                            {proposedOffices.includes(officeRole as OfficeRole) && (
-                              <label className="mt-3 block text-[11px] text-muted-text">
-                                Responsibility
-                                <select
-                                  value={officeResponsibilities[officeRole as OfficeRole] ?? 'mandatory_approval_clearance'}
-                                  onChange={(event) => setOfficeResponsibilities((current) => ({
-                                    ...current,
-                                    [officeRole]: event.target.value as OfficeResponsibility,
-                                  }))}
-                                  className="mt-1 h-10 w-full rounded-lg border border-warm-border bg-card px-3 text-xs text-warm-text"
-                                >
-                                  {Object.entries(OFFICE_RESPONSIBILITIES).map(([value, label]) => (
-                                    <option key={value} value={value}>{label}</option>
-                                  ))}
-                                </select>
-                              </label>
-                            )}
-                          </div>
-                        )
-                      ))}
-                    </div>
-                    <label className="block text-[11px] font-medium text-muted-text">
-                      Routing order
-                      <select
-                        value={routingMode}
-                        onChange={(event) => setRoutingMode(event.target.value as OfficeRoutingMode)}
-                        className="mt-1 h-10 w-full rounded-lg border border-warm-border bg-card px-3 text-xs text-warm-text"
-                      >
-                        <option value="sequential">Sequential — one office at a time</option>
-                        <option value="simultaneous">Simultaneous — assigned offices work in parallel</option>
-                      </select>
-                    </label>
-                    {proposedOffices.length > 0 && (
-                      <ol className="space-y-2 rounded-xl bg-sidebar p-3 text-xs text-warm-text">
-                        {proposedOffices.map((officeRole, index) => (
-                          <li key={officeRole} className="flex items-center justify-between gap-3">
-                            <span>
-                              {routingMode === 'simultaneous' ? 1 : index + 1}. {OFFICE_CONFIG[officeRole].label}
-                              <span className="ml-2 font-normal text-muted-text">
-                                {OFFICE_RESPONSIBILITIES[officeResponsibilities[officeRole] ?? 'mandatory_approval_clearance']}
-                              </span>
-                            </span>
-                            <span className="flex gap-2">
-                              {routingMode === 'sequential' && (
-                                <>
-                                  <button type="button" onClick={() => moveProposedOffice(index, -1)} disabled={index === 0} aria-label={`Move ${OFFICE_CONFIG[officeRole].label} up`} className="disabled:opacity-40">↑</button>
-                                  <button type="button" onClick={() => moveProposedOffice(index, 1)} disabled={index === proposedOffices.length - 1} aria-label={`Move ${OFFICE_CONFIG[officeRole].label} down`} className="disabled:opacity-40">↓</button>
-                                </>
-                              )}
-                            </span>
-                          </li>
-                        ))}
-                      </ol>
-                    )}
-                    <p className="text-[11px] text-muted-text">
-                      Additional assignments do not replace the final-decision office or grant final decision authority.
-                    </p>
-                  </fieldset>
-                )}
-                <label htmlFor="approver-notes" className="mb-2 block text-xs font-semibold text-warm-text">
-                  {mayorReview || mayorRouteStep
-                    ? mayorRouteStep ? 'Additional requirements or office decision notes' : "Mayor's official decision"
-                    : officeReview
-                      ? activeRouteStep
-                        ? 'Evaluation, clearance, or recommendation notes'
-                        : 'Final office decision notes'
-                      : 'Tourism Officer remarks'}
-                </label>
-                <textarea
-                  id="approver-notes"
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  aria-describedby={officeReview && actionError ? 'office-route-action-error' : undefined}
-                  className="mb-4 h-32 w-full resize-none rounded-xl border border-warm-border bg-card p-4 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay"
-                  placeholder={officeReview
-                    ? 'Record your evaluation, final decision, or the changes the sender must provide...'
-                    : mayorReview
-                      ? 'Explain the final decision...'
-                    : 'Record your evaluation and any reasons...'}
-                />
-                {actionError && (
-                  <p
-                    id={officeReview ? 'office-route-action-error' : undefined}
-                    role="alert"
-                    className="mb-3 whitespace-pre-wrap rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text"
-                  >
-                    {actionError}
-                  </p>
-                )}
-                <div className="flex flex-col gap-3">
-                  {approverReview && (
-                    <>
-                      <button
-                        onClick={() => handleWorkflowAction('approve')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
-                      >
-                        {updating
-                          ? 'Saving...'
-                          : sub.initial_destination_role === TOURISM_OFFICE_ROLE
-                            ? 'Route submission'
-                            : 'Assign additional offices'}
-                      </button>
-                      <button
-                        onClick={() => handleWorkflowAction('reject')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 disabled:opacity-50"
-                      >
-                        Reject and archive
-                      </button>
-                    </>
-                  )}
-                  {officeReview && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => void handleWorkflowAction('return')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar disabled:opacity-50"
-                      >
-                        {updating ? 'Saving...' : 'Request changes'}
-                      </button>
-                      <button
-                        onClick={() => handleWorkflowAction('approve')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
-                      >
-                        {updating
-                          ? 'Saving...'
-                          : activeRouteStep
-                            ? 'Record assignment complete'
-                            : 'Approve and complete'}
-                      </button>
-                      {role === sub.initial_destination_role && !activeRouteStep && (
-                        <button
-                          type="button"
-                          onClick={() => void handleWorkflowAction('forward')}
-                          disabled={updating}
-                          className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar disabled:opacity-50"
-                        >
-                          {updating ? 'Saving...' : 'Forward to Tourism Officer'}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleWorkflowAction('reject')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 disabled:opacity-50"
-                      >
-                        Reject and archive
-                      </button>
-                    </>
-                  )}
-                  {mayorReview && (
-                    <>
-                      <button
-                        onClick={() => handleWorkflowAction('approve')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
-                      >
-                        {updating ? 'Saving...' : 'Approve and complete'}
-                      </button>
-                      <button
-                        onClick={() => handleWorkflowAction('reject')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 disabled:opacity-50"
-                      >
-                        Reject and archive
-                      </button>
-                      <button
-                        onClick={() => handleWorkflowAction('return')}
-                        disabled={updating}
-                        className="inline-flex h-11 w-full items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar disabled:opacity-50"
-                      >
-                        Return for requirements
-                      </button>
-                    </>
-                  )}
-                </div>
-              </>
-            )}
-          </section>
-
-          {/* Audit Log */}
-          <DocumentMessaging
-            key={sub.id}
-            submissionId={sub.id}
-            fileName={sub.file_name}
-            trackingNumber={sub.tracking_number ?? null}
-            activity={(
-              <div>
-                <h3 className="mb-4 text-xs font-semibold text-warm-text">Activity</h3>
-                {auditLogs.length === 0 ? (
-                  <p className="text-xs text-muted-text">No activity recorded yet.</p>
-                ) : (
-                  <div className="relative ml-1 space-y-6 border-l border-warm-border">
-                    {auditLogs.map((log) => (
-                      <div key={log.id} className="relative pl-5">
-                        <span className="absolute -left-[4.5px] top-1.5 h-2 w-2 rounded-full bg-clay ring-4 ring-card" />
-                        <p className="text-[11px] font-semibold text-clay">{getActionLabel(log.action_type)}</p>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-2">
-                          <p className="text-[11px] font-medium text-warm-text">{log.profiles?.full_name || 'System'}</p>
-                          {log.profiles?.role && (
-                            <span className="rounded-md bg-sidebar px-1.5 py-0.5 text-[10px] font-medium capitalize text-muted-text">
-                              {log.profiles.role}
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-0.5 text-[10px] text-muted-text">
-                          {new Date(log.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
-                        </p>
-                        {log.comments && (
-                          <p className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-sidebar p-3 font-serif text-sm leading-relaxed text-warm-text">
-                            &quot;{log.comments}&quot;
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          />
-
-          {/* Footer Actions */}
-          <button
-            onClick={async () => {
-              const url = await getFileUrl(supabase, sub);
-              await downloadFile(url, sub.file_name);
-            }}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-full border border-warm-border px-6 text-xs font-semibold text-warm-text transition-colors hover:bg-sidebar"
-          >
-            Download original file
-          </button>
-        </aside>
-
-        {/* PREVIEW PANEL */}
-        <main className="lg:col-span-7">
-          <div className="flex flex-col overflow-hidden rounded-2xl border border-warm-border bg-card lg:sticky lg:top-10">
-            <div className="flex min-h-12 items-center border-b border-warm-border px-5 py-3 max-md:px-3.5">
-              <div className="flex min-w-0 flex-col">
-                <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">Document preview</span>
-                <span className="truncate text-[11px] font-medium text-warm-text">{sub.file_name}</span>
-              </div>
-            </div>
-
-            <div className="relative flex h-[60vh] min-h-[380px] items-center justify-center overflow-hidden bg-cream lg:h-[75vh]">
-              <FilePreview file={sub} />
             </div>
           </div>
-        </main>
-      </div>
+        </section>
 
+        {/* ── Document preview ── */}
+        <section className="border-t border-warm-border">
+          <div className={`flex items-center gap-3 px-5 py-4 md:px-7 ${previewOpen ? 'border-b border-warm-border' : ''}`}>
+            <button
+              type="button"
+              onClick={() => setPreviewOpen((open) => !open)}
+              aria-expanded={previewOpen}
+              aria-controls={`document-preview-${sub.id}`}
+              className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left"
+            >
+              <span className="min-w-0">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.15em] text-clay">Document preview</span>
+                <span className="mt-1 block truncate text-xs font-semibold text-warm-text">{sub.file_name}</span>
+                <span className="mt-1 block text-[10px] font-medium text-muted-text">
+                  {previewOpen ? 'Hide full document preview' : 'Select to view the full document'}
+                </span>
+              </span>
+              <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full border border-warm-border text-muted-text transition-transform ${previewOpen ? 'rotate-90' : ''}`}>
+                <Icon name="chevron-right" size={16} />
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={downloadOriginal}
+              aria-label={`Download ${sub.file_name}`}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-warm-border px-3.5 text-[11px] font-bold text-warm-text hover:bg-sidebar"
+            >
+              <Icon name="download" size={15} />
+              <span className="hidden sm:inline">Download</span>
+            </button>
+          </div>
+          <div id={`document-preview-${sub.id}`} hidden={!previewOpen}>
+            {previewOpen && (
+              <div className="relative flex h-[min(70vh,760px)] min-h-[540px] items-center justify-center overflow-auto bg-[#eae5df] p-5 md:p-8">
+                <FilePreview file={sub} />
+              </div>
+            )}
+          </div>
+        </section>
+      </section>
+
+      {/* ── Main grid ── */}
+      <div>
+          {officeReview ? (
+            <>
+              {actionError && (
+                <p role="alert" className="mb-3 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">
+                  {actionError}
+                </p>
+              )}
+              <DocumentMessaging
+                key={sub.id}
+                submissionId={sub.id}
+                fileName={sub.file_name}
+                trackingNumber={sub.tracking_number ?? null}
+                workflowComposer={{
+                  recipients,
+                  actionsByRecipient,
+                  initialRecipient,
+                  initialAction,
+                  initialMessage: processingNote,
+                  statusLine,
+                  isClosed: composerClosed,
+                  closedMessage: isWithdrawn ? 'This submission is withdrawn.' : 'This submission is closed.',
+                  busy: updating,
+                  pendingAssignmentCount,
+                  sidebarContent: workspaceSidebar,
+                  sourceDocument: {
+                    filePath: sub.file_path ?? null,
+                    fileType: sub.file_type,
+                    fileSize: sub.file_size,
+                  },
+                  onWorkflowAction: handleWorkflowAction,
+                  onForwarded: fetchDetails,
+                }}
+                activity={(
+                  <WorkflowActivityTimeline
+                    events={auditLogs.map((log) => ({
+                      id: log.id,
+                      actionType: log.action_type,
+                      label: getActionLabel(log.action_type),
+                      createdAt: log.created_at,
+                      actor: log.profiles?.full_name || 'System',
+                      actorRole: log.profiles?.role,
+                      comments: log.comments,
+                    }))}
+                  />
+                )}
+              />
+            </>
+          ) : (
+            <div className="flex min-h-64 items-center justify-center rounded-2xl border border-warm-border bg-card p-6 text-center text-xs text-muted-text">
+              This submission is not assigned to your office.
+            </div>
+          )}
+    </div>
     </div>
   );
 }

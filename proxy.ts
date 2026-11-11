@@ -45,11 +45,18 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from('profiles')
     .select('role')
     .eq('id', user.id)
     .single()
+
+  if (profileError || !profile?.role) {
+    const loginUrl = new URL('/login', req.url)
+    loginUrl.searchParams.set('profile', 'unavailable')
+    return NextResponse.redirect(loginUrl)
+  }
+
   const role = profile?.role ?? null
   const pathname = req.nextUrl.pathname
 
@@ -74,7 +81,8 @@ export async function proxy(req: NextRequest) {
 
   if (pathname.startsWith('/workflow/approver')) {
     const officeReviewPage =
-      pathname.startsWith('/workflow/approver/file_management/')
+      pathname === '/workflow/approver/file_management'
+      || pathname.startsWith('/workflow/approver/file_management/')
 
     if (role !== 'tourism_officer' && role !== 'system_admin') {
       if (officeReviewPage && isOfficeRole(role)) {

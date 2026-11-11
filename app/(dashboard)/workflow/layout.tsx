@@ -84,16 +84,11 @@ export default function WorkflowLayout({
         { href: '/workflow/user/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
       ];
     }
-    if (role === 'tourism_officer') {
-      return [
-        { href: '/workflow/approver', label: 'Dashboard', icon: '⎚' },
-        { href: '/workflow/approver/file_management', label: 'File Registry', icon: '▤' },
-        { href: '/workflow/approver/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
-      ];
-    }
     if (isOfficeRole(role)) {
       return [
-        { href: getRoleHomePath(role), label: 'Office Dashboard', icon: '▤' },
+        { href: getRoleHomePath(role), label: 'Dashboard', icon: '▤' },
+        { href: '/workflow/approver/file_management', label: 'File Registry', icon: '▤' },
+        { href: '/workflow/approver/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
         { href: '/workflow/retrieval', label: 'Scan QR Code', icon: '⌗' },
       ];
     }

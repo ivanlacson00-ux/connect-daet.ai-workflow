@@ -21,6 +21,7 @@ export interface WorkflowRoutePreview {
     status: string;
     started_at: string | null;
     decided_at: string | null;
+    completed_at: string | null;
     requirements_requested_at: string | null;
   }[];
   loadFailed: boolean;
@@ -59,6 +60,7 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
               assignment_source,
               started_at,
               decided_at,
+              completed_at,
               requirements_requested_at
             )
           `)

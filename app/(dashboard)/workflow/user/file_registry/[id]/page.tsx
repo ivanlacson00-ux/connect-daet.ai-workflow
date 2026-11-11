@@ -5,15 +5,18 @@ import { useParams, useRouter } from 'next/navigation';
 import QRCode from 'qrcode';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
+import WorkflowActivityTimeline from '@/components/WorkflowActivityTimeline';
 import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
 import {
   getWorkflowDocumentTypeLabel,
+  isOfficeRole,
+  OFFICE_CONFIG,
+  type OfficeRole,
 } from '@/lib/workflow/offices';
+import { getSubmissionStatusLabel, getSubmissionStatusTone } from '@/lib/workflow/status';
 import {
   getWorkflowFileMimeType,
   getWorkflowFilesTypeError,
-  WORKFLOW_ATTACHMENT_ACCEPT,
-  WORKFLOW_DOCUMENT_ACCEPT,
 } from '@/lib/workflow/file-types';
 
 // ─── Styles & Fonts (synced with dashboard) ──────────────────────────────────
@@ -37,6 +40,12 @@ interface Submission {
   intended_recipient?: string | null;
   initial_destination_role?: string | null;
   selected_office_role?: string | null;
+  closed_by?: string | null;
+  closure_note?: string | null;
+  closure_file_path?: string | null;
+  closure_file_name?: string | null;
+  closure_file_type?: string | null;
+  closure_file_size?: number | null;
   office_comments?: string | null;
   mayor_comments?: string | null;
   sender_response?: string | null;
@@ -67,6 +76,7 @@ interface AuditLog {
   new_status: string | null;
   comments: string | null;
   created_at: string;
+  profiles?: { full_name: string | null; role: string | null } | { full_name: string | null; role: string | null }[] | null;
 }
 
 interface RetrievalQr {
@@ -82,11 +92,14 @@ export default function UserFileDetail() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [versions, setVersions] = useState<SubmissionVersion[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [senderResponse, setSenderResponse] = useState('');
-  const [responseFiles, setResponseFiles] = useState<File[]>([]);
-  const [revisedDocument, setRevisedDocument] = useState<File | null>(null);
   const [savingResponse, setSavingResponse] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [closureActor, setClosureActor] = useState<string | null>(null);
+  const [redirectOffice, setRedirectOffice] = useState<OfficeRole | ''>('');
+  const [redirectDocumentType, setRedirectDocumentType] = useState('');
+  const [redirectOtherDocumentType, setRedirectOtherDocumentType] = useState('');
+  const [savingRedirect, setSavingRedirect] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [retrievalQr, setRetrievalQr] = useState<RetrievalQr | null>(null);
   const [qrImage, setQrImage] = useState('');
   const [qrLoading, setQrLoading] = useState(false);
@@ -95,9 +108,11 @@ export default function UserFileDetail() {
   const [loading, setLoading] = useState(true);
   const supabase = useMemo(() => createClient(), []);
 
-  const fetchSubmission = useCallback(async () => {
-    setLoading(true);
-    setSub(null);
+  const fetchSubmission = useCallback(async (preserveCurrent = false) => {
+    if (!preserveCurrent) {
+      setLoading(true);
+      setSub(null);
+    }
     setRetrievalQr(null);
     setQrImage('');
     setQrError('');
@@ -108,10 +123,23 @@ export default function UserFileDetail() {
         .eq('id', id)
         .single();
 
-      if (error) console.error('Submission load failed:', error.message);
+      if (error) {
+        console.error('Submission load failed:', error.message);
+        if (preserveCurrent) setActionError('The action succeeded, but the submission did not refresh. Reload this page to see the latest status.');
+      }
       if (data) {
         setSub(data);
-        setSenderResponse(data.sender_response || '');
+        if (data.closed_by) {
+          const { data: closer, error: closerError } = await supabase
+            .from('profiles')
+            .select('full_name')
+            .eq('id', data.closed_by)
+            .maybeSingle();
+          if (closerError) console.error('Could not load closure actor:', closerError.message);
+          setClosureActor(closer?.full_name ?? null);
+        } else {
+          setClosureActor(null);
+        }
         if (data.status === 'completed' || data.status === 'approved') {
           const { data: qrData, error: qrLoadError } = await supabase.rpc(
             'get_workflow_retrieval_qr',
@@ -146,7 +174,7 @@ export default function UserFileDetail() {
             .order('version_number', { ascending: true }),
           supabase
             .from('workflow_audit_logs')
-            .select('id, action_type, old_status, new_status, comments, created_at')
+            .select('id, action_type, old_status, new_status, comments, created_at, profiles:action_by (full_name, role)')
             .eq('submission_id', id)
             .order('created_at', { ascending: true }),
         ]);
@@ -247,141 +275,151 @@ export default function UserFileDetail() {
     link.click();
   };
 
-  const submitRequirementsResponse = async () => {
-    if (!sub || !senderResponse.trim() || !revisedDocument) {
-      setActionError('Enter a response and upload a revised document before resubmitting.');
-      return;
+  const submitRequirementsResponse = async (response: string, revisedDocument: File | null) => {
+    if (!sub) throw new Error('Submission is unavailable.');
+    if (!response.trim()) throw new Error('Enter a response before resubmitting.');
+    const fileError = revisedDocument ? getWorkflowFilesTypeError([revisedDocument], false) : null;
+    if (fileError) throw new Error(fileError);
+    if (revisedDocument && revisedDocument.size > 10 * 1024 * 1024) {
+      throw new Error('The revised document must be 10 MB or smaller.');
     }
-    const fileError =
-      getWorkflowFilesTypeError([revisedDocument], false)
-      || getWorkflowFilesTypeError(responseFiles);
-    if (fileError) {
-      setActionError(fileError);
-      return;
-    }
-
     setSavingResponse(true);
     setActionError('');
     const uploadedPaths: string[] = [];
-    const insertedAttachmentIds: string[] = [];
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) throw userError ?? new Error('You must sign in to respond.');
 
-      const revisedFileType = getWorkflowFileMimeType(revisedDocument.name);
-      if (!revisedFileType) throw new Error('The revised document type is not supported.');
-      const safeRevisedName = revisedDocument.name.replace(/[^\w.-]/g, '_');
-      const revisedFilePath = `${user.id}/${crypto.randomUUID()}-revised-${safeRevisedName}`;
-      const { error: revisedUploadError } = await supabase.storage
-        .from('workflow_uploads')
-        .upload(revisedFilePath, revisedDocument, {
-          contentType: revisedFileType,
-          upsert: false,
-        });
-      if (revisedUploadError) throw revisedUploadError;
-      uploadedPaths.push(revisedFilePath);
-      const { data: revisedFileUrl } = supabase.storage
-        .from('workflow_uploads')
-        .getPublicUrl(revisedFilePath);
-
-      const newAttachments = [];
-      for (const [index, file] of responseFiles.entries()) {
-        const safeName = file.name.replace(/[^\w.-]/g, '_');
-        const filePath = `${user.id}/${crypto.randomUUID()}-${index}-${safeName}`;
-        const { error: uploadError } = await supabase.storage
+      let revisedFilePath: string | null = null;
+      let revisedFileUrl: string | null = null;
+      let revisedFileType: string | null = null;
+      if (revisedDocument) {
+        revisedFileType = getWorkflowFileMimeType(revisedDocument.name);
+        if (!revisedFileType) throw new Error('The revised document type is not supported.');
+        const safeRevisedName = revisedDocument.name.replace(/[^\w.-]/g, '_');
+        revisedFilePath = `${user.id}/${crypto.randomUUID()}-revised-${safeRevisedName}`;
+        const { error: revisedUploadError } = await supabase.storage
           .from('workflow_uploads')
-          .upload(filePath, file, {
-            contentType: getWorkflowFileMimeType(file.name) || undefined,
+          .upload(revisedFilePath, revisedDocument, {
+            contentType: revisedFileType,
             upsert: false,
           });
-        if (uploadError) throw uploadError;
-        uploadedPaths.push(filePath);
-        newAttachments.push({
-          submission_id: sub.id,
-          file_name: file.name,
-          file_path: filePath,
-          file_type: getWorkflowFileMimeType(file.name),
-          file_size: file.size,
-          uploaded_by: user.id,
-        });
-      }
-
-      if (newAttachments.length) {
-        const { data, error: attachmentError } = await supabase
-          .from('workflow_submission_attachments')
-          .insert(newAttachments)
-          .select('id');
-        if (attachmentError) throw attachmentError;
-        insertedAttachmentIds.push(...(data ?? []).map((item) => item.id));
+        if (revisedUploadError) throw revisedUploadError;
+        uploadedPaths.push(revisedFilePath);
+        revisedFileUrl = supabase.storage
+          .from('workflow_uploads')
+          .getPublicUrl(revisedFilePath).data.publicUrl;
       }
 
       const { error: responseError } = await supabase.rpc(
         'respond_to_workflow_submission_changes',
         {
           target_submission_id: sub.id,
-          sender_comments: senderResponse.trim(),
+          sender_comments: response.trim(),
           revised_file_path: revisedFilePath,
-          revised_file_url: revisedFileUrl.publicUrl,
-          revised_file_name: revisedDocument.name,
+          revised_file_url: revisedFileUrl,
+          revised_file_name: revisedDocument?.name ?? null,
           revised_file_type: revisedFileType,
-          revised_file_size: revisedDocument.size,
+          revised_file_size: revisedDocument?.size ?? null,
         }
       );
       if (responseError) throw responseError;
-
-      await fetchSubmission();
-      setResponseFiles([]);
-      setRevisedDocument(null);
+      await fetchSubmission(true);
     } catch (error) {
       console.error('Requirements response failed:', error);
-      if (insertedAttachmentIds.length) {
-        const { error } = await supabase
-          .from('workflow_submission_attachments')
-          .delete()
-          .in('id', insertedAttachmentIds);
-        if (error) console.error('Attachment metadata cleanup failed:', error.message);
-      }
       if (uploadedPaths.length) {
         const { error } = await supabase.storage.from('workflow_uploads').remove(uploadedPaths);
         if (error) console.error('Attachment file cleanup failed:', error.message);
       }
-      setActionError(error instanceof Error ? error.message : 'Could not submit your response.');
+      throw error instanceof Error ? error : new Error('Could not submit your response.');
     } finally {
       setSavingResponse(false);
     }
   };
 
-  const getStatusStyles = (status: string) => {
-    switch (status) {
-      case 'pending':
-      case 'pending_approver':
-        return { label: 'Pending', classes: 'bg-pending-bg text-pending-text' };
-      case 'pending_admin':
-        return { label: 'Under review', classes: 'bg-review-bg text-review-text' };
-      case 'pending_office':
-        return { label: 'Municipal office review', classes: 'bg-review-bg text-review-text' };
-      case 'pending_mayor':
-        return { label: "Mayor's final review", classes: 'bg-review-bg text-review-text' };
-      case 'returned_for_requirements':
-        return { label: 'Additional requirements requested', classes: 'bg-pending-bg text-pending-text' };
-      case 'approved':
-      case 'completed':
-        return { label: 'Approved', classes: 'bg-approved-bg text-approved-text' };
-      case 'declined_by_approver':
-      case 'declined_by_admin':
-      case 'declined_by_office':
-      case 'declined_by_mayor':
-        return { label: 'Rejected', classes: 'bg-rejected-bg text-rejected-text' };
-      default:
-        return { label: status?.replaceAll('_', ' ') || 'Unknown', classes: 'bg-sidebar text-muted-text' };
+  const redirectReturnedSubmission = async () => {
+    if (!sub || !isOfficeRole(redirectOffice) || !redirectDocumentType) throw new Error('Choose a destination office and document type.');
+    if (redirectDocumentType === 'Other' && !redirectOtherDocumentType.trim()) {
+      throw new Error('Enter the custom document type.');
     }
+
+    setSavingRedirect(true);
+    setActionError('');
+    try {
+      const { error } = await supabase.rpc('redirect_workflow_submission', {
+        target_submission_id: sub.id,
+        target_office_role: redirectOffice,
+        new_document_type: redirectDocumentType,
+        new_other_document_type: redirectDocumentType === 'Other'
+          ? redirectOtherDocumentType.trim()
+          : null,
+      });
+      if (error) throw error;
+      setRedirectOffice('');
+      setRedirectDocumentType('');
+      setRedirectOtherDocumentType('');
+      await fetchSubmission(true);
+    } catch (error) {
+      console.error('Submission redirect failed:', error);
+      throw error instanceof Error ? error : new Error('Could not redirect this submission.');
+    } finally {
+      setSavingRedirect(false);
+    }
+  };
+
+  const withdrawSubmission = async (reason: string) => {
+    if (!sub) throw new Error('Submission is unavailable.');
+    setWithdrawing(true);
+    setActionError('');
+    try {
+      const { error } = await supabase.rpc('withdraw_workflow_submission', {
+        target_submission_id: sub.id,
+        withdrawal_reason: reason.trim() || null,
+      });
+      if (error) throw error;
+      await fetchSubmission(true);
+    } catch (error) {
+      console.error('Submission withdrawal failed:', error);
+      throw error instanceof Error ? error : new Error('Could not withdraw this submission.');
+    } finally {
+      setWithdrawing(false);
+    }
+  };
+
+  const getStatusStyles = (status: string) => {
+    const tone = getSubmissionStatusTone(status);
+    const classes = tone === 'completed'
+      ? 'bg-approved-bg text-approved-text'
+      : tone === 'progress'
+        ? 'bg-review-bg text-review-text'
+        : tone === 'returned' || tone === 'pending'
+          ? 'bg-pending-bg text-pending-text'
+          : tone === 'withdrawn'
+            ? 'bg-sidebar text-muted-text'
+            : 'bg-sidebar text-muted-text';
+    return { label: getSubmissionStatusLabel(status), classes };
   };
 
   const getWorkflowActionLabel = (actionType: string) => {
     switch (actionType) {
+      case 'DESTINATION_SELECTED': return 'Destination selected by submitter';
+      case 'SUBMISSION_REDIRECTED': return 'Submission redirected to a new office';
+      case 'SUBMISSION_RECEIVED': return 'Received by responsible office';
+      case 'SUBMISSION_FORWARDED': return 'Forwarded to an office for Recommendation';
+      case 'ASSIGNMENT_COMPLETED': return 'Office assignment completed';
+      case 'ASSIGNMENT_RETURNED': return 'Office assignment returned';
+      case 'ASSIGNMENT_WITHDRAWN': return 'Office assignment withdrawn';
+      case 'CHANGES_REQUESTED': return 'Changes requested';
+      case 'CHANGES_RESPONDED': return 'Response to requested changes submitted';
+      case 'RETURNED_TO_SUBMITTER': return 'Returned to submitter for redirection';
+      case 'SUBMISSION_WITHDRAWN': return 'Submission withdrawn';
+      case 'SUBMISSION_CLOSED': return 'Submission closed';
+      case 'FILE_VERSION_ADDED': return 'Document version added';
       case 'ROUTE_PROPOSED': return 'Tourism Officer proposed office route';
       case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Assigned to municipal office';
       case 'OFFICE_ROUTE_STEP_APPROVED': return 'Municipal office approved';
+      case 'OFFICE_ASSIGNMENT_COMPLETED': return 'Municipal office assignment completed';
+      case 'OFFICE_ASSIGNMENT_FORWARDED': return 'Forwarded to a municipal office for Recommendation';
       case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Forwarded for Tourism Officer review';
       case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer assigned additional offices';
       case 'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED': return 'Additional office assignments completed';
@@ -420,14 +458,70 @@ export default function UserFileDetail() {
 
   const statusConfig = getStatusStyles(sub.status);
 
-  // Logic: Only show feedback if it's REJECTED or FINAL APPROVED
-  const showFeedback = sub.status === 'completed' || sub.status === 'approved' || sub.status.includes('declined');
+  const isCompleted = sub.status === 'completed' || sub.status === 'approved';
+  const isWithdrawn = sub.status === 'withdrawn';
+  const isReturned = sub.status === 'changes_requested' || sub.status === 'returned_for_requirements';
+  const isRedirectable = sub.status === 'returned';
+  const canWithdraw = !isCompleted && !isWithdrawn;
+  const currentDestinationRole = sub.selected_office_role ?? sub.initial_destination_role ?? null;
+  const currentDestinationLabel = isOfficeRole(currentDestinationRole)
+    ? OFFICE_CONFIG[currentDestinationRole].label
+    : 'Not selected';
+  const initialDestinationRole = sub.initial_destination_role ?? null;
+  const showFeedback = isCompleted || sub.status.includes('declined');
   const officialNote = sub.mayor_comments || sub.office_comments || sub.admin_comments || sub.rejection_comment || sub.approver_comments;
-  const isApproved = sub.status === 'completed' || sub.status === 'approved';
-  const isReturned = sub.status === 'returned_for_requirements';
+  const isApproved = isCompleted;
   const requirementsRequest = [...auditLogs]
     .reverse()
-    .find((log) => log.action_type === 'ROUTE_REQUIREMENTS_REQUESTED');
+    .find((log) => ['CHANGES_REQUESTED', 'ROUTE_REQUIREMENTS_REQUESTED'].includes(log.action_type));
+  const submitterActions = [
+    { value: 'send_message', label: 'Send message', buttonLabel: 'Send', tone: 'neutral' as const, requiresMessage: true },
+    {
+      value: 'respond_changes',
+      label: 'Send response',
+      buttonLabel: 'Send response',
+      tone: 'primary' as const,
+      requiresMessage: true,
+      unavailableReason: isReturned ? undefined : 'Available when status is Changes Requested',
+    },
+    {
+      value: 'redirect',
+      label: 'Redirect to another office',
+      buttonLabel: 'Redirect',
+      tone: 'primary' as const,
+      unavailableReason: isRedirectable ? undefined : 'Available when status is Returned',
+    },
+    {
+      value: 'withdraw_submission',
+      label: 'Withdraw submission',
+      tone: 'warning' as const,
+      confirmation: 'This submission will be withdrawn, and any pending office assignments will also be withdrawn.',
+      unavailableReason: canWithdraw ? undefined : 'Completed or withdrawn submissions cannot be withdrawn',
+    },
+  ];
+
+  const handleSubmitterAction = async (
+    action: string,
+    _recipient: string,
+    message: string,
+    files: File[],
+  ) => {
+    if (action === 'respond_changes') {
+      await submitRequirementsResponse(message, files[0] ?? null);
+      return;
+    }
+    if (action === 'redirect') {
+      if (files.length > 0) throw new Error('Remove attachments before redirecting this submission.');
+      await redirectReturnedSubmission();
+      return;
+    }
+    if (action === 'withdraw_submission') {
+      if (files.length > 0) throw new Error('Remove attachments before withdrawing this submission.');
+      await withdrawSubmission(message);
+      return;
+    }
+    throw new Error('This action is unavailable.');
+  };
 
   const downloadAttachment = async (attachment: Attachment) => {
     const { data, error } = await supabase.storage
@@ -495,7 +589,7 @@ export default function UserFileDetail() {
           <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
             <h2 className="mb-1 text-sm font-semibold text-warm-text">Document retrieval QR code</h2>
             <p className="mb-4 text-[11px] leading-relaxed text-muted-text">
-              Generate a secure QR code to present when claiming your approved document.
+              Generate a secure QR code to present when collecting your processed document.
             </p>
             {retrievalQr?.retrieval_status === 'released' ? (
               <p className="rounded-xl bg-approved-bg px-3 py-3 text-xs font-semibold text-approved-text">
@@ -503,7 +597,7 @@ export default function UserFileDetail() {
               </p>
             ) : !isApproved ? (
               <p className="rounded-xl bg-sidebar px-3 py-3 text-xs text-muted-text">
-                A retrieval QR code will be available after the request is approved and completed.
+                A retrieval QR code will be available after processing is complete.
               </p>
             ) : retrievalQr?.retrieval_status === 'active' ? (
               <div className="retrieval-qr-print rounded-xl border border-warm-border bg-white p-4 text-center">
@@ -585,10 +679,15 @@ export default function UserFileDetail() {
             </div>
             {(sub.initial_destination_role || sub.selected_office_role) && (
               <div>
-                <p className="mb-1.5 text-[11px] font-medium text-muted-text">Submitter-selected destination</p>
+                <p className="mb-1.5 text-[11px] font-medium text-muted-text">Current responsible office</p>
                 <p className="text-xs font-semibold text-warm-text">
-                  {(sub.initial_destination_role || sub.selected_office_role || '').replaceAll('_', ' ')}
+                  {currentDestinationLabel}
                 </p>
+                {isOfficeRole(initialDestinationRole) && initialDestinationRole !== currentDestinationRole && (
+                  <p className="mt-1 text-[10px] text-muted-text">
+                    Originally selected: {OFFICE_CONFIG[initialDestinationRole].label}
+                  </p>
+                )}
               </div>
             )}
             <div className="flex items-end justify-between gap-4 border-t border-warm-border pt-4">
@@ -602,6 +701,37 @@ export default function UserFileDetail() {
               </div>
             </div>
           </section>
+
+          {isCompleted && (
+            <section className="space-y-3 rounded-2xl border border-approved-bg bg-approved-bg/40 p-5 max-md:p-3.5">
+              <h2 className="text-xs font-semibold text-approved-text">Processing completed</h2>
+              <p className="text-[11px] text-warm-text">
+                Closed by {closureActor || 'an authorized office representative'}
+                {sub.completed_at ? ` on ${new Date(sub.completed_at).toLocaleString()}` : ''}.
+                Closing means processing finished; it is not an approval decision.
+              </p>
+              {sub.closure_note && (
+                <p className="whitespace-pre-wrap rounded-xl bg-card/70 p-3 text-xs leading-relaxed text-warm-text">
+                  {sub.closure_note}
+                </p>
+              )}
+              {sub.closure_file_path && sub.closure_file_name && (
+                <button
+                  type="button"
+                  onClick={() => void downloadAttachment({
+                    id: 'closure-file',
+                    file_name: sub.closure_file_name!,
+                    file_path: sub.closure_file_path!,
+                    file_type: sub.closure_file_type ?? null,
+                    file_size: sub.closure_file_size ?? 0,
+                  })}
+                  className="text-xs font-semibold text-clay underline underline-offset-2"
+                >
+                  Download closure document: {sub.closure_file_name}
+                </button>
+              )}
+            </section>
+          )}
 
           <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
             <h2 className="mb-3 text-xs font-semibold text-warm-text">Supporting attachments</h2>
@@ -660,105 +790,96 @@ export default function UserFileDetail() {
             submissionId={sub.id}
             fileName={sub.file_name}
             trackingNumber={sub.tracking_number}
+            workflowComposer={{
+              recipients: [{ value: 'responsible_office', label: currentDestinationLabel }],
+              actionsByRecipient: { responsible_office: submitterActions },
+              initialRecipient: 'responsible_office',
+              initialAction: isReturned ? 'respond_changes' : 'send_message',
+              statusLine: statusConfig.label,
+              contextNote: isReturned
+                ? requirementsRequest?.comments || sub.office_comments || sub.mayor_comments || undefined
+                : undefined,
+              isClosed: isCompleted || isWithdrawn,
+              closedMessage: isWithdrawn ? 'This submission is withdrawn.' : 'This submission is closed.',
+              busy: savingResponse || savingRedirect || withdrawing,
+              renderActionFields: (action) => action === 'redirect' ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="block text-[11px] font-medium text-warm-text">
+                    New destination office
+                    <select
+                      aria-label="New destination office"
+                      value={redirectOffice}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setRedirectOffice(isOfficeRole(value) ? value : '');
+                        setRedirectDocumentType('');
+                        setRedirectOtherDocumentType('');
+                      }}
+                      disabled={savingRedirect}
+                      className="mt-1 block min-h-10 w-full rounded-xl border border-warm-border bg-card px-3 text-xs text-warm-text outline-none focus:border-clay"
+                    >
+                      <option value="">Select an office</option>
+                      {Object.entries(OFFICE_CONFIG).map(([officeRole, office]) => (
+                        <option key={officeRole} value={officeRole}>{office.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block text-[11px] font-medium text-warm-text">
+                    Document type
+                    <select
+                      aria-label="Redirect document type"
+                      value={redirectDocumentType}
+                      onChange={(event) => {
+                        setRedirectDocumentType(event.target.value);
+                        setRedirectOtherDocumentType('');
+                      }}
+                      disabled={savingRedirect || !isOfficeRole(redirectOffice)}
+                      className="mt-1 block min-h-10 w-full rounded-xl border border-warm-border bg-card px-3 text-xs text-warm-text outline-none focus:border-clay"
+                    >
+                      <option value="">Select a document type</option>
+                      {isOfficeRole(redirectOffice) && OFFICE_CONFIG[redirectOffice].categories.map((category) => (
+                        <option key={category} value={category}>{category}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {redirectDocumentType === 'Other' && (
+                    <label className="block text-[11px] font-medium text-warm-text sm:col-span-2">
+                      Describe the document type
+                      <input
+                        value={redirectOtherDocumentType}
+                        onChange={(event) => setRedirectOtherDocumentType(event.target.value)}
+                        maxLength={120}
+                        disabled={savingRedirect}
+                        className="mt-1 block min-h-10 w-full rounded-xl border border-warm-border bg-card px-3 text-xs text-warm-text outline-none focus:border-clay"
+                      />
+                    </label>
+                  )}
+                  <p className="text-[10px] leading-relaxed text-muted-text sm:col-span-2">
+                    The same submission and document will be redirected; you do not need to upload it again.
+                  </p>
+                </div>
+              ) : null,
+              onWorkflowAction: handleSubmitterAction,
+            }}
             activity={(
-              <div>
-                <h3 className="mb-4 text-xs font-semibold text-warm-text">Document history</h3>
-                {auditLogs.length === 0 ? (
-                  <p className="text-[11px] text-muted-text">No workflow events recorded yet.</p>
-                ) : (
-                  <ol className="space-y-4 border-l border-warm-border pl-4">
-                    {auditLogs.map((log) => (
-                      <li key={log.id} className="relative">
-                        <span className="absolute -left-[21px] top-1 h-2 w-2 rounded-full bg-clay" />
-                        <p className="text-[11px] font-semibold text-warm-text">
-                          {getWorkflowActionLabel(log.action_type)}
-                        </p>
-                        <p className="mt-1 text-[10px] text-muted-text">{new Date(log.created_at).toLocaleString()}</p>
-                        {log.comments && <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-warm-text">{log.comments}</p>}
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
+              <WorkflowActivityTimeline
+                emptyMessage="No workflow events recorded yet."
+                events={auditLogs.map((log) => {
+                  const profile = Array.isArray(log.profiles) ? log.profiles[0] : log.profiles;
+                  return {
+                    id: log.id,
+                    actionType: log.action_type,
+                    label: getWorkflowActionLabel(log.action_type),
+                    createdAt: log.created_at,
+                    actor: profile?.full_name || 'System',
+                    actorRole: profile?.role,
+                    comments: log.comments,
+                  };
+                })}
+              />
             )}
           />
-
-          {isReturned && (
-            <section className="space-y-3 rounded-2xl border border-pending-bg bg-pending-bg/40 p-5 max-md:p-3.5">
-              <h2 className="text-xs font-semibold text-pending-text">Additional requirements requested</h2>
-              <p className="whitespace-pre-wrap text-xs leading-relaxed text-warm-text">
-                {requirementsRequest?.comments || sub.office_comments || sub.mayor_comments}
-              </p>
-              <label className="block text-[11px] font-medium text-warm-text" htmlFor="sender-response">
-                Your response
-              </label>
-              <textarea
-                id="sender-response"
-                rows={4}
-                value={senderResponse}
-                onChange={(event) => setSenderResponse(event.target.value)}
-                className="w-full rounded-xl border border-warm-border bg-card px-3 py-2 text-xs text-warm-text outline-none focus:border-clay"
-                placeholder="Explain how you addressed the requested requirements."
-              />
-              <label className="block text-[11px] font-medium text-warm-text" htmlFor="revised-document">
-                Revised document (required)
-              </label>
-              <input
-                id="revised-document"
-                type="file"
-                accept={WORKFLOW_DOCUMENT_ACCEPT}
-                onChange={(event) => {
-                  const selectedFile = event.target.files?.[0] ?? null;
-                  const fileError = selectedFile
-                    ? getWorkflowFilesTypeError([selectedFile], false)
-                    : null;
-                  if (fileError) {
-                    setRevisedDocument(null);
-                    setActionError(fileError);
-                    event.target.value = '';
-                    return;
-                  }
-                  setRevisedDocument(selectedFile);
-                  setActionError('');
-                }}
-                className="block w-full text-[11px] text-muted-text file:mr-3 file:rounded-full file:border-0 file:bg-card file:px-3 file:py-2 file:text-[11px] file:font-semibold file:text-clay"
-              />
-              <label className="block text-[11px] font-medium text-warm-text" htmlFor="response-attachments">
-                Additional supporting files (optional)
-              </label>
-              <input
-                id="response-attachments"
-                type="file"
-                accept={WORKFLOW_ATTACHMENT_ACCEPT}
-                multiple
-                onChange={(event) => {
-                  const selectedFiles = Array.from(event.target.files ?? []);
-                  const fileError = getWorkflowFilesTypeError(selectedFiles);
-                  if (fileError) {
-                    setResponseFiles([]);
-                    setActionError(fileError);
-                    event.target.value = '';
-                    return;
-                  }
-                  setResponseFiles(selectedFiles);
-                  setActionError('');
-                }}
-                className="block w-full text-[11px] text-muted-text file:mr-3 file:rounded-full file:border-0 file:bg-card file:px-3 file:py-2 file:text-[11px] file:font-semibold file:text-clay"
-              />
-              <p className="text-[10px] text-muted-text">
-                PDF, DOC/DOCX, XLS/XLSX, CSV, PPT/PPTX, JPG/JPEG, PNG, or ZIP.
-              </p>
-              {actionError && <p role="alert" className="text-xs text-rejected-text">{actionError}</p>}
-              <button
-                type="button"
-                onClick={() => void submitRequirementsResponse()}
-                disabled={savingResponse || !senderResponse.trim() || !revisedDocument}
-                className="inline-flex h-10 w-full items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {savingResponse ? 'Submitting response...' : 'Send response to office'}
-              </button>
-            </section>
-          )}
+          {actionError && <p role="alert" className="text-xs text-rejected-text">{actionError}</p>}
 
           {/* Official Feedback Section */}
           {showFeedback && officialNote && (
