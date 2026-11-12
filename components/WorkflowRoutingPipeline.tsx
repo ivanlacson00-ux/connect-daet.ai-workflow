@@ -1,8 +1,13 @@
+'use client';
+
+import { useEffect, useRef } from 'react';
 import { getSubmissionStatusLabel as getFriendlyStatusLabel } from '@/lib/workflow/status';
 import {
-  buildRoutingPipelineSteps,
+  buildRoutingPipeline,
+  isDeclinedStatus,
   type RoutingPipelineAuditEvent,
   type RoutingPipelineRouteStep,
+  type RoutingPipelineState,
 } from '@/lib/workflow/routing-pipeline';
 
 interface WorkflowRoutingPipelineProps {
@@ -19,14 +24,50 @@ interface WorkflowRoutingPipelineProps {
   variant?: 'full' | 'compact';
 }
 
-const formatTimestamp = (timestamp?: string | null) => {
+const formatTimestamp = (timestamp: string | null | undefined, compact: boolean) => {
   if (!timestamp) return null;
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  return compact
+    ? date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+    : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 };
 
-const isDeclined = (status: string) => status.startsWith('declined') || status === 'rejected';
+const NODE_STYLES: Record<RoutingPipelineState, string> = {
+  complete: 'border-approved-text bg-approved-text text-white',
+  active: 'border-clay bg-clay text-white ring-4 ring-clay-soft',
+  attention: 'border-pending-text bg-pending-bg text-pending-text ring-4 ring-pending-bg/60',
+  rejected: 'border-rejected-text bg-rejected-text text-white',
+  skipped: 'border-warm-border bg-sidebar text-muted-text',
+  pending: 'border-warm-border bg-card text-muted-text',
+};
+
+const DETAIL_STYLES: Record<RoutingPipelineState, string> = {
+  complete: 'text-approved-text',
+  active: 'text-clay',
+  attention: 'text-pending-text',
+  rejected: 'text-rejected-text',
+  skipped: 'text-muted-text',
+  pending: 'text-muted-text',
+};
+
+const NODE_ICONS: Record<RoutingPipelineState, string> = {
+  complete: '✓',
+  active: '●',
+  attention: '!',
+  rejected: '×',
+  skipped: '–',
+  pending: '',
+};
+
+const STATE_NAMES: Record<RoutingPipelineState, string> = {
+  complete: 'done',
+  active: 'current step',
+  attention: 'needs attention',
+  rejected: 'rejected',
+  skipped: 'stopped',
+  pending: 'not reached',
+};
 
 export default function WorkflowRoutingPipeline({
   submissionStatus,
@@ -40,7 +81,7 @@ export default function WorkflowRoutingPipeline({
   variant = 'full',
 }: WorkflowRoutingPipelineProps) {
   const status = submissionStatus.toLowerCase();
-  const pipelineSteps = buildRoutingPipelineSteps({
+  const { steps, whereabouts, whereaboutsState } = buildRoutingPipeline({
     submissionStatus: status,
     submittedAt,
     routeSteps,
@@ -49,35 +90,61 @@ export default function WorkflowRoutingPipeline({
     finalDecisionOfficeRole,
     auditEvents,
   });
-  const statusLabel = getFriendlyStatusLabel(status);
   const compact = variant === 'compact';
+  const statusLabel = getFriendlyStatusLabel(status);
+  // The current step is the last one still in progress or waiting; otherwise the final step.
+  const currentIndex = (() => {
+    for (let index = steps.length - 1; index >= 0; index -= 1) {
+      if (['active', 'attention'].includes(steps[index].state)) return index;
+    }
+    return steps.length - 1;
+  })();
+
+  // Keep the current step visible in narrow cards without scrolling the page.
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const currentRef = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    const current = currentRef.current;
+    if (!scroller || !current) return;
+    const overflow = current.offsetLeft + current.offsetWidth - scroller.clientWidth;
+    if (overflow > 0) scroller.scrollLeft = overflow + 16;
+  }, [steps.length, currentIndex]);
 
   return (
     <section
-      aria-label="Visual multi-hop routing pipeline"
+      aria-label="Submission route"
       className={
         compact
-          ? 'w-full rounded-xl border border-warm-border/80 bg-sidebar/40 px-3 py-3'
-          : 'mb-4 rounded-2xl border border-warm-border bg-card p-5 shadow-sm max-md:p-4'
+          ? 'w-full min-w-0 rounded-xl border border-warm-border/80 bg-sidebar/40 px-3 py-3'
+          : 'mb-4 min-w-0 rounded-2xl border border-warm-border bg-card p-5 shadow-sm max-md:p-4'
       }
     >
-      <div className={`flex flex-wrap items-center justify-between gap-3 ${compact ? 'mb-2' : 'mb-5'}`}>
-        <div>
+      <div className={`flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5 ${compact ? 'mb-2.5' : 'mb-5'}`}>
+        <div className="min-w-0">
           <p className={`${compact ? 'text-[9px]' : 'text-[11px]'} font-semibold uppercase tracking-[0.12em] text-muted-text`}>
-            {compact ? 'Routing pipeline' : 'Visual multi-hop routing pipeline'}
+            Route
           </p>
-          {!compact && (
-            <h2 className="mt-1 text-sm font-semibold text-warm-text">
-              Document progress
-            </h2>
-          )}
+          <p
+            role="status"
+            className={`mt-0.5 flex items-center gap-1.5 font-semibold ${compact ? 'text-[11px]' : 'text-sm'} ${DETAIL_STYLES[whereaboutsState]}`}
+          >
+            <span
+              aria-hidden="true"
+              className={`h-1.5 w-1.5 shrink-0 rounded-full bg-current ${whereaboutsState === 'active' ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+            />
+            <span className="min-w-0">
+              <span className="font-medium text-muted-text">Now: </span>
+              {whereabouts}
+            </span>
+          </p>
         </div>
         {!compact && statusLabel && (
           <span
             className={`rounded-full px-3 py-1.5 text-[11px] font-medium ${
-              status === 'completed'
+              status === 'completed' || status === 'approved'
                 ? 'bg-approved-bg text-approved-text'
-                : isDeclined(status)
+                : isDeclinedStatus(status)
                   ? 'bg-rejected-bg text-rejected-text'
                   : 'bg-pending-bg text-pending-text'
             }`}
@@ -96,102 +163,75 @@ export default function WorkflowRoutingPipeline({
         </p>
       )}
 
-      <ol
-        dir="ltr"
-        className={`flex w-max min-w-full snap-x justify-start gap-0 overflow-x-auto ${compact ? 'pb-1' : 'pb-2'}`}
-      >
-        {pipelineSteps.map((step, index) => {
-          const icon =
-            step.state === 'complete'
-              ? '✓'
-              : step.state === 'active'
-                ? '◷'
-                : step.state === 'rejected'
-                  ? '×'
-                  : step.state === 'skipped'
-                    ? '–'
-                    : String(index + 1);
-          const stateStyles =
-            step.state === 'complete'
-              ? 'border-approved-text bg-approved-text text-white'
-              : step.state === 'active'
-                ? 'animate-pulse border-review-text bg-review-text text-white ring-4 ring-review-bg motion-reduce:animate-none'
-                : step.state === 'rejected'
-                  ? 'border-rejected-text bg-rejected-text text-white'
-                  : step.isPlaceholder
-                    ? 'border-gray-300 bg-gray-100 text-gray-400'
-                    : 'border-warm-border bg-sidebar text-muted-text';
-          const previousStep = pipelineSteps[index - 1];
-          const timestamp = formatTimestamp(step.timestamp);
-
-          return (
-            <li
-              key={step.key}
-              className={`flex snap-start flex-none flex-col items-center text-center ${
-                compact ? 'w-28 sm:w-32' : 'w-36 sm:w-40'
-              }`}
-            >
-              <div className="flex w-full items-center">
-                <span
-                  className={`h-1 flex-1 ${
-                    index === 0
-                      ? 'bg-transparent'
-                      : previousStep?.state === 'complete'
-                        ? 'bg-approved-text'
-                        : 'bg-warm-border'
-                  }`}
-                  aria-hidden="true"
-                />
-                <span
-                  className={`flex shrink-0 items-center justify-center rounded-full border-2 font-semibold ${
-                    compact ? 'h-7 w-7 text-[10px]' : 'h-10 w-10 text-sm'
-                  } ${stateStyles}`}
-                  aria-label={`${step.title}: ${step.state}`}
-                >
-                  {icon}
-                </span>
-                <span
-                  className={`h-1 flex-1 ${
-                    index === pipelineSteps.length - 1
-                      ? 'bg-transparent'
-                      : step.state === 'complete'
-                        ? 'bg-approved-text'
-                        : 'bg-warm-border'
-                  }`}
-                  aria-hidden="true"
-                />
-              </div>
-              <h3 className={`font-semibold ${step.isPlaceholder ? 'text-gray-400' : 'text-warm-text'} ${compact ? 'mt-2 text-[10px]' : 'mt-3 text-xs'}`}>{step.title}</h3>
-              <p className={`mt-1 leading-snug ${step.isPlaceholder ? 'text-gray-400' : 'text-muted-text'} ${compact ? 'max-w-28 text-[9px] sm:max-w-32' : 'max-w-36 text-[10px] sm:max-w-40'}`}>
-                {step.subtitle}
-              </p>
-              <p
-                className={`${compact ? 'mt-1 text-[9px]' : 'mt-2 text-[10px]'} font-medium ${
-                  step.state === 'complete'
-                    ? 'text-approved-text'
-                    : step.state === 'active'
-                      ? 'text-review-text'
-                      : step.state === 'rejected'
-                        ? 'text-rejected-text'
-                        : step.isPlaceholder
-                          ? 'text-gray-400'
-                          : 'text-muted-text'
-                }`}
+      <div ref={scrollerRef} className="overflow-x-auto overscroll-x-contain [scrollbar-width:thin]">
+        <ol dir="ltr" className={`flex w-max min-w-full justify-start ${compact ? 'pb-1' : 'pb-2'}`}>
+          {steps.map((step, index) => {
+            const isCurrent = index === currentIndex;
+            const timestamp = formatTimestamp(step.timestamp, compact);
+            const reached = index <= currentIndex;
+            return (
+              <li
+                key={step.key}
+                ref={isCurrent ? currentRef : undefined}
+                aria-current={isCurrent ? 'step' : undefined}
+                className={`flex flex-none flex-col items-center text-center ${compact ? 'w-28 sm:w-32' : 'w-36 sm:w-40'}`}
               >
-                {step.detail ?? step.state[0].toUpperCase() + step.state.slice(1)}
-              </p>
-              {!compact && timestamp && (
-                <time
-                  dateTime={step.timestamp ?? undefined}
-                  className="mt-1 text-[9px] text-muted-text"
+                <div className="flex w-full items-center" aria-hidden="true">
+                  <span
+                    className={`h-0.5 flex-1 ${
+                      index === 0
+                        ? 'bg-transparent'
+                        : reached
+                          ? 'bg-approved-text/70'
+                          : 'border-t-2 border-dashed border-warm-border bg-transparent'
+                    }`}
+                  />
+                  <span
+                    className={`flex shrink-0 items-center justify-center rounded-full border-2 font-bold ${
+                      compact ? 'h-6 w-6 text-[10px]' : 'h-9 w-9 text-sm'
+                    } ${NODE_STYLES[step.state]}`}
+                  >
+                    {NODE_ICONS[step.state]}
+                  </span>
+                  <span
+                    className={`h-0.5 flex-1 ${
+                      index === steps.length - 1
+                        ? 'bg-transparent'
+                        : index < currentIndex
+                          ? 'bg-approved-text/70'
+                          : 'border-t-2 border-dashed border-warm-border bg-transparent'
+                    }`}
+                  />
+                </div>
+                <h3
+                  className={`max-w-full px-1 font-semibold leading-snug ${
+                    isCurrent ? 'text-warm-text' : 'text-warm-text/85'
+                  } ${compact ? 'mt-1.5 text-[10px]' : 'mt-2.5 text-xs'}`}
                 >
-                  {timestamp}
-                </time>
-              )}
-            </li>
-          );
-        })}
-      </ol>
+                  {step.title}
+                  <span className="sr-only">, {STATE_NAMES[step.state]}</span>
+                </h3>
+                <p className={`mt-0.5 max-w-full px-1 leading-snug text-muted-text ${compact ? 'text-[9px]' : 'text-[10px]'}`}>
+                  {step.subtitle}
+                </p>
+                {step.detail && (
+                  <p className={`max-w-full px-1 font-semibold leading-snug ${compact ? 'mt-0.5 text-[9px]' : 'mt-1 text-[10px]'} ${DETAIL_STYLES[step.state]}`}>
+                    {step.detail}
+                  </p>
+                )}
+                {timestamp && (
+                  <time
+                    dateTime={step.timestamp ?? undefined}
+                    className={`text-muted-text ${compact ? 'mt-0.5 text-[9px]' : 'mt-1 text-[9px]'}`}
+                  >
+                    {timestamp}
+                  </time>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </div>
     </section>
   );
 }
