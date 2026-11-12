@@ -298,12 +298,12 @@ export default function NotificationsPage() {
 
         <WorkflowNotificationFeed
           archiveHref="/workflow/user/notifications/archive"
+          archiveIconOnly
           busy={actionBusy || loading}
           canClear={notifications.length > 0}
           hasMore={hasMore}
           loading={loading}
-          actionLabel="Clear all"
-          iconOnlyAction
+          actionLabel="Clear"
           actionConfirmation="Clear all notifications from this feed? They will be moved to your archive, where you can permanently delete them."
           onClear={clearNotifications}
           onLoadMore={() => fetchNotifications(cursor, true)}
