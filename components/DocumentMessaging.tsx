@@ -144,6 +144,8 @@ interface AssignmentConversation {
   stepId: string;
   label: string;
   canSend: boolean;
+  /** Shown when the assignment is finished, e.g. the office's outcome and note. */
+  closedSummary?: string;
 }
 
 interface Message extends MessageRow {
@@ -189,6 +191,13 @@ interface DocumentMessagingProps {
       fileSize: number;
     };
     renderActionFields?: (action: string) => ReactNode;
+    /**
+     * The forwarding office's own response when it forwards its assignment onward.
+     * Returns null when no response applies; throws when a required response is missing.
+     */
+    getForwardResponse?: () => { outcome: string; note: string | null } | null;
+    /** Returns a message when extra action fields are incomplete; checked before anything is sent. */
+    validateAction?: (action: string) => string | null;
     onWorkflowAction: (
       action: string,
       recipient: string,
@@ -799,6 +808,11 @@ export default function DocumentMessaging({
     const message = draft.trim();
     const files = selectedFiles;
     const needsMessage = action.requiresMessage ?? false;
+    const fieldError = workflowComposer.validateAction?.(action.value) ?? null;
+    if (fieldError) {
+      setError(fieldError);
+      return false;
+    }
     if (needsMessage && !message) {
       setError('Enter a message before continuing.');
       messageInputRef.current?.focus();
@@ -844,6 +858,7 @@ export default function DocumentMessaging({
         if (files.length >= MAX_ATTACHMENTS) {
           throw new Error('Forwarding includes the current document automatically and allows up to four additional files.');
         }
+        const forwardResponse = workflowComposer.getForwardResponse?.() ?? null;
         const { data: currentDocumentBlob, error: documentError } = await supabase.storage
           .from('workflow_uploads')
           .download(workflowComposer.sourceDocument.filePath);
@@ -869,6 +884,8 @@ export default function DocumentMessaging({
             target_assignment_id: assignmentId,
             message_body: message || null,
             attachment_records: rows,
+            forwarder_outcome: forwardResponse?.outcome ?? null,
+            forwarder_note: forwardResponse?.note ?? null,
           });
           if (forwardError) throw new Error(forwardError.message);
           forwarded = true;
@@ -931,6 +948,11 @@ export default function DocumentMessaging({
     const action = currentAction;
     if (action.unavailableReason) {
       setError(action.unavailableReason);
+      return;
+    }
+    const fieldError = workflowComposer.validateAction?.(action.value) ?? null;
+    if (fieldError) {
+      setError(fieldError);
       return;
     }
     if (action.requiresMessage && !draft.trim()) {
@@ -1291,8 +1313,10 @@ export default function DocumentMessaging({
               </p>
             )}
             {!canSendCurrentConversation && !workflowComposer?.busy && (
-              <p role="status" className="text-[11px] font-medium text-muted-text">
-                This conversation is closed for new messages.
+              <p role="status" className="whitespace-pre-wrap text-[11px] font-medium text-muted-text">
+                {selectedThreadStepId && selectedAssignmentConversation?.closedSummary
+                  ? `${selectedAssignmentConversation.closedSummary}\nThis conversation is closed for new messages.`
+                  : 'This conversation is closed for new messages.'}
               </p>
             )}
             {workflowComposer?.busy && !sending && (

@@ -434,9 +434,9 @@ export default function UserFileDetail() {
       case 'SUBMITTED': return 'Submission submitted';
       case 'SUBMISSION_REDIRECTED': return 'Submission redirected to a new office';
       case 'SUBMISSION_RECEIVED': return 'Received by responsible office';
-      case 'SUBMISSION_FORWARDED': return 'Recommendation requested';
-      case 'ASSIGNMENT_COMPLETED': return 'Office assignment completed';
-      case 'ASSIGNMENT_RETURNED': return 'Office assignment returned';
+      case 'SUBMISSION_FORWARDED': return 'Another office was consulted';
+      case 'ASSIGNMENT_COMPLETED': return 'Consulted office responded';
+      case 'ASSIGNMENT_RETURNED': return 'Consulted office returned the request';
       case 'ASSIGNMENT_WITHDRAWN': return 'Office assignment withdrawn';
       case 'CHANGES_REQUESTED': return 'Changes requested';
       case 'CHANGES_RESPONDED': return 'Response to requested changes submitted';

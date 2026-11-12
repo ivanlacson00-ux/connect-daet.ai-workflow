@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
@@ -11,6 +11,15 @@ import {
   getWorkflowFilesTypeError,
 } from '@/lib/workflow/file-types';
 import { getSubmissionStatusLabel, getSubmissionStatusTone } from '@/lib/workflow/status';
+import {
+  ASSIGNMENT_OUTCOMES,
+  ASSIGNMENT_TONE_CLASSES,
+  assignmentOutcomeNeedsNote,
+  describeAssignmentState,
+  getOfficeLabel,
+  summarizeAssignment,
+  type AssignmentOutcome,
+} from '@/lib/workflow/assignments';
 import {
   getRoleHomePath,
   getWorkflowDocumentTypeLabel,
@@ -107,9 +116,14 @@ interface RouteStep {
   assigned_by_role: string | null;
   responsibility: OfficeResponsibility;
   assignment_source: string;
+  assigned_at: string | null;
   started_at: string | null;
   decided_at: string | null;
+  decided_by: string | null;
   completed_at: string | null;
+  completed_by: string | null;
+  comments: string | null;
+  outcome: string | null;
   requirements_requested_at: string | null;
   requirements_comments: string | null;
 }
@@ -163,7 +177,7 @@ const getActionLabel = (type: string) => {
     case 'SUBMISSION_REDIRECTED': return 'Submission redirected';
     case 'SUBMISSION_RECEIVED': return 'Submission received by office';
     case 'SUBMISSION_FORWARDED': return 'Recommendation requested';
-    case 'ASSIGNMENT_COMPLETED': return 'Office assignment completed';
+    case 'ASSIGNMENT_COMPLETED': return 'Office responded to assignment';
     case 'ASSIGNMENT_RETURNED': return 'Office assignment returned';
     case 'ASSIGNMENT_WITHDRAWN': return 'Office assignment withdrawn';
     case 'CHANGES_REQUESTED': return 'Changes requested';
@@ -223,6 +237,10 @@ export default function ApproverManagePage() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [supportingAttachmentsOpen, setSupportingAttachmentsOpen] = useState(false);
   const [previewingAttachmentId, setPreviewingAttachmentId] = useState<string | null>(null);
+  const [assignmentOutcome, setAssignmentOutcome] = useState<AssignmentOutcome | ''>('');
+  const [forwardResponseNote, setForwardResponseNote] = useState('');
+  const [responderNames, setResponderNames] = useState<Record<string, string>>({});
+  const knownPlanIdsRef = useRef<Set<string>>(new Set());
 
   const fetchDetails = useCallback(async () => {
     try {
@@ -288,7 +306,7 @@ export default function ApproverManagePage() {
           if (currentRoute) {
             const { data: steps, error: stepsError } = await supabase
               .from('workflow_routing_steps')
-              .select('id, routing_plan_id, sequence_number, office_role, status, assigned_by, assigned_by_role, responsibility, assignment_source, started_at, decided_at, completed_at, requirements_requested_at, requirements_comments')
+              .select('id, routing_plan_id, sequence_number, office_role, status, assigned_by, assigned_by_role, responsibility, assignment_source, assigned_at, started_at, decided_at, decided_by, completed_at, completed_by, comments, outcome, requirements_requested_at, requirements_comments')
               .in('routing_plan_id', (routes ?? []).map((route) => route.id))
               .order('sequence_number', { ascending: true });
 
@@ -328,6 +346,27 @@ export default function ApproverManagePage() {
                   && step.responsibility in OFFICE_RESPONSIBILITIES
               );
               setRouteSteps(validSteps);
+              knownPlanIdsRef.current = new Set((routes ?? []).map((route) => route.id));
+              const responderIds = Array.from(new Set(
+                validSteps
+                  .flatMap((step) => [step.completed_by, step.decided_by])
+                  .filter((value): value is string => typeof value === 'string')
+              ));
+              if (responderIds.length > 0) {
+                const { data: responders, error: respondersError } = await supabase
+                  .from('profiles')
+                  .select('id, full_name')
+                  .in('id', responderIds);
+                if (respondersError) {
+                  console.error('Could not load assignment responders:', respondersError.message);
+                } else {
+                  setResponderNames(Object.fromEntries(
+                    (responders ?? [])
+                      .filter((responder) => responder.full_name)
+                      .map((responder) => [responder.id, responder.full_name as string])
+                  ));
+                }
+              }
               setCurrentRoutePlanId(currentRoute.id);
               setRouteStatus(currentRoute.status);
               setRouteStateError(assignmentStartError);
@@ -371,6 +410,28 @@ export default function ApproverManagePage() {
 
   useEffect(() => { fetchDetails(); }, [fetchDetails]);
 
+  // Refresh when another office acts on an assignment or the submission changes.
+  useEffect(() => {
+    if (typeof id !== 'string') return;
+    const channel = supabase
+      .channel(`office-submission-${id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'workflow_submissions', filter: `id=eq.${id}`,
+      }, () => { void fetchDetails(); })
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'workflow_routing_plans', filter: `submission_id=eq.${id}`,
+      }, () => { void fetchDetails(); })
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'workflow_routing_steps',
+      }, (payload) => {
+        const row = (payload.new && 'routing_plan_id' in payload.new ? payload.new : payload.old) as
+          { routing_plan_id?: string } | null;
+        if (row?.routing_plan_id && knownPlanIdsRef.current.has(row.routing_plan_id)) void fetchDetails();
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [fetchDetails, id, supabase]);
+
   const assignmentConversations = useMemo(() => routeSteps.flatMap((step) => {
     if (
       !['office_forward', 'tourism_officer'].includes(step.assignment_source)
@@ -381,11 +442,15 @@ export default function ApproverManagePage() {
       return [];
     }
 
+    const stepOpen = ['pending', 'in_progress'].includes(step.status);
     return [{
       stepId: step.id,
       label: `${OFFICE_CONFIG[step.assigned_by_role].label} ↔ ${OFFICE_CONFIG[step.office_role].label}`,
-      canSend: ['pending', 'in_progress'].includes(step.status)
+      canSend: stepOpen
         && !['completed', 'approved', 'withdrawn'].includes(sub?.status ?? ''),
+      closedSummary: stepOpen
+        ? undefined
+        : `${summarizeAssignment(step)}.${step.comments ? ` Note: ${step.comments}` : ''}`,
     }];
   }), [role, routeSteps, sub?.status]);
 
@@ -434,7 +499,7 @@ export default function ApproverManagePage() {
       let rpcArgs:
         | { target_submission_id: string; request_comments: string }
         | { target_submission_id: string; return_reason: string }
-        | { target_submission_id: string; completion_notes: string | null }
+        | { target_submission_id: string; completion_notes: string | null; assignment_outcome: AssignmentOutcome }
         | { target_submission_id: string; target_assignment_office_role: string; withdrawal_reason: string };
       if (action === 'request_changes') {
         rpcName = 'request_workflow_submission_changes';
@@ -443,8 +508,18 @@ export default function ApproverManagePage() {
         rpcName = 'return_workflow_submission_to_submitter';
         rpcArgs = { target_submission_id: sub.id, return_reason: message.trim() };
       } else if (action === 'complete_assignment') {
+        if (!assignmentOutcome) {
+          throw new Error('Choose your office’s outcome before sending the response.');
+        }
+        if (assignmentOutcomeNeedsNote(assignmentOutcome) && !message.trim()) {
+          throw new Error('Add a note explaining the conditions or why the submission is not endorsed.');
+        }
         rpcName = 'complete_workflow_assignment';
-        rpcArgs = { target_submission_id: sub.id, completion_notes: message.trim() || null };
+        rpcArgs = {
+          target_submission_id: sub.id,
+          completion_notes: message.trim() || null,
+          assignment_outcome: assignmentOutcome,
+        };
       } else if (action === 'return_assignment') {
         rpcName = 'return_workflow_assignment';
         rpcArgs = { target_submission_id: sub.id, return_reason: message.trim() };
@@ -461,6 +536,8 @@ export default function ApproverManagePage() {
 
       const { error } = await supabase.rpc(rpcName, rpcArgs);
       if (error) throw new Error(error.message || 'Could not complete the workflow action.');
+      setAssignmentOutcome('');
+      setForwardResponseNote('');
       await fetchDetails();
     } finally {
       setUpdating(false);
@@ -687,11 +764,12 @@ export default function ApproverManagePage() {
     actionsByRecipient.responsible_office = [
       {
         value: 'complete_assignment',
-        label: 'Complete assignment',
-        buttonLabel: 'Complete assignment',
+        label: 'Respond to assignment',
+        buttonLabel: 'Send response',
         groupLabel: 'Finish',
-        description: 'Complete your office’s assignment. The overall submission may continue through its workflow.',
+        description: 'Record your office’s outcome for the responsible office, which keeps the final decision. A note is required unless you endorse without conditions.',
         tone: 'primary',
+        requiresMessage: assignmentOutcomeNeedsNote(assignmentOutcome),
         unavailableReason: routeStateError ? 'Could not verify your office assignment' : undefined,
       },
       {
@@ -721,7 +799,7 @@ export default function ApproverManagePage() {
           label: 'Request office review',
           buttonLabel: 'Request review',
           groupLabel: 'Route to another office',
-          description: `Send this assignment to ${OFFICE_CONFIG[officeRole].label} for a recommendation. Your assignment will be marked complete.`,
+          description: `Record your office’s own response, then send this assignment to ${OFFICE_CONFIG[officeRole].label} for a recommendation. Your assignment closes with that response.`,
           tone: 'primary',
           unavailableReason: currentDocumentReason
             || (routeStateError ? 'Could not verify the office assignment' : undefined)
@@ -731,6 +809,108 @@ export default function ApproverManagePage() {
     }
   }
   const isAssignmentSender = activeAssignmentCreatedByCurrentOffice;
+
+  // ─── Office assignments (who was asked, and what they answered) ────────────
+  const assignmentSteps = routeSteps
+    .filter((step) =>
+      ['office_forward', 'tourism_officer'].includes(step.assignment_source) && step.status !== 'skipped'
+    )
+    .sort((first, second) => (first.assigned_at ?? '').localeCompare(second.assigned_at ?? ''));
+  const latestAssignment = assignmentSteps[assignmentSteps.length - 1];
+  const latestAssignmentOpen = latestAssignment
+    ? ['pending', 'in_progress'].includes(latestAssignment.status)
+    : false;
+  const assignmentStatusDetail = latestAssignment && ['in_process', 'changes_requested'].includes(sub.status)
+    ? summarizeAssignment(latestAssignment)
+    : '';
+  const showAssignmentDecisionPrompt = isResponsibleOffice
+    && Boolean(latestAssignment)
+    && !latestAssignmentOpen
+    && sub.status === 'in_process';
+
+  const outcomeField = (legend: string) => (
+    <fieldset className="space-y-2">
+      <legend className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+        {legend} <span className="text-rejected-text">*</span>
+      </legend>
+      <div className="flex flex-wrap gap-2">
+        {(Object.keys(ASSIGNMENT_OUTCOMES) as AssignmentOutcome[]).map((outcome) => (
+          <button
+            key={outcome}
+            type="button"
+            aria-pressed={assignmentOutcome === outcome}
+            disabled={updating}
+            onClick={() => setAssignmentOutcome(outcome)}
+            className={`h-10 rounded-full border px-4 text-[11px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+              assignmentOutcome === outcome
+                ? 'border-clay bg-clay text-white'
+                : 'border-warm-border bg-white text-warm-text hover:border-clay'
+            }`}
+          >
+            {ASSIGNMENT_OUTCOMES[outcome]}
+          </button>
+        ))}
+      </div>
+    </fieldset>
+  );
+  const renderActionFields = (action: string) => {
+    if (!isRecipientOffice) return null;
+    if (action === 'complete_assignment') {
+      return (
+        <div className="space-y-2">
+          {outcomeField('Your office’s outcome')}
+          <p className="text-[10px] leading-relaxed text-muted-text">
+            {assignmentOutcomeNeedsNote(assignmentOutcome)
+              ? 'Explain the conditions or reasons in the note below. The responsible office will see it.'
+              : 'You can add an optional note below. The responsible office will see it.'}
+          </p>
+        </div>
+      );
+    }
+    if (action === 'forward') {
+      return (
+        <div className="space-y-3">
+          {outcomeField('Your office’s outcome before forwarding')}
+          <label htmlFor={`forward-response-note-${sub.id}`} className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+            Your office’s note for the responsible office
+            {assignmentOutcomeNeedsNote(assignmentOutcome) && <span className="text-rejected-text"> *</span>}
+            <textarea
+              id={`forward-response-note-${sub.id}`}
+              value={forwardResponseNote}
+              onChange={(event) => setForwardResponseNote(event.target.value)}
+              disabled={updating}
+              maxLength={5000}
+              rows={2}
+              className="mt-2 w-full resize-y rounded-xl border border-warm-border bg-white px-3 py-2 text-xs font-normal normal-case tracking-normal text-warm-text outline-none focus:border-clay"
+            />
+          </label>
+          <p className="text-[10px] leading-relaxed text-muted-text">
+            The message below goes to the office you are forwarding to.
+          </p>
+        </div>
+      );
+    }
+    return null;
+  };
+  const validateAction = (action: string) => {
+    if (!isRecipientOffice || !['complete_assignment', 'forward'].includes(action)) return null;
+    if (!assignmentOutcome) return 'Choose your office’s outcome first.';
+    if (action === 'forward' && assignmentOutcomeNeedsNote(assignmentOutcome) && !forwardResponseNote.trim()) {
+      return 'Add your office’s note explaining the conditions or why the submission is not endorsed.';
+    }
+    return null;
+  };
+  const getForwardResponse = () => {
+    if (!isRecipientOffice) return null;
+    if (!assignmentOutcome) {
+      throw new Error('Choose your office’s outcome before forwarding onward.');
+    }
+    const note = forwardResponseNote.trim();
+    if (assignmentOutcomeNeedsNote(assignmentOutcome) && !note) {
+      throw new Error('Add your office’s note explaining the conditions or why the submission is not endorsed.');
+    }
+    return { outcome: assignmentOutcome, note: note || null };
+  };
   const historicalRecipientView = hasOfficeAssignment
     && !isResponsibleOffice
     && !isRecipientOffice
@@ -771,6 +951,16 @@ export default function ApproverManagePage() {
               {isOfficeRole(selectedOfficeRole) && (
                 <span className="text-[11px] font-medium text-muted-text">
                   · {OFFICE_CONFIG[selectedOfficeRole].label}
+                </span>
+              )}
+              {assignmentStatusDetail && latestAssignment && (
+                <span
+                  role="status"
+                  className={`inline-flex items-center rounded-full px-3 py-1.5 text-[11px] font-bold ${
+                    ASSIGNMENT_TONE_CLASSES[describeAssignmentState(latestAssignment).tone]
+                  }`}
+                >
+                  {assignmentStatusDetail}
                 </span>
               )}
             </div>
@@ -1005,6 +1195,73 @@ export default function ApproverManagePage() {
                   {actionError}
                 </p>
               )}
+              {assignmentSteps.length > 0 && (
+                <section
+                  aria-labelledby={`office-assignments-${sub.id}`}
+                  className="mb-5 overflow-hidden rounded-2xl border border-warm-border bg-card"
+                >
+                  <header className="border-b border-warm-border px-5 py-4 md:px-6">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-clay">Other offices</p>
+                    <h2 id={`office-assignments-${sub.id}`} className="mt-1 font-serif text-xl font-semibold text-warm-text">
+                      Office assignments
+                    </h2>
+                    <p className="mt-1 text-[11px] text-muted-text">
+                      Offices asked for a recommendation on this submission, and what they answered.
+                    </p>
+                  </header>
+                  {showAssignmentDecisionPrompt && latestAssignment && (
+                    <p role="status" className="border-b border-warm-border bg-clay-soft px-5 py-3 text-xs font-semibold text-clay md:px-6">
+                      {summarizeAssignment(latestAssignment)}. Your office decides the next step: complete the
+                      submission, request changes, or ask another office.
+                    </p>
+                  )}
+                  <ol className="divide-y divide-warm-border">
+                    {[...assignmentSteps].reverse().map((step) => {
+                      const state = describeAssignmentState(step);
+                      const respondedAt = step.completed_at ?? step.decided_at;
+                      const responderId = step.status === 'withdrawn' ? null : step.completed_by ?? step.decided_by;
+                      const responder = responderId ? responderNames[responderId] : undefined;
+                      const noteLabel = step.status === 'returned'
+                        ? 'Reason for returning'
+                        : step.status === 'withdrawn'
+                          ? 'Reason for withdrawal'
+                          : 'Note';
+                      return (
+                        <li key={step.id} className="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-start md:justify-between md:px-6">
+                          <div className="min-w-0">
+                            <h3 className="text-sm font-semibold text-warm-text">{getOfficeLabel(step.office_role)}</h3>
+                            <p className="mt-1 text-[11px] text-muted-text">
+                              Asked by {getOfficeLabel(step.assigned_by_role)}
+                              {step.assigned_at
+                                ? ` · ${new Date(step.assigned_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+                                : ''}
+                            </p>
+                            {respondedAt && (
+                              <p className="mt-0.5 text-[11px] text-muted-text">
+                                {step.status === 'withdrawn' ? 'Withdrawn' : step.status === 'returned' ? 'Returned' : 'Responded'}
+                                {responder ? ` by ${responder}` : ''}
+                                {` · ${new Date(respondedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`}
+                              </p>
+                            )}
+                            {step.comments && (
+                              <div className="mt-3">
+                                <Label>{noteLabel}</Label>
+                                <p className="whitespace-pre-wrap break-words rounded-lg bg-sidebar px-3 py-2 text-xs leading-relaxed text-warm-text">
+                                  {step.comments}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                          <span className={`inline-flex shrink-0 items-center gap-2 self-start rounded-full px-3 py-1.5 text-[11px] font-bold ${ASSIGNMENT_TONE_CLASSES[state.tone]}`}>
+                            <span className={`h-1.5 w-1.5 rounded-full bg-current ${state.tone === 'waiting' ? 'animate-pulse' : 'opacity-70'}`} />
+                            {state.label}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </section>
+              )}
               <DocumentMessaging
                 key={sub.id}
                 submissionId={sub.id}
@@ -1038,8 +1295,15 @@ export default function ApproverManagePage() {
                     fileType: sub.file_type,
                     fileSize: sub.file_size,
                   },
+                  renderActionFields,
+                  getForwardResponse,
+                  validateAction,
                   onWorkflowAction: handleWorkflowAction,
-                  onForwarded: fetchDetails,
+                  onForwarded: async () => {
+                    setAssignmentOutcome('');
+                    setForwardResponseNote('');
+                    await fetchDetails();
+                  },
                 }}
                 activity={(
                   <WorkflowActivityTimeline
@@ -1049,7 +1313,7 @@ export default function ApproverManagePage() {
                       label: getActionLabel(log.action_type),
                       createdAt: log.created_at,
                       actor: log.profiles?.full_name || 'System',
-                      actorRole: log.profiles?.role,
+                      actorRole: log.profiles?.role ? getOfficeLabel(log.profiles.role) : null,
                       comments: log.comments,
                     }))}
                   />
