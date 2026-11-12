@@ -585,6 +585,8 @@ export default function ApproverManagePage() {
     {
       value: 'request_changes',
       label: 'Request changes',
+      groupLabel: 'Send back',
+      description: 'The submitter can respond on this same submission; it returns to your office for review.',
       tone: 'primary' as const,
       requiresMessage: true,
       unavailableReason: routeStateError
@@ -595,6 +597,8 @@ export default function ApproverManagePage() {
     {
       value: 'return_to_submitter',
       label: 'Return for redirection',
+      groupLabel: 'Send back',
+      description: 'Return this submission so the submitter can choose a different destination office.',
       tone: 'warning' as const,
       requiresMessage: true,
       confirmation: 'The submission will return to the submitter so they can choose the correct office. This is not a rejection.',
@@ -604,7 +608,10 @@ export default function ApproverManagePage() {
     },
     {
       value: 'close_submission',
-      label: 'Close submission',
+      label: 'Complete submission',
+      buttonLabel: 'Complete submission',
+      groupLabel: 'Finish',
+      description: 'Mark the entire submission complete. This is different from completing only an office assignment.',
       tone: 'strong' as const,
       unavailableReason: routeStateError
         ? 'Could not verify whether an assignment is pending'
@@ -618,6 +625,8 @@ export default function ApproverManagePage() {
     value: string;
     label: string;
     buttonLabel?: string;
+    groupLabel?: string;
+    description?: string;
     tone?: 'neutral' | 'primary' | 'warning' | 'strong';
     requiresMessage?: boolean;
     unavailableReason?: string;
@@ -649,14 +658,20 @@ export default function ApproverManagePage() {
       actionsByRecipient[recipientValue] = [
         {
           value: 'forward',
-          label: 'Request recommendation',
-          buttonLabel: 'Request recommendation',
+          label: 'Request office review',
+          buttonLabel: 'Request review',
+          groupLabel: 'Route to another office',
+          description: isResponsibleOffice
+            ? `Send this submission to ${OFFICE_CONFIG[officeRole].label} for a recommendation; your office remains responsible for the final decision.`
+            : `Send this assignment to ${OFFICE_CONFIG[officeRole].label} for a recommendation. Your assignment will be marked complete.`,
           tone: 'primary',
           unavailableReason: currentDocumentReason || forwardReason,
         },
         {
           value: 'withdraw_assignment',
           label: 'Withdraw assignment',
+          groupLabel: 'Manage assignment',
+          description: `Withdraw only the assignment with ${OFFICE_CONFIG[officeRole].label}; the submission itself stays open.`,
           tone: 'warning',
           requiresMessage: true,
           confirmation: `The pending assignment with ${OFFICE_CONFIG[officeRole].label} will be withdrawn.`,
@@ -674,12 +689,16 @@ export default function ApproverManagePage() {
         value: 'complete_assignment',
         label: 'Complete assignment',
         buttonLabel: 'Complete assignment',
+        groupLabel: 'Finish',
+        description: 'Complete your office’s assignment. The overall submission may continue through its workflow.',
         tone: 'primary',
         unavailableReason: routeStateError ? 'Could not verify your office assignment' : undefined,
       },
       {
         value: 'return_assignment',
-        label: 'Return assignment',
+        label: 'Return to responsible office',
+        groupLabel: 'Send back',
+        description: 'Send this assignment back to the responsible office with your reason.',
         tone: 'warning',
         requiresMessage: true,
         confirmation: 'The assignment will be returned to the responsible office with your reason.',
@@ -699,8 +718,10 @@ export default function ApproverManagePage() {
       actionsByRecipient[recipientValue] = [
         {
           value: 'forward',
-          label: 'Request recommendation',
-          buttonLabel: 'Request recommendation',
+          label: 'Request office review',
+          buttonLabel: 'Request review',
+          groupLabel: 'Route to another office',
+          description: `Send this assignment to ${OFFICE_CONFIG[officeRole].label} for a recommendation. Your assignment will be marked complete.`,
           tone: 'primary',
           unavailableReason: currentDocumentReason
             || (routeStateError ? 'Could not verify the office assignment' : undefined)

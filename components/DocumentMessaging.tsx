@@ -203,6 +203,8 @@ interface ComposerAction {
   value: string;
   label: string;
   buttonLabel?: string;
+  groupLabel?: string;
+  description?: string;
   tone?: 'neutral' | 'primary' | 'warning' | 'strong';
   unavailableReason?: string;
   requiresMessage?: boolean;
@@ -225,6 +227,23 @@ const FALLBACK_NO_ACTION: ComposerAction = {
   tone: 'neutral',
   unavailableReason: 'There are no workflow actions available for this recipient.',
 };
+
+function getAvailableActionList(actions: ComposerAction[] | undefined): ComposerAction[] {
+  if (!actions?.length) return [FALLBACK_NO_ACTION];
+
+  const availableActions = actions.filter((action) => !action.unavailableReason);
+  if (availableActions.length > 0) return availableActions;
+
+  const unavailableReasons = [...new Set(
+    actions.map((action) => action.unavailableReason).filter((reason): reason is string => Boolean(reason))
+  )];
+  return [{
+    ...FALLBACK_NO_ACTION,
+    unavailableReason: unavailableReasons.length > 0
+      ? unavailableReasons.join('. ')
+      : FALLBACK_NO_ACTION.unavailableReason,
+  }];
+}
 
 const mergeMessages = (current: Message[], incoming: Message[]) => {
   const messages = new Map(current.map((message) => [message.id, message]));
@@ -291,7 +310,17 @@ export default function DocumentMessaging({
 
   // Actions depend on the selected recipient. Conversation messages have a separate composer.
   const recipientActions = workflowComposer?.actionsByRecipient[selectedRecipient] ?? [];
-  const actionList = recipientActions.length > 0 ? recipientActions : [FALLBACK_NO_ACTION];
+  const actionList = getAvailableActionList(recipientActions);
+  const actionGroups = actionList.reduce<{ label: string; actions: ComposerAction[] }[]>(
+    (groups, action) => {
+      const label = action.groupLabel ?? '';
+      const group = groups.find((candidate) => candidate.label === label);
+      if (group) group.actions.push(action);
+      else groups.push({ label, actions: [action] });
+      return groups;
+    },
+    [],
+  );
   const currentAction = actionList.find((action) => action.value === selectedAction) ?? actionList[0];
   const recipientLabel = workflowComposer?.recipients.find((recipient) => recipient.value === selectedRecipient)?.label
     ?? 'recipient';
@@ -1416,7 +1445,9 @@ export default function DocumentMessaging({
                     onChange={(event) => {
                       const recipient = event.target.value;
                       setSelectedRecipient(recipient);
-                      setSelectedAction(workflowComposer.actionsByRecipient[recipient]?.[0]?.value ?? '');
+                      setSelectedAction(getAvailableActionList(
+                        workflowComposer.actionsByRecipient[recipient]
+                      )[0].value);
                       setError('');
                     }}
                     disabled={actionDisabled}
@@ -1438,18 +1469,15 @@ export default function DocumentMessaging({
                     disabled={actionDisabled}
                     className="h-10 w-36 max-w-full cursor-pointer rounded-full border border-warm-border bg-white px-3 text-xs font-medium text-warm-text outline-none transition-colors duration-200 hover:border-clay focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {actionList.map((action) => (
-                      <option
-                        key={action.value}
-                        value={action.value}
-                        aria-disabled={Boolean(action.unavailableReason)}
-                        className={action.unavailableReason ? 'text-muted-text' : undefined}
-                      >
-                        {action.unavailableReason
-                          ? `${action.label} — unavailable: ${action.unavailableReason}`
-                          : action.label}
-                      </option>
-                    ))}
+                    {actionGroups.map((group) => group.label ? (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.actions.map((action) => (
+                          <option key={action.value} value={action.value}>{action.label}</option>
+                        ))}
+                      </optgroup>
+                    ) : group.actions.map((action) => (
+                      <option key={action.value} value={action.value}>{action.label}</option>
+                    )))}
                   </select>
                 </div>
                 <button
@@ -1464,6 +1492,11 @@ export default function DocumentMessaging({
                 <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-pending-text" role="status">
                   <span className="mt-0.5 shrink-0"><Icon name="info" size={13} /></span>
                   {currentAction.unavailableReason}
+                </p>
+              )}
+              {currentAction.description && (
+                <p className="text-[10px] leading-relaxed text-muted-text" aria-live="polite">
+                  {currentAction.description}
                 </p>
               )}
 
