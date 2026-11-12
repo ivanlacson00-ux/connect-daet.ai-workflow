@@ -119,7 +119,7 @@ No direct client use of the Supabase service-role key was found in the inspected
 |---|---|
 | Submitter chooses an initial municipal or Tourism Office destination | Present in upload UI and submission RPC source; integration remains unverified. |
 | Direct route to chosen office; no universal Tourism Officer first step | Direct-routing migration and shared dashboards support this path in source. |
-| Office-specific classification and `Other` | Frontend filters by office; SQL validates office/type pair and bounds `Other` text. Tourism remains `Other`-only pending taxonomy. |
+| Office-specific classification and `Other` | Frontend filters by office; SQL validates office/type pair and bounds `Other` text. Tourism has six broad configured categories pending official taxonomy confirmation. |
 | Tourism Officer may forward to a municipal office | Forward RPC includes Tourism Office authorization in the latest migration; not executed here. |
 | One office at a time; required Recommendation assignment | Office messaging and forwarding migration model a single sequential assignment. |
 | Three responsibility classifications | SQL constraints and office routing configuration include Mandatory Approval/Clearance, Evaluation/Verification, and Recommendation. |
@@ -201,7 +201,7 @@ No unit tests cover workflow RPC behavior, RLS/storage policies, route guards, A
 
 - **Formal legally required decisions:** authority data/RPCs and an unmounted settings component exist, but a connected administrator interface and complete attributed formal-decision workflow were not found. Legal decision cases and rules remain unresolved.
 - **Points/rewards:** a 10-point responsible-office completion policy and reward ledger are implemented in source; migration application and live balance visibility remain unverified.
-- **Tourism Office document types:** intentionally `Other`-only pending an official taxonomy.
+- **Tourism Office document types:** six concise interim categories are configured; confirmation of the official taxonomy is pending.
 - **Optional response files:** the specification permits them when needed, but the current response RPC/UI requires a revised document.
 - **Reproducible database setup:** baseline schema, seed data, and migration bootstrap verification are missing from repository evidence.
 - **Automated integration and E2E suite:** no role/workflow/database test coverage was found.

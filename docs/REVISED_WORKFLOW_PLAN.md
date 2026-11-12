@@ -64,7 +64,7 @@ Office-created assignments are tracked separately, not as submission statuses.
 ### 4.1 Submit
 - The submitter selects one initial destination from the destinations available to them: a municipal office or the Daet Tourism Office.
 - The destination picker shows a one-line description of what each office handles. A search box matches the submitter’s words against every office’s document types and suggests offices. This is a suggestion only; the submitter decides.
-- After the destination is chosen, the document-type dropdown lists only the types configured for that office. Each municipal office also offers **Other**, which reveals a required, bounded custom description. Until the Tourism Office’s official list is configured, its only type is **Other**.
+- After the destination is chosen, the document-type dropdown lists only the types configured for that office. Each office offers **Other**, which reveals a required, bounded custom description. The Tourism Office dropdown uses a concise set of broad tourism categories; these remain subject to confirmation of the official taxonomy.
 - Changing the destination clears the selected document type and any custom text.
 - The submission is routed directly to the selected office, which becomes the responsible office. It is not required to pass through the Tourism Officer.
 - The Required Clearance checklist for the chosen office and type is **fixed at this moment** (and again on redirect). Later configuration changes do not alter submissions already in process.
@@ -178,7 +178,7 @@ The workflow action list depends on **To**. **Send message** is not a workflow a
 - Each assignment records the file version that was sent.
 - Office-specific document types come from the shared application office configuration and are validated against the database catalogue on submission. The catalogue is seeded through migrations and must stay synchronized with the shared configuration. A user interface for administrators to maintain document types is not included unless separately requested.
 - `Other` is stored as the classification, separately from the required custom description. The custom text is descriptive only and does not create an assignment or authorization rule.
-- Until the Tourism Office’s taxonomy is supplied, offer only `Other` for Tourism rather than inventing categories.
+- Tourism document types are an interim catalogue of broad event/activity, promotion/marketing, attraction/facility, business/establishment, and information/assistance categories, not a claim that the list is the Tourism Office’s final official taxonomy. Keep the application configuration and database catalogue synchronized.
 
 ## 8. Workflow history (append-only)
 
@@ -337,7 +337,7 @@ Initial destination selections, redirects, and office-created assignments must r
 
 Do not invent these. Ask first.
 
-1. Official Tourism Office document types, replacing the interim `Other`-only option.
+1. Confirm or revise the interim Tourism Office document types as the official taxonomy.
 2. Which office and document-type pairs require which Required Clearances, and which need a formal decision (with the legal basis).
 3. Whether a Required Clearance can ever be waived, and by whom.
 4. Notification channels, reminder thresholds, and whether to auto-withdraw inactive submissions.

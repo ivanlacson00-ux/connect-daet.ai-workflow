@@ -5,7 +5,14 @@ export const OFFICE_CONFIG = {
   tourism_officer: {
     label: TOURISM_OFFICE_LABEL,
     path: '/workflow/tourism-office',
-    categories: ['Other'],
+    categories: [
+      'Tourism Event or Activity Coordination',
+      'Tourism Promotion and Marketing',
+      'Tourist Attraction or Facility Support',
+      'Tourism Business or Establishment Inquiry',
+      'Tourism Information and Assistance',
+      'Other',
+    ],
   },
   municipal_treasurer: {
     label: "Municipal Treasurer's Office",
