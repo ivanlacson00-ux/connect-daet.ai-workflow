@@ -110,8 +110,8 @@ No direct client use of the Supabase service-role key was found in the inspected
 | In-app notifications | Notify recipients and update unread status | Notification rows, Realtime subscriptions, role dashboards | IMPLEMENTED - UNVERIFIED | Notification migrations and dashboard pages; actual role/event coverage not tested |
 | Email delivery | Queue, claim, retry, record provider events | Outbox worker uses cron authorization, bounded retries, lease tracking, idempotency key; webhook verifies Resend signature | IMPLEMENTED - UNVERIFIED | `app/api/notifications/email/route.ts`; `app/api/webhooks/resend/route.ts`; no provider configuration verified |
 | Administration reports | Report status, stages, workload, export | Report UI queries all submissions and exports CSV; stage metrics still expect legacy verification/approval events | PARTIALLY IMPLEMENTED | `app/(dashboard)/workflow/admin/reports/page.tsx`; metrics do not fit current close-based flow |
-| Points/rewards | Track points balance/history if policy is configured | Workflow plan mentions points, but no points implementation was found in app source | NOT IMPLEMENTED | No app implementation found; policy/formula is unresolved |
-| Automated quality coverage | Unit, integration, workflow, security, and E2E tests | Two Node test files with three tests; no workflow/DB/E2E tests found | PARTIALLY IMPLEMENTED | `tests/`; test run below |
+| Points/rewards | Award 10 points once when the responsible office completes a submission; track balance/history | Completion RPC writes a unique reward-ledger entry; submitter dashboard sums the authenticated user's entries | IMPLEMENTED - UNVERIFIED | Reward migration and dashboard source; no live database test |
+| Automated quality coverage | Unit, integration, workflow, security, and E2E tests | Five Node test files with 16 tests; no live workflow/database or E2E tests found | PARTIALLY IMPLEMENTED | `tests/`; reward migration coverage is static |
 
 ## 8. Workflow Compliance Assessment
 
@@ -200,7 +200,7 @@ No unit tests cover workflow RPC behavior, RLS/storage policies, route guards, A
 ## 15. Missing Features and Incomplete Implementations
 
 - **Formal legally required decisions:** authority data/RPCs and an unmounted settings component exist, but a connected administrator interface and complete attributed formal-decision workflow were not found. Legal decision cases and rules remain unresolved.
-- **Points/rewards:** the plan states that the system tracks points balance/history, but no application implementation was found. The plan also says formulas remain subject to configuration, so this is not a confirmed product defect until the policy is decided.
+- **Points/rewards:** a 10-point responsible-office completion policy and reward ledger are implemented in source; migration application and live balance visibility remain unverified.
 - **Tourism Office document types:** intentionally `Other`-only pending an official taxonomy.
 - **Optional response files:** the specification permits them when needed, but the current response RPC/UI requires a revised document.
 - **Reproducible database setup:** baseline schema, seed data, and migration bootstrap verification are missing from repository evidence.
@@ -214,7 +214,7 @@ No unit tests cover workflow RPC behavior, RLS/storage policies, route guards, A
 - `ISO-IEC-25010-EVALUATION-CHECKLIST.md` contains checked legacy test claims and old status paths; these should not be treated as evidence of current behavior.
 - `DATABASE_SECURITY_STATUS.md` explicitly says it is based on a supplied conversation and is not a live database inspection. It includes pending items and should remain clearly identified as a handoff, not current verification.
 - The revised plan says response files may be attached when needed; implementation requires a revised file.
-- The revised plan mentions points tracking, while no points module was found.
+- Reward balance is backed by the ledger; no separate user-facing point-history screen is included.
 - Admin reporting still uses legacy approval-stage event names.
 - Setup documentation has older account-role and migration wording and should be reconciled with current role codes and deployment instructions.
 

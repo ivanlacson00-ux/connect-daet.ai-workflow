@@ -180,6 +180,7 @@ function SubmissionCard({
 // ─── Main Dashboard Page ─────────────────────────────────────────────────────
 export default function WorkflowDashboard() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [rewardBalance, setRewardBalance] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
   const [previewFile, setPreviewFile] = useState<Submission | null>(null);
@@ -195,6 +196,7 @@ export default function WorkflowDashboard() {
       const { data: { session } } = await withTimeout(supabase.auth.getSession(), 8000, 'getSession');
       const user = session?.user ?? null;
       setUser(user);
+      setRewardBalance(null);
       if (!user) return;
 
       const { data, error } = await withTimeout(
@@ -209,6 +211,21 @@ export default function WorkflowDashboard() {
 
       if (error) console.error('Fetch error:', error);
       if (data) setSubmissions(data);
+
+      const { data: rewardEntries, error: rewardError } = await withTimeout(
+        supabase
+          .from('workflow_submission_reward_ledger')
+          .select('points')
+          .eq('user_id', user.id),
+        10000,
+        'Fetching reward balance'
+      );
+      if (rewardError) {
+        console.error('Reward balance fetch error:', rewardError);
+        setRewardBalance(null);
+      } else {
+        setRewardBalance((rewardEntries ?? []).reduce((total, entry) => total + entry.points, 0));
+      }
     } catch (err) {
       console.error('Dashboard load failed:', err);
     } finally {
@@ -233,9 +250,9 @@ export default function WorkflowDashboard() {
     return [
       { label: 'Logged Files', value: submissions.length },
       { label: 'Cleared', value: cleared },
-      { label: 'Reward Bal', value: `${cleared * 50} pts` },
+      { label: 'Reward Bal', value: rewardBalance === null ? 'Unavailable' : `${rewardBalance} pts` },
     ];
-  }, [submissions]);
+  }, [submissions, rewardBalance]);
 
   // Filter counts + filtered list
   const filterCounts = useMemo(() => {

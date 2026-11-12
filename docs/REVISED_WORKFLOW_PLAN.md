@@ -194,7 +194,12 @@ Initial destination selections, redirects, and office-created assignments must r
 - **Reminders:** submission unopened for 2 working days; assignment Pending for 3 working days; Changes Requested or Returned with no response for 7 days. A Required Clearance that remains unanswered keeps escalating reminders; there is no silent waiver.
 - **No automatic withdrawal** by default.
 - **Reports** reflect the close-based flow: time to receipt, time to completion, assignment duration per office, change-request cycles, return counts, and configured formal decisions. They must not assume universal verification or approval stages.
-- **Points** are evaluated only on Completed, under the configured rewards policy. Returned and Withdrawn submissions earn none. Closure alone must not be interpreted as legal approval. The system tracks points balance and history.
+
+**Confirmed points policy**
+- Each submitter starts with a zero-point balance.
+- Award 10 points exactly once when the responsible office completes the submission. Completing a forwarded office assignment earns no points.
+- Rejected, returned, withdrawn, or otherwise incomplete submissions earn no points. No points are backfilled for submissions completed before this policy is implemented.
+- Points and completion history are recorded in a ledger; the user dashboard displays the current balance. Completion is not, by itself, a legal approval.
 
 ## 10. Security and data-integrity rules
 
