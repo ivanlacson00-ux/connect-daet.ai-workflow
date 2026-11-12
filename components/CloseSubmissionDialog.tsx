@@ -55,29 +55,29 @@ export default function CloseSubmissionDialog({
           Complete submission?
         </h2>
         <p id="close-submission-description" className="mt-3 text-sm leading-relaxed text-muted-text">
-          Closing confirms that the responsible office has finished processing this request; it records completion, not approval.
-          Pending required office assignments prevent closure.
+          Completing confirms that the responsible office has finished processing this request; it records completion, not approval.
+          Pending required office assignments must be finished first.
         </p>
         {assignmentsPending && (
           <p role="status" className="mt-4 rounded-xl border border-pending-bg bg-pending-bg/50 px-4 py-3 text-xs font-medium text-pending-text">
-            {pendingAssignmentCount} required office {pendingAssignmentCount === 1 ? 'assignment is' : 'assignments are'} still pending. Complete them before closing.
+            {pendingAssignmentCount} required office {pendingAssignmentCount === 1 ? 'assignment is' : 'assignments are'} still pending. Complete them before completing the submission.
           </p>
         )}
         {controlled ? (
           <div className="mt-4 space-y-3 rounded-xl bg-sidebar/60 p-3 text-xs">
             <div>
-              <p className="font-semibold text-warm-text">Closure note</p>
+              <p className="font-semibold text-warm-text">Completion note</p>
               <p className="mt-1 whitespace-pre-wrap text-muted-text">{currentNote || 'No note'}</p>
             </div>
             <div>
-              <p className="font-semibold text-warm-text">Closure document</p>
+              <p className="font-semibold text-warm-text">Completion document</p>
               <p className="mt-1 break-all text-muted-text">{currentFile?.name ?? 'No file attached'}</p>
             </div>
           </div>
         ) : (
           <>
             <label htmlFor="closure-note" className="mt-4 block text-xs font-semibold text-warm-text">
-              Closure note (optional)
+              Completion note (optional)
             </label>
             <textarea
               id="closure-note"
@@ -89,7 +89,7 @@ export default function CloseSubmissionDialog({
               className="mt-2 w-full resize-y rounded-xl border border-warm-border bg-card px-3 py-2 text-xs text-warm-text outline-none focus:border-clay"
             />
             <label htmlFor="closure-file" className="mt-4 block text-xs font-semibold text-warm-text">
-              Closure document (optional)
+              Completion document (optional)
             </label>
             <input
               id="closure-file"

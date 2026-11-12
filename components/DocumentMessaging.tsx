@@ -228,21 +228,30 @@ const FALLBACK_NO_ACTION: ComposerAction = {
   unavailableReason: 'There are no workflow actions available for this recipient.',
 };
 
-function getAvailableActionList(actions: ComposerAction[] | undefined): ComposerAction[] {
-  if (!actions?.length) return [FALLBACK_NO_ACTION];
+// Every action stays listed so officers can see why one is unavailable.
+// Unavailable actions remain selectable: the reason shows below the
+// dropdown and the send button stays disabled.
+function getActionList(actions: ComposerAction[] | undefined): ComposerAction[] {
+  return actions?.length ? actions : [FALLBACK_NO_ACTION];
+}
 
-  const availableActions = actions.filter((action) => !action.unavailableReason);
-  if (availableActions.length > 0) return availableActions;
+// Default to the first action that can actually be taken.
+function getDefaultAction(actions: ComposerAction[]): ComposerAction {
+  return actions.find((action) => !action.unavailableReason) ?? actions[0];
+}
 
-  const unavailableReasons = [...new Set(
-    actions.map((action) => action.unavailableReason).filter((reason): reason is string => Boolean(reason))
-  )];
-  return [{
-    ...FALLBACK_NO_ACTION,
-    unavailableReason: unavailableReasons.length > 0
-      ? unavailableReasons.join('. ')
-      : FALLBACK_NO_ACTION.unavailableReason,
-  }];
+function renderActionOption(action: ComposerAction) {
+  const unavailable = Boolean(action.unavailableReason) && action !== FALLBACK_NO_ACTION;
+  return (
+    <option
+      key={action.value}
+      value={action.value}
+      aria-disabled={unavailable}
+      className={unavailable ? 'text-muted-text' : undefined}
+    >
+      {unavailable ? `${action.label} (unavailable)` : action.label}
+    </option>
+  );
 }
 
 const mergeMessages = (current: Message[], incoming: Message[]) => {
@@ -310,7 +319,7 @@ export default function DocumentMessaging({
 
   // Actions depend on the selected recipient. Conversation messages have a separate composer.
   const recipientActions = workflowComposer?.actionsByRecipient[selectedRecipient] ?? [];
-  const actionList = getAvailableActionList(recipientActions);
+  const actionList = getActionList(recipientActions);
   const actionGroups = actionList.reduce<{ label: string; actions: ComposerAction[] }[]>(
     (groups, action) => {
       const label = action.groupLabel ?? '';
@@ -321,7 +330,8 @@ export default function DocumentMessaging({
     },
     [],
   );
-  const currentAction = actionList.find((action) => action.value === selectedAction) ?? actionList[0];
+  const currentAction = actionList.find((action) => action.value === selectedAction)
+    ?? getDefaultAction(actionList);
   const recipientLabel = workflowComposer?.recipients.find((recipient) => recipient.value === selectedRecipient)?.label
     ?? 'recipient';
   const actionDisabled = sending || Boolean(workflowComposer?.busy) || Boolean(workflowComposer?.isClosed);
@@ -804,7 +814,7 @@ export default function DocumentMessaging({
       return false;
     }
     if (action.value === 'close_submission' && files.length > 1) {
-      setError('A closure can include one closure document.');
+      setError('Completing a submission can include one completion document.');
       return false;
     }
     if (
@@ -940,7 +950,7 @@ export default function DocumentMessaging({
       return;
     }
     if (action.value === 'close_submission' && selectedFiles.length > 1) {
-      setError('A closure can include one closure document.');
+      setError('Completing a submission can include one completion document.');
       return;
     }
     if (action.value === 'forward' && selectedFiles.length >= MAX_ATTACHMENTS) {
@@ -1277,7 +1287,7 @@ export default function DocumentMessaging({
             </div>
             {workflowComposer?.isClosed && (
               <p role="status" className="text-[11px] font-medium text-muted-text">
-                {workflowComposer.closedMessage ?? 'This submission is closed.'}
+                {workflowComposer.closedMessage ?? 'This submission is completed.'}
               </p>
             )}
             {!canSendCurrentConversation && !workflowComposer?.busy && (
@@ -1380,7 +1390,7 @@ export default function DocumentMessaging({
               </h3>
               <p className="mt-1.5 text-[11px] leading-relaxed text-muted-text">
                 {isOfficeWorkspace
-                  ? 'Review the request, communicate as needed, and close it when your office has finished processing.'
+                  ? 'Review the request, communicate as needed, and complete it when your office has finished processing.'
                   : 'Choose an available action and add a note when needed.'}
               </p>
             </header>
@@ -1445,9 +1455,9 @@ export default function DocumentMessaging({
                     onChange={(event) => {
                       const recipient = event.target.value;
                       setSelectedRecipient(recipient);
-                      setSelectedAction(getAvailableActionList(
+                      setSelectedAction(getDefaultAction(getActionList(
                         workflowComposer.actionsByRecipient[recipient]
-                      )[0].value);
+                      )).value);
                       setError('');
                     }}
                     disabled={actionDisabled}
@@ -1471,13 +1481,9 @@ export default function DocumentMessaging({
                   >
                     {actionGroups.map((group) => group.label ? (
                       <optgroup key={group.label} label={group.label}>
-                        {group.actions.map((action) => (
-                          <option key={action.value} value={action.value}>{action.label}</option>
-                        ))}
+                        {group.actions.map(renderActionOption)}
                       </optgroup>
-                    ) : group.actions.map((action) => (
-                      <option key={action.value} value={action.value}>{action.label}</option>
-                    )))}
+                    ) : group.actions.map(renderActionOption))}
                   </select>
                 </div>
                 <button
@@ -1502,7 +1508,7 @@ export default function DocumentMessaging({
 
               {workflowComposer.isClosed && (
                 <p className="text-xs font-medium text-muted-text" role="status">
-                  {workflowComposer.closedMessage ?? 'This submission is closed.'}
+                  {workflowComposer.closedMessage ?? 'This submission is completed.'}
                 </p>
               )}
               {workflowComposer.busy && !sending && (

@@ -170,7 +170,7 @@ const getActionLabel = (type: string) => {
     case 'CHANGES_RESPONDED': return 'Submitter responded to changes';
     case 'RETURNED_TO_SUBMITTER': return 'Returned to submitter for redirection';
     case 'SUBMISSION_WITHDRAWN': return 'Submission withdrawn';
-    case 'SUBMISSION_CLOSED': return 'Submission closed';
+    case 'SUBMISSION_CLOSED': return 'Submission completed';
     case 'SUBMISSION_REOPENED': return 'Submitter reopened the submission';
     case 'FILE_VERSION_ADDED': return 'Document version added';
     case 'STAGE_1_AUTHORIZED': return 'Stage 1 approved';
@@ -479,13 +479,13 @@ export default function ApproverManagePage() {
         const fileError = getWorkflowFilesTypeError([closureFile], false);
         if (fileError) throw new Error(fileError);
         if (closureFile.size > 10 * 1024 * 1024) {
-          throw new Error('The closure file must be 10 MB or smaller.');
+          throw new Error('The completion document must be 10 MB or smaller.');
         }
         const { data: { user }, error: userError } = await supabase.auth.getUser();
-        if (userError || !user) throw userError ?? new Error('You must sign in to close this submission.');
+        if (userError || !user) throw userError ?? new Error('You must sign in to complete this submission.');
         userId = user.id;
         fileType = getWorkflowFileMimeType(closureFile.name);
-        if (!fileType) throw new Error('The closure file type is not supported.');
+        if (!fileType) throw new Error('The completion document type is not supported.');
         filePath = `${userId}/${crypto.randomUUID()}-closure-${closureFile.name.replace(/[^\w.-]/g, '_')}`;
         const { error: uploadError } = await supabase.storage
           .from('workflow_uploads')
@@ -509,7 +509,7 @@ export default function ApproverManagePage() {
         const { error: cleanupError } = await supabase.storage.from('workflow_uploads').remove([filePath]);
         if (cleanupError) console.error('Could not clean up unlinked closure file:', cleanupError.message);
       }
-      throw error instanceof Error ? error : new Error('Could not close this submission.');
+      throw error instanceof Error ? error : new Error('Could not complete this submission.');
     } finally {
       setUpdating(false);
     }
@@ -1030,7 +1030,7 @@ export default function ApproverManagePage() {
                     ? 'This assignment is no longer active. You can still review its files and messages.'
                     : isWithdrawn
                       ? 'This submission is withdrawn.'
-                      : 'This submission is closed.',
+                      : 'This submission is completed.',
                   busy: updating,
                   pendingAssignmentCount,
                   sourceDocument: {

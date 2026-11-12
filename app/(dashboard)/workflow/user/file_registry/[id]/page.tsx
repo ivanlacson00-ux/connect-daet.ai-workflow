@@ -442,7 +442,7 @@ export default function UserFileDetail() {
       case 'CHANGES_RESPONDED': return 'Response to requested changes submitted';
       case 'RETURNED_TO_SUBMITTER': return 'Returned to submitter for redirection';
       case 'SUBMISSION_WITHDRAWN': return 'Submission withdrawn';
-      case 'SUBMISSION_CLOSED': return 'Submission closed';
+      case 'SUBMISSION_CLOSED': return 'Submission completed';
       case 'SUBMISSION_REOPENED': return 'Submission reopened';
       case 'FILE_VERSION_ADDED': return 'Document version added';
       case 'ROUTE_PROPOSED': return 'Tourism Officer proposed office route';
@@ -1055,9 +1055,9 @@ export default function UserFileDetail() {
             <div className="mt-4 space-y-3 rounded-xl border border-approved-bg bg-approved-bg/40 p-4">
               <p className="text-xs font-semibold text-approved-text">Processing completed</p>
               <p className="text-[11px] text-warm-text">
-                Closed by {closureActor || 'an authorized office representative'}
+                Completed by {closureActor || 'an authorized office representative'}
                 {sub.completed_at ? ` on ${new Date(sub.completed_at).toLocaleString()}` : ''}.
-                Closing means processing finished; it is not an approval decision.
+                Completion means processing finished; it is not an approval decision.
               </p>
               {sub.closure_note && (
                 <p className="whitespace-pre-wrap rounded-xl bg-card/70 p-3 text-xs leading-relaxed text-warm-text">
@@ -1076,7 +1076,7 @@ export default function UserFileDetail() {
                   })}
                   className="text-xs font-semibold text-clay underline underline-offset-2"
                 >
-                  Download closure document: {sub.closure_file_name}
+                  Download completion document: {sub.closure_file_name}
                 </button>
               )}
             </div>

@@ -325,7 +325,7 @@ export default function AdminManagePage() {
       target_submission_id: sub.id,
     });
     if (error) {
-      setActionError(error.message || 'Could not close this submission.');
+      setActionError(error.message || 'Could not complete this submission.');
       setCloseDialogOpen(false);
     } else {
       setCloseDialogOpen(false);

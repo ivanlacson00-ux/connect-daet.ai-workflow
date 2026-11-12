@@ -280,7 +280,7 @@ export default function WorkflowDashboard() {
                 </span>
               </div>
               <p className={`${fonts.serif} mt-3 text-[34px] leading-none text-warm-text max-md:mt-2 max-md:text-[27px]`}>{stat.value}</p>
-              <p className="mt-3 text-[11px] text-muted-text max-md:mt-1.5">{index === 0 ? 'All your submitted documents' : index === 1 ? 'Processed and closed' : 'Earned for eligible submissions'}</p>
+              <p className="mt-3 text-[11px] text-muted-text max-md:mt-1.5">{index === 0 ? 'All your submitted documents' : index === 1 ? 'Processed and completed' : 'Earned for eligible submissions'}</p>
             </div>
           ))}
         </div>
