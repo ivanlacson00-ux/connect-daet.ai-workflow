@@ -6,6 +6,7 @@ import QRCode from 'qrcode';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
 import WorkflowActivityTimeline from '@/components/WorkflowActivityTimeline';
+import WorkflowStatusPanel, { type WorkflowStatusStep } from '@/components/WorkflowStatusPanel';
 import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
 import {
   getWorkflowDocumentTypeLabel,
@@ -45,6 +46,10 @@ interface Submission {
   closure_file_name?: string | null;
   closure_file_type?: string | null;
   closure_file_size?: number | null;
+  final_decided_at?: string | null;
+  final_decision_office_role?: string | null;
+  approved_at?: string | null;
+  rejected_at?: string | null;
   office_comments?: string | null;
   mayor_comments?: string | null;
   sender_response?: string | null;
@@ -86,6 +91,9 @@ export default function UserFileDetail() {
   const [sub, setSub] = useState<Submission | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [routeSteps, setRouteSteps] = useState<WorkflowStatusStep[]>([]);
+  const [currentRoutePlanId, setCurrentRoutePlanId] = useState<string | null>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
   const [savingResponse, setSavingResponse] = useState(false);
   const [changeResponse, setChangeResponse] = useState('');
   const [revisedDocument, setRevisedDocument] = useState<File | null>(null);
@@ -113,6 +121,9 @@ export default function UserFileDetail() {
     if (!preserveCurrent) {
       setLoading(true);
       setSub(null);
+      setRouteSteps([]);
+      setCurrentRoutePlanId(null);
+      setRouteError(null);
     }
     setRetrievalQr(null);
     setQrImage('');
@@ -161,6 +172,7 @@ export default function UserFileDetail() {
         const [
           { data: attachmentRows, error: attachmentError },
           { data: logs, error: logsError },
+          { data: routes, error: routeError },
         ] = await Promise.all([
           supabase
             .from('workflow_submission_attachments')
@@ -172,11 +184,51 @@ export default function UserFileDetail() {
             .select('id, action_type, old_status, new_status, comments, created_at, profiles:action_by (full_name, role)')
             .eq('submission_id', id)
             .order('created_at', { ascending: true }),
+          supabase
+            .from('workflow_routing_plans')
+            .select('id, is_current')
+            .eq('submission_id', id)
+            .order('version', { ascending: true }),
         ]);
         if (attachmentError) console.error('Attachment load failed:', attachmentError.message);
         if (logsError) console.error('Workflow history load failed:', logsError.message);
         setAttachments(attachmentRows ?? []);
         setAuditLogs(logs ?? []);
+        if (routeError) {
+          console.error('Workflow route load failed:', routeError.message);
+          setRouteError('Could not load the latest office routing status. Refresh this page to try again.');
+          setRouteSteps([]);
+          setCurrentRoutePlanId(null);
+        } else {
+          const routePlanIds = (routes ?? []).map((route) => route.id);
+          const currentRoute = (routes ?? []).find((route) => route.is_current) ?? null;
+          if (routePlanIds.length === 0) {
+            setRouteSteps([]);
+            setCurrentRoutePlanId(null);
+            setRouteError(null);
+          } else {
+            const { data: steps, error: stepsError } = await supabase
+              .from('workflow_routing_steps')
+              .select('id, routing_plan_id, office_role, status, outcome, assigned_at, started_at, decided_at, completed_at')
+              .in('routing_plan_id', routePlanIds)
+              .order('sequence_number', { ascending: true });
+            if (stepsError) {
+              console.error('Workflow route steps load failed:', stepsError.message);
+              setRouteError('Could not load the latest office routing status. Refresh this page to try again.');
+              setRouteSteps([]);
+              setCurrentRoutePlanId(null);
+            } else {
+              setRouteError(null);
+              setCurrentRoutePlanId(currentRoute?.id ?? null);
+              setRouteSteps((steps ?? []).filter((step) =>
+                typeof step.id === 'string'
+                && typeof step.routing_plan_id === 'string'
+                && typeof step.office_role === 'string'
+                && typeof step.status === 'string'
+              ));
+            }
+          }
+        }
       }
     } finally {
       setLoading(false);
@@ -500,6 +552,9 @@ export default function UserFileDetail() {
     ? OFFICE_CONFIG[currentDestinationRole].label
     : 'Not selected';
   const initialDestinationRole = sub.initial_destination_role ?? null;
+  const responsibleOfficeRole = sub.selected_office_role
+    ?? sub.initial_destination_role
+    ?? null;
   const showFeedback = isCompleted || sub.status.includes('declined');
   const officialNote = sub.mayor_comments || sub.office_comments || sub.admin_comments || sub.rejection_comment || sub.approver_comments;
   const isApproved = isCompleted;
@@ -754,6 +809,23 @@ export default function UserFileDetail() {
           </div>
         </section>
       </section>
+
+      <div className="mb-5">
+        <WorkflowStatusPanel
+          submissionId={sub.id}
+          submissionStatus={sub.status}
+          responsibleOfficeRole={responsibleOfficeRole}
+          receivedAt={sub.received_at}
+          currentRoutePlanId={currentRoutePlanId}
+          steps={routeSteps}
+          finalDecisionOfficeRole={sub.final_decision_office_role}
+          finalDecidedAt={sub.final_decided_at}
+          approvedAt={sub.approved_at}
+          rejectedAt={sub.rejected_at}
+          completedAt={sub.completed_at}
+          routeError={routeError}
+        />
+      </div>
 
       <DocumentMessaging
         key={sub.id}

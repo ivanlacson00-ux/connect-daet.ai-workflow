@@ -1,9 +1,10 @@
 import { OFFICE_CONFIG, isOfficeRole } from './offices';
 
+// Stored outcome values stay as they are in the database; only the labels are shown.
 export const ASSIGNMENT_OUTCOMES = {
-  endorsed: 'Endorsed',
-  endorsed_with_conditions: 'Endorsed with conditions',
-  not_endorsed: 'Not endorsed',
+  endorsed: 'Approved',
+  endorsed_with_conditions: 'Approved with conditions',
+  not_endorsed: 'Rejected',
 } as const;
 
 export type AssignmentOutcome = keyof typeof ASSIGNMENT_OUTCOMES;
@@ -12,7 +13,7 @@ export function isAssignmentOutcome(value: string | null | undefined): value is 
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(ASSIGNMENT_OUTCOMES, value);
 }
 
-/** A note is required for every outcome except a plain endorsement. */
+/** A note is required for every outcome except a plain approval. */
 export function assignmentOutcomeNeedsNote(outcome: string | null | undefined) {
   return isAssignmentOutcome(outcome) && outcome !== 'endorsed';
 }
@@ -31,13 +32,13 @@ export interface AssignmentStateInput {
   outcome?: string | null;
 }
 
-/** Short state for an assignment, e.g. "Waiting for response" or "Endorsed". */
+/** The office's action on an assignment, e.g. "Pending", "Approved" or "Returned". */
 export function describeAssignmentState(step: AssignmentStateInput): { label: string; tone: AssignmentTone } {
   switch (step.status) {
     case 'pending':
-      return { label: 'Waiting for response', tone: 'waiting' };
+      return { label: 'Pending', tone: 'waiting' };
     case 'in_progress':
-      return { label: 'In review', tone: 'waiting' };
+      return { label: 'Under review', tone: 'waiting' };
     case 'completed':
     case 'approved':
       if (step.outcome === 'endorsed') return { label: ASSIGNMENT_OUTCOMES.endorsed, tone: 'positive' };
@@ -45,12 +46,11 @@ export function describeAssignmentState(step: AssignmentStateInput): { label: st
         return { label: ASSIGNMENT_OUTCOMES.endorsed_with_conditions, tone: 'caution' };
       }
       if (step.outcome === 'not_endorsed') return { label: ASSIGNMENT_OUTCOMES.not_endorsed, tone: 'negative' };
-      // Assignments completed before outcomes existed.
-      return { label: 'Responded', tone: 'muted' };
+      return { label: 'Completed', tone: 'positive' };
     case 'rejected':
       return { label: ASSIGNMENT_OUTCOMES.not_endorsed, tone: 'negative' };
     case 'returned':
-      return { label: 'Returned without a response', tone: 'caution' };
+      return { label: 'Returned', tone: 'caution' };
     case 'withdrawn':
       return { label: 'Withdrawn', tone: 'muted' };
     default:
@@ -58,19 +58,17 @@ export function describeAssignmentState(step: AssignmentStateInput): { label: st
   }
 }
 
-/** One-line summary, e.g. "Municipal Treasurer's Office responded: Endorsed". */
+/** One-line summary, e.g. "Municipal Treasurer's Office: Approved". */
 export function summarizeAssignment(step: AssignmentStateInput) {
   const office = getOfficeLabel(step.office_role);
   switch (step.status) {
     case 'pending':
     case 'in_progress':
       return `Waiting on ${office}`;
-    case 'returned':
-      return `${office} returned the assignment`;
     case 'withdrawn':
       return `Assignment with ${office} withdrawn`;
     default:
-      return `${office} responded${isAssignmentOutcome(step.outcome) ? `: ${ASSIGNMENT_OUTCOMES[step.outcome]}` : ''}`;
+      return `${office}: ${describeAssignmentState(step).label}`;
   }
 }
 

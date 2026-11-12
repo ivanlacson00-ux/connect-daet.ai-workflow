@@ -58,7 +58,8 @@ const FILTERS: { key: Filter; label: string }[] = [
 ];
 
 function statusLabel(status: string, assignment = false) {
-  if (assignment && ['pending', 'in_progress'].includes(status)) return 'Pending assignment';
+  if (assignment && status === 'pending') return 'Pending assignment';
+  if (assignment && status === 'in_progress') return 'In Progress';
   return getSubmissionStatusLabel(status);
 }
 
@@ -349,8 +350,6 @@ export default function OfficeDashboard({
             ) : (
               <div className="space-y-3">
                 {recentActionItems.map((submission) => {
-                  const isAssignment = submission.selected_office_role !== role
-                    && ['pending', 'in_progress'].includes(submission.officeRecord?.status ?? '');
                   return (
                     <article
                       key={submission.id}
@@ -380,7 +379,7 @@ export default function OfficeDashboard({
                         href={`${getOfficeFileManagementPath(role)}/${submission.id}`}
                         className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
                       >
-                        {isAssignment ? 'Process assignment' : 'Process submission'}
+                        View
                       </Link>
                     </article>
                   );
@@ -454,9 +453,6 @@ export default function OfficeDashboard({
           ) : (
             <div className="space-y-3">
               {filteredSubmissions.map((submission) => {
-                const canReview = matchesOfficeDashboardFilter(submission, 'needs_action', role);
-                const isAssignment = submission.selected_office_role !== role
-                  && ['pending', 'in_progress'].includes(submission.officeRecord?.status ?? '');
                 const processedAt = submission.officeRecord?.completed_at
                   ?? submission.officeRecord?.decided_at;
                 return (
@@ -501,7 +497,7 @@ export default function OfficeDashboard({
                         href={`${getOfficeFileManagementPath(role)}/${submission.id}`}
                         className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
                       >
-                        {canReview ? isAssignment ? 'Process assignment' : 'Process submission' : 'View document'}
+                        View
                       </Link>
                     </div>
                   </article>

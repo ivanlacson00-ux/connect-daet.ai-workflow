@@ -54,6 +54,7 @@ export function matchesOfficeDashboardFilter(
     case 'processed':
       // Waiting on the submitter is out of the office's queue, like completed work.
       return (isResponsibleOffice && submission.status === 'changes_requested')
+        || ['approved', 'completed', 'declined_by_office', 'returned', 'withdrawn'].includes(submission.status)
         || ['approved', 'completed', 'returned', 'withdrawn'].includes(submission.officeRecord?.status ?? '');
     default:
       return true;

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import AdminDeleteSubmissionButton from '@/components/AdminDeleteSubmissionButton';
 import DocumentMessaging from '@/components/DocumentMessaging';
 import WorkflowActivityTimeline from '@/components/WorkflowActivityTimeline';
 import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
@@ -736,6 +737,18 @@ export default function AdminManagePage() {
             >
               {archiveUpdating ? 'Updating archive...' : sub.archived_at ? 'Restore from archive' : 'Archive record'}
             </button>
+          </section>
+
+          <section className="no-print rounded-2xl border border-rejected-bg bg-rejected-bg/30 p-5 max-md:p-3.5">
+            <p className="mb-1 text-xs font-semibold text-rejected-text">Permanently delete submission</p>
+            <p className="mb-4 text-xs leading-relaxed text-muted-text">
+              This removes the submission, its history and linked records, and uploaded files. This cannot be undone.
+            </p>
+            <AdminDeleteSubmissionButton
+              submissionId={sub.id}
+              fileName={sub.file_name}
+              onDeleted={() => router.push('/workflow/admin/submissions')}
+            />
           </section>
 
           {/* Timeline */}

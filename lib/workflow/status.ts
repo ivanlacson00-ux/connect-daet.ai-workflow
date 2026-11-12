@@ -9,7 +9,8 @@ const STATUS_LABELS: Record<string, string> = {
   returned_for_requirements: 'Changes Requested',
   returned: 'Returned',
   completed: 'Completed',
-  approved: 'Completed',
+  approved: 'Approved',
+  declined_by_office: 'Rejected',
   withdrawn: 'Withdrawn',
 };
 

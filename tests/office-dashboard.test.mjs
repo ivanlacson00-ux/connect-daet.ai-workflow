@@ -49,6 +49,16 @@ test('a responsible office returns to needs-action once the other office respond
   assert.equal(matchesOfficeDashboardFilter(responded, 'waiting_on_office', 'tourism_officer'), false);
 });
 
+test('a rejected final decision is treated as processed rather than pending work', () => {
+  const rejected = {
+    status: 'declined_by_office',
+    selected_office_role: 'municipal_treasurer',
+    officeRecord: null,
+  };
+  assert.equal(matchesOfficeDashboardFilter(rejected, 'needs_action', 'municipal_treasurer'), false);
+  assert.equal(matchesOfficeDashboardFilter(rejected, 'processed', 'municipal_treasurer'), true);
+});
+
 test('unrelated offices do not see a direct submission in needs-action', () => {
   assert.equal(matchesOfficeDashboardFilter({
     status: 'pending_office',
