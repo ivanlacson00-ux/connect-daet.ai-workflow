@@ -52,7 +52,7 @@ export default function CloseSubmissionDialog({
         className="w-full max-w-md rounded-2xl border border-warm-border bg-card p-6 shadow-xl"
       >
         <h2 id="close-submission-title" className="font-serif text-xl text-warm-text">
-          Close Submission?
+          Complete submission?
         </h2>
         <p id="close-submission-description" className="mt-3 text-sm leading-relaxed text-muted-text">
           Closing confirms that the responsible office has finished processing this request; it records completion, not approval.
@@ -116,7 +116,7 @@ export default function CloseSubmissionDialog({
             disabled={updating || assignmentsPending}
             className="inline-flex h-11 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white hover:bg-warm-text disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {updating ? 'Closing...' : 'Confirm Close Submission'}
+            {updating ? 'Completing...' : 'Confirm completion'}
           </button>
         </div>
       </section>
