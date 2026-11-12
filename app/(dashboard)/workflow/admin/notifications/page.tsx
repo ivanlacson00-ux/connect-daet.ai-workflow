@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import WorkflowNotificationControls, { type NotificationFilter } from '@/components/WorkflowNotificationControls';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -10,6 +11,7 @@ const fonts = {
 };
 
 const NEW_WINDOW_MS = 5 * 60 * 1000;
+const PAGE_SIZE = 30;
 
 interface AdminNotification {
   id: string;
@@ -27,6 +29,7 @@ interface AdminNotification {
   requester_email?: string | null;
   user_email?: string | null;
   is_new: boolean;
+  is_unread: boolean;
 }
 
 // Maps a notification event to the status it represents
@@ -65,20 +68,51 @@ export default function AdminNotificationsPage() {
   const supabase = useMemo(() => createClient(), []);
   const [notifications, setNotifications] = useState<AdminNotification[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<NotificationFilter>('all');
+  const [page, setPage] = useState(0);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const fetchNotifications = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('workflow_notifications')
-      .select('*, workflow_submissions(*, profiles:user_id(email))')
-      .order('created_at', { ascending: false })
-      .limit(30);
+  const fetchNotifications = useCallback(async (targetPage = page) => {
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      if (!user) {
+        setNotifications([]);
+        setHasNextPage(false);
+        return;
+      }
 
-    if (error) {
-      console.error('Admin Fetch Error:', error.message);
-    } else {
+      let query = supabase
+        .from('workflow_notifications')
+        .select('*, workflow_submissions(*, profiles:user_id(email))', { count: 'exact' })
+        .order('created_at', { ascending: false });
+      if (filter === 'unread') {
+        query = query.eq('recipient_id', user.id).is('read_at', null);
+      }
+      const { data, error, count } = await query.range(
+        targetPage * PAGE_SIZE,
+        targetPage * PAGE_SIZE + PAGE_SIZE - 1
+      );
+      if (error) throw error;
+      const rows = data || [];
+      const { data: dismissed, error: dismissedError } = rows.length
+        ? await supabase
+          .from('workflow_notification_dismissals')
+          .select('notification_id')
+          .eq('user_id', user.id)
+          .in('notification_id', rows.map((notification) => notification.id))
+        : { data: [], error: null };
+      if (dismissedError) throw dismissedError;
+      const dismissedIds = new Set((dismissed || []).map((item) => item.notification_id));
+
       // Keep only the latest notification per submission
       const latestBySubmission = new Map<string, AdminNotification>();
-      (data || []).forEach((notification) => {
+      rows.forEach((notification) => {
+        if (dismissedIds.has(notification.id)) return;
         if (!latestBySubmission.has(notification.submission_id)) {
           latestBySubmission.set(notification.submission_id, {
             ...notification.workflow_submissions,
@@ -94,22 +128,71 @@ export default function AdminNotificationsPage() {
               notification.workflow_submissions?.status
             ),
             is_new: Date.now() - new Date(notification.created_at).getTime() < NEW_WINDOW_MS,
+            is_unread: notification.recipient_id === user.id && !notification.read_at,
           });
         }
       });
-      setNotifications(Array.from(latestBySubmission.values()));
-
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await supabase
-          .from('workflow_notifications')
-          .update({ read_at: new Date().toISOString() })
-          .eq('recipient_id', user.id)
-          .is('read_at', null);
-      }
+      const visibleNotifications = Array.from(latestBySubmission.values());
+      setNotifications(visibleNotifications);
+      setHasNextPage(
+        visibleNotifications.length > 0 && (targetPage + 1) * PAGE_SIZE < (count || 0)
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not load notifications.';
+      console.error('Failed to load admin notifications:', message);
+      setErrorMessage(message);
+      setNotifications([]);
+      setHasNextPage(false);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [supabase]);
+  }, [filter, page, supabase]);
+
+  const markAllAsRead = async () => {
+    setActionBusy(true);
+    setErrorMessage(null);
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        setErrorMessage(userError?.message || 'Sign in before updating notifications.');
+        return;
+      }
+      const { error } = await supabase
+        .from('workflow_notifications')
+        .update({ read_at: new Date().toISOString() })
+        .eq('recipient_id', user.id)
+        .is('read_at', null);
+      if (error) {
+        setErrorMessage(error.message);
+        return;
+      }
+      window.dispatchEvent(new Event('workflow-notifications-changed'));
+      await fetchNotifications();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not mark notifications as read.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const clearNotifications = async () => {
+    setActionBusy(true);
+    setErrorMessage(null);
+    try {
+      const { error } = await supabase.rpc('dismiss_all_workflow_notifications');
+      if (error) {
+        setErrorMessage(error.message);
+        return;
+      }
+      window.dispatchEvent(new Event('workflow-notifications-changed'));
+      setPage(0);
+      await fetchNotifications(0);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not clear notifications.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -142,9 +225,31 @@ export default function AdminNotificationsPage() {
         </p>
         <h1 className={`${fonts.serif} text-[32px] leading-tight text-warm-text max-md:text-[26px]`}>Registry feed</h1>
         <p className="mt-2 text-xs text-muted-text max-md:mt-1.5">
-          Latest activity across all submissions. Showing <span className="text-warm-text">{notifications.length}</span> updates.
+          Latest activity across all submissions. Showing <span className="text-warm-text">{notifications.length}</span> updates, including <span className="text-warm-text">{notifications.filter((notification) => notification.is_unread).length}</span> unread for your account.
         </p>
       </div>
+
+      <WorkflowNotificationControls
+        filter={filter}
+        onFilterChange={(nextFilter) => {
+          setFilter(nextFilter);
+          setPage(0);
+        }}
+        notificationCount={notifications.length}
+        unreadCount={notifications.filter((notification) => notification.is_unread).length}
+        page={page}
+        hasNextPage={hasNextPage}
+        busy={actionBusy || loading}
+        onPreviousPage={() => setPage((current) => Math.max(0, current - 1))}
+        onNextPage={() => setPage((current) => current + 1)}
+        onMarkAllRead={markAllAsRead}
+        onClearNotifications={clearNotifications}
+      />
+      {errorMessage && (
+        <p role="alert" className="mb-4 rounded-xl border border-rejected-bg bg-rejected-bg/40 px-4 py-3 text-xs text-rejected-text">
+          {errorMessage}
+        </p>
+      )}
 
       {/* Feed */}
       {loading ? (
@@ -153,8 +258,12 @@ export default function AdminNotificationsPage() {
         </div>
       ) : notifications.length === 0 ? (
         <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
-          <p className={`${fonts.serif} text-2xl text-warm-text`}>Nothing here</p>
-          <p className="mt-2 text-xs text-muted-text">No activity has been recorded yet.</p>
+          <p className={`${fonts.serif} text-2xl text-warm-text`}>
+            {filter === 'unread' ? 'No unread notifications' : 'Nothing here'}
+          </p>
+          <p className="mt-2 text-xs text-muted-text">
+            {filter === 'unread' ? 'You have no unread updates.' : 'No activity has been recorded yet.'}
+          </p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -171,6 +280,11 @@ export default function AdminNotificationsPage() {
                     {note.is_new && (
                       <span className="inline-flex items-center gap-1.5 rounded-full bg-clay-soft px-2 py-0.5 text-[10px] font-semibold text-clay">
                         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-clay" /> New
+                      </span>
+                    )}
+                    {note.is_unread && (
+                      <span className="inline-flex items-center rounded-full bg-pending-bg px-2 py-0.5 text-[10px] font-semibold text-pending-text">
+                        Unread for you
                       </span>
                     )}
                     <span>User {String(note.user_id ?? '').split('-')[0] || '—'}</span>

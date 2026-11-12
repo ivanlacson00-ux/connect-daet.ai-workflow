@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type Ref } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { downloadFile } from '@/components/FilePreview';
 import {
@@ -8,15 +8,113 @@ import {
   getWorkflowFilesTypeError,
   WORKFLOW_ATTACHMENT_ACCEPT,
 } from '@/lib/workflow/file-types';
+import CloseSubmissionDialog from '@/components/CloseSubmissionDialog';
 
 const PAGE_SIZE = 50;
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
-const MESSAGE_FIELDS = 'id, submission_id, sender_id, sender_name, sender_role, body, created_at';
+const MESSAGE_FIELDS = 'id, submission_id, routing_step_id, sender_id, sender_name, sender_role, body, created_at';
+const EMPTY_ASSIGNMENT_CONVERSATIONS: AssignmentConversation[] = [];
+
+// ─── Icons & small UI helpers ────────────────────────────────────────────────
+type IconName = 'clock' | 'file' | 'info' | 'message' | 'paperclip' | 'send' | 'x';
+
+function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
+  const paths: Record<IconName, ReactNode> = {
+    clock: (<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>),
+    file: (<><path d="M6 2h8l4 4v16H6z" /><path d="M14 2v5h5M9 13h6M9 17h6" /></>),
+    info: (<><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></>),
+    message: <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />,
+    paperclip: <path d="m20 11-8.5 8.5a5 5 0 0 1-7-7L14 3a3.5 3.5 0 0 1 5 5l-9.5 9.5a2 2 0 0 1-3-3L15 6" />,
+    send: (<><path d="m22 2-7 20-4-9-9-4z" /><path d="M22 2 11 13" /></>),
+    x: <path d="m6 6 12 12M18 6 6 18" />,
+  };
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {paths[name]}
+    </svg>
+  );
+}
+
+const getInitials = (name: string) =>
+  (name || '?').split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || '?';
+
+function AttachControl({ id, inputRef, disabled, limit, onFiles, compact = false }: {
+  id: string;
+  inputRef: Ref<HTMLInputElement>;
+  disabled: boolean;
+  limit: number;
+  onFiles: (files: File[]) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <input
+        ref={inputRef}
+        id={id}
+        type="file"
+        accept={WORKFLOW_ATTACHMENT_ACCEPT}
+        multiple
+        disabled={disabled}
+        onChange={(event) => {
+          onFiles(Array.from(event.target.files ?? []));
+          event.target.value = '';
+        }}
+        className="peer sr-only"
+      />
+      <label
+        htmlFor={id}
+        aria-disabled={disabled}
+        className={`inline-flex h-10 items-center gap-2 rounded-full border border-warm-border bg-white px-4 text-[11px] font-bold text-warm-text transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-clay/30 ${
+          disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-clay hover:bg-clay-soft'
+        }`}
+      >
+        <Icon name="paperclip" size={15} /> Attach file
+      </label>
+      {!compact && (
+        <span className="hidden text-[10px] leading-tight text-muted-text sm:block">
+          Up to {limit} files · 10 MB each
+        </span>
+      )}
+    </div>
+  );
+}
+
+function FileChips({ files, disabled, onRemove }: {
+  files: File[];
+  disabled: boolean;
+  onRemove: (file: File) => void;
+}) {
+  if (files.length === 0) return null;
+  return (
+    <ul className="flex flex-wrap gap-1.5">
+      {files.map((file) => (
+        <li
+          key={`${file.name}-${file.size}-${file.lastModified}`}
+          className="inline-flex max-w-full items-center gap-2 rounded-full border border-warm-border bg-white px-2.5 py-1 text-[10px] font-medium text-warm-text"
+        >
+          <Icon name="file" size={12} />
+          <span className="max-w-52 truncate">{file.name}</span>
+          <button
+            type="button"
+            onClick={() => onRemove(file)}
+            disabled={disabled}
+            aria-label={`Remove ${file.name}`}
+            className="text-muted-text hover:text-rejected-text disabled:opacity-50"
+          >
+            <Icon name="x" size={12} />
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 interface MessageRow {
   id: string;
   submission_id: string;
+  routing_step_id: string | null;
   sender_id: string;
   sender_name: string;
   sender_role: string;
@@ -34,6 +132,20 @@ interface MessageAttachment {
   file_size: number;
 }
 
+interface SharedMessageAttachment extends MessageAttachment {
+  created_at: string;
+  sender_name: string;
+  sender_role: string;
+  routing_step_id: string | null;
+  conversation_label: string;
+}
+
+interface AssignmentConversation {
+  stepId: string;
+  label: string;
+  canSend: boolean;
+}
+
 interface Message extends MessageRow {
   attachments: MessageAttachment[];
   readCount: number;
@@ -49,6 +161,97 @@ interface DocumentMessagingProps {
   fileName: string;
   trackingNumber: string | null;
   activity: ReactNode;
+  afterSharedFiles?: ReactNode;
+  assignmentConversations?: AssignmentConversation[];
+  defaultAssignmentStepId?: string | null;
+  showSubmitterConversation?: boolean;
+  canSendSubmitterConversation?: boolean;
+  workflowComposer?: {
+    recipients: { value: string; label: string }[];
+    actionsByRecipient: Record<string, ComposerAction[]>;
+    initialRecipient: string;
+    initialAction: string;
+    initialMessage?: string;
+    statusLine: string;
+    showStatusLine?: boolean;
+    processingNote?: string;
+    contextNote?: string;
+    isClosed?: boolean;
+    closedMessage?: string;
+    busy?: boolean;
+    pendingAssignmentCount?: number;
+    isOfficeWorkspace?: boolean;
+    activeAssignmentStepId?: string | null;
+    showWorkflowActions?: boolean;
+    sourceDocument?: {
+      filePath: string | null;
+      fileType: string;
+      fileSize: number;
+    };
+    renderActionFields?: (action: string) => ReactNode;
+    onWorkflowAction: (
+      action: string,
+      recipient: string,
+      message: string,
+      files: File[],
+    ) => Promise<void>;
+    onForwarded?: () => Promise<void>;
+  };
+}
+
+interface ComposerAction {
+  value: string;
+  label: string;
+  buttonLabel?: string;
+  groupLabel?: string;
+  description?: string;
+  tone?: 'neutral' | 'primary' | 'warning' | 'strong';
+  unavailableReason?: string;
+  requiresMessage?: boolean;
+  confirmation?: string;
+}
+
+interface UploadedAttachment {
+  submission_id: string;
+  message_id: string;
+  uploaded_by: string;
+  file_name: string;
+  file_path: string;
+  file_type: string;
+  file_size: number;
+}
+
+const FALLBACK_NO_ACTION: ComposerAction = {
+  value: '',
+  label: 'No action available',
+  tone: 'neutral',
+  unavailableReason: 'There are no workflow actions available for this recipient.',
+};
+
+// Every action stays listed so officers can see why one is unavailable.
+// Unavailable actions remain selectable: the reason shows below the
+// dropdown and the send button stays disabled.
+function getActionList(actions: ComposerAction[] | undefined): ComposerAction[] {
+  return actions?.length ? actions : [FALLBACK_NO_ACTION];
+}
+
+// Default to the first action that can actually be taken.
+function getDefaultAction(actions: ComposerAction[]): ComposerAction {
+  return actions.find((action) => !action.unavailableReason) ?? actions[0];
+}
+
+function renderActionOption(action: ComposerAction) {
+  const unavailable = Boolean(action.unavailableReason) && action !== FALLBACK_NO_ACTION;
+  return (
+    <option
+      key={action.value}
+      value={action.value}
+      aria-disabled={unavailable}
+      className={unavailable ? 'text-muted-text' : undefined}
+    >
+      {unavailable ? `${action.label} (unavailable)` : action.label}
+    </option>
+  );
 }
 
 const mergeMessages = (current: Message[], incoming: Message[]) => {
@@ -64,26 +267,99 @@ export default function DocumentMessaging({
   fileName,
   trackingNumber,
   activity,
+  afterSharedFiles,
+  assignmentConversations = EMPTY_ASSIGNMENT_CONVERSATIONS,
+  defaultAssignmentStepId = null,
+  showSubmitterConversation,
+  canSendSubmitterConversation,
+  workflowComposer,
 }: DocumentMessagingProps) {
   const supabase = useMemo(() => createClient(), []);
   const [userId, setUserId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [draft, setDraft] = useState('');
+  const [sharedAttachments, setSharedAttachments] = useState<SharedMessageAttachment[]>([]);
+  const [selectedThreadStepId, setSelectedThreadStepId] = useState<string | null>(defaultAssignmentStepId);
+  // Office action form state
+  const [draft, setDraft] = useState(workflowComposer?.initialMessage ?? '');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  // Message composer state
+  const [conversationDraft, setConversationDraft] = useState('');
+  const [conversationFiles, setConversationFiles] = useState<File[]>([]);
+  const [conversationError, setConversationError] = useState('');
+  const [conversationNotice, setConversationNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [hasEarlier, setHasEarlier] = useState(false);
   const [sending, setSending] = useState(false);
   const [liveStatus, setLiveStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-  const [activeTab, setActiveTab] = useState<'messages' | 'activity'>('messages');
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [selectedRecipient, setSelectedRecipient] = useState(workflowComposer?.initialRecipient ?? 'submitter');
+  const [selectedAction, setSelectedAction] = useState(workflowComposer?.initialAction ?? '');
+  const [confirmingAction, setConfirmingAction] = useState<ComposerAction | null>(null);
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const conversationInputRef = useRef<HTMLTextAreaElement>(null);
+  const conversationFileInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<Message[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
+  const isOfficeWorkspace = workflowComposer?.isOfficeWorkspace ?? false;
+  const canViewSubmitterConversation = isOfficeWorkspace
+    ? showSubmitterConversation === true
+    : true;
+  const canSendSubmitterThread = canSendSubmitterConversation
+    ?? !Boolean(workflowComposer?.isClosed);
+  const selectedAssignmentConversation = assignmentConversations.find(
+    (conversation) => conversation.stepId === selectedThreadStepId,
+  );
+  const canSendCurrentConversation = selectedThreadStepId
+    ? Boolean(selectedAssignmentConversation?.canSend)
+    : canViewSubmitterConversation && canSendSubmitterThread;
+
+  // Actions depend on the selected recipient. Conversation messages have a separate composer.
+  const recipientActions = workflowComposer?.actionsByRecipient[selectedRecipient] ?? [];
+  const actionList = getActionList(recipientActions);
+  const actionGroups = actionList.reduce<{ label: string; actions: ComposerAction[] }[]>(
+    (groups, action) => {
+      const label = action.groupLabel ?? '';
+      const group = groups.find((candidate) => candidate.label === label);
+      if (group) group.actions.push(action);
+      else groups.push({ label, actions: [action] });
+      return groups;
+    },
+    [],
+  );
+  const currentAction = actionList.find((action) => action.value === selectedAction)
+    ?? getDefaultAction(actionList);
+  const recipientLabel = workflowComposer?.recipients.find((recipient) => recipient.value === selectedRecipient)?.label
+    ?? 'recipient';
+  const actionDisabled = sending || Boolean(workflowComposer?.busy) || Boolean(workflowComposer?.isClosed);
+  const conversationDisabled = sending
+    || Boolean(workflowComposer?.busy)
+    || !userId
+    || !canSendCurrentConversation;
+  const actionAttachLimit = currentAction.value === 'forward' ? MAX_ATTACHMENTS - 1 : MAX_ATTACHMENTS;
+
+  useEffect(() => {
+    if (!workflowComposer) return;
+    setSelectedRecipient(workflowComposer.initialRecipient);
+    setSelectedAction(workflowComposer.initialAction);
+  }, [submissionId, workflowComposer?.initialAction, workflowComposer?.initialRecipient]);
+
+  useEffect(() => {
+    setSelectedThreadStepId(defaultAssignmentStepId);
+  }, [submissionId, defaultAssignmentStepId]);
 
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  const lastMessageId = messages[messages.length - 1]?.id;
+  useEffect(() => {
+    const list = listRef.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [lastMessageId, loading]);
 
   const refreshMessageMetadata = useCallback(async (rows: MessageRow[]) => {
     if (rows.length === 0) return [] as Message[];
@@ -124,6 +400,54 @@ export default function DocumentMessaging({
     }));
   }, [supabase]);
 
+  const refreshSharedAttachments = useCallback(async () => {
+    const { data, error: attachmentsError } = await supabase
+      .from('workflow_message_attachments')
+      .select('id, submission_id, message_id, file_name, file_path, file_type, file_size, created_at')
+      .eq('submission_id', submissionId)
+      .order('created_at', { ascending: false });
+
+    if (attachmentsError) {
+      console.error('Could not load shared document attachments:', attachmentsError.message);
+      setConversationError('Could not load files shared in messages. Refresh the page to try again.');
+      return;
+    }
+
+    const attachments = data ?? [];
+    if (attachments.length === 0) {
+      setSharedAttachments([]);
+      return;
+    }
+
+    const { data: messageRows, error: messagesError } = await supabase
+      .from('workflow_messages')
+      .select('id, sender_name, sender_role, routing_step_id')
+      .in('id', attachments.map((attachment) => attachment.message_id));
+    if (messagesError) {
+      console.error('Could not load shared-file conversation details:', messagesError.message);
+      setConversationError('Could not load file sender details. Refresh the page to try again.');
+      return;
+    }
+
+    const messagesById = new Map((messageRows ?? []).map((message) => [message.id, message]));
+    const labelsByStep = new Map(
+      assignmentConversations.map((conversation) => [conversation.stepId, conversation.label]),
+    );
+    setSharedAttachments(attachments.flatMap((attachment) => {
+      const message = messagesById.get(attachment.message_id);
+      if (!message) return [];
+      return [{
+        ...attachment,
+        sender_name: message.sender_name,
+        sender_role: message.sender_role,
+        routing_step_id: message.routing_step_id,
+        conversation_label: message.routing_step_id
+          ? labelsByStep.get(message.routing_step_id) ?? 'Office assignment conversation'
+          : 'Submitter conversation',
+      }];
+    }));
+  }, [assignmentConversations, submissionId, supabase]);
+
   const markMessagesRead = useCallback(async (rows: MessageRow[], readerId: string) => {
     const unreadMessages = rows.filter((message) => message.sender_id !== readerId);
     if (unreadMessages.length === 0) return;
@@ -160,6 +484,10 @@ export default function DocumentMessaging({
       .order('id', { ascending: false })
       .limit(PAGE_SIZE);
 
+    query = selectedThreadStepId
+      ? query.eq('routing_step_id', selectedThreadStepId)
+      : query.is('routing_step_id', null);
+
     if (before) {
       query = query.or(
         `created_at.lt.${before.created_at},and(created_at.eq.${before.created_at},id.lt.${before.id})`
@@ -173,7 +501,7 @@ export default function DocumentMessaging({
     await markMessagesRead(rows, readerId);
     const page = await refreshMessageMetadata(rows);
     return page.reverse();
-  }, [markMessagesRead, refreshMessageMetadata, submissionId, supabase]);
+  }, [markMessagesRead, refreshMessageMetadata, selectedThreadStepId, submissionId, supabase]);
 
   const refreshLatest = useCallback(async (readerId: string) => {
     const page = await fetchPage(readerId);
@@ -210,9 +538,11 @@ export default function DocumentMessaging({
       setMessages(page);
       setHasEarlier(page.length === PAGE_SIZE);
       setLoading(false);
+      await refreshSharedAttachments();
+      if (!active) return;
 
       channel = supabase
-        .channel(`document-messages-${submissionId}-${user.id}`)
+        .channel(`document-messages-${submissionId}-${selectedThreadStepId ?? 'submitter'}-${user.id}`)
         .on('postgres_changes', {
           event: 'INSERT',
           schema: 'public',
@@ -234,6 +564,7 @@ export default function DocumentMessaging({
             console.error('Live message attachment refresh failed:', loadError);
             if (active) setError(loadError instanceof Error ? loadError.message : 'Could not refresh attachments.');
           });
+          void refreshSharedAttachments();
         })
         .on('postgres_changes', {
           event: 'INSERT',
@@ -274,7 +605,7 @@ export default function DocumentMessaging({
       active = false;
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [fetchPage, refreshLatest, refreshVisibleMetadata, submissionId, supabase]);
+  }, [fetchPage, refreshLatest, refreshSharedAttachments, refreshVisibleMetadata, selectedThreadStepId, submissionId, supabase]);
 
   const loadEarlierMessages = async () => {
     const oldestMessage = messages[0];
@@ -302,8 +633,11 @@ export default function DocumentMessaging({
         && candidate.lastModified === file.lastModified
       ) === index
     );
-    if (combinedFiles.length > MAX_ATTACHMENTS) {
-      setError(`You can attach up to ${MAX_ATTACHMENTS} files per message.`);
+    const fileLimit = currentAction.value === 'forward' ? MAX_ATTACHMENTS - 1 : MAX_ATTACHMENTS;
+    if (combinedFiles.length > fileLimit) {
+      setError(currentAction.value === 'forward'
+        ? 'Forwarding includes the current document automatically and allows up to four additional files.'
+        : `You can attach up to ${MAX_ATTACHMENTS} files per message.`);
       return;
     }
     const typeError = getWorkflowFilesTypeError(combinedFiles);
@@ -321,27 +655,46 @@ export default function DocumentMessaging({
     setError('');
   };
 
-  const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const body = draft.trim();
-    if (!userId || !body || sending) return;
-    if (body.length > 5000) {
-      setError('Messages must be 5,000 characters or fewer.');
+  const handleConversationFileSelection = (files: File[]) => {
+    const combinedFiles = [...conversationFiles, ...files].filter((file, index, allFiles) =>
+      allFiles.findIndex((candidate) =>
+        candidate.name === file.name
+        && candidate.size === file.size
+        && candidate.lastModified === file.lastModified
+      ) === index
+    );
+    if (combinedFiles.length > MAX_ATTACHMENTS) {
+      setConversationError(`You can attach up to ${MAX_ATTACHMENTS} files per message.`);
       return;
     }
+    const typeError = getWorkflowFilesTypeError(combinedFiles);
+    if (typeError) {
+      setConversationError(typeError);
+      return;
+    }
+    const oversizedFile = combinedFiles.find((file) => file.size > MAX_ATTACHMENT_SIZE);
+    if (oversizedFile) {
+      setConversationError(`"${oversizedFile.name}" is larger than the 10 MB per-file limit.`);
+      return;
+    }
+    setConversationFiles(combinedFiles);
+    setConversationError('');
+  };
 
-    setSending(true);
-    setError('');
-    setNotice('');
-    const messageId = crypto.randomUUID();
-    const uploadedPaths: string[] = [];
-    let messageSent = false;
-
+  const uploadMessageAttachments = async (
+    files: File[],
+    messageId: string,
+    routingStepId: string | null = selectedThreadStepId,
+  ): Promise<{ rows: UploadedAttachment[]; paths: string[] }> => {
+    if (!userId) throw new Error('Sign in to send this message.');
+    const rows: UploadedAttachment[] = [];
+    const paths: string[] = [];
     try {
-      const attachmentRows = [];
-      for (const [index, file] of selectedFiles.entries()) {
+      for (const [index, file] of files.entries()) {
         const safeName = file.name.replace(/[^\w.-]/g, '_');
-        const filePath = `${submissionId}/${userId}/${messageId}/${crypto.randomUUID()}-${index}-${safeName}`;
+        const filePath = routingStepId
+          ? `${submissionId}/${userId}/${routingStepId}/${messageId}/${crypto.randomUUID()}-${index}-${safeName}`
+          : `${submissionId}/${userId}/${messageId}/${crypto.randomUUID()}-${index}-${safeName}`;
         const contentType = getWorkflowFileMimeType(file.name);
         const { error: uploadError } = await supabase.storage
           .from('workflow_message_attachments')
@@ -351,8 +704,8 @@ export default function DocumentMessaging({
           });
         if (uploadError) throw new Error(`Could not upload "${file.name}": ${uploadError.message}`);
 
-        uploadedPaths.push(filePath);
-        attachmentRows.push({
+        paths.push(filePath);
+        rows.push({
           submission_id: submissionId,
           message_id: messageId,
           uploaded_by: userId,
@@ -362,53 +715,294 @@ export default function DocumentMessaging({
           file_size: file.size,
         });
       }
+      return { rows, paths };
+    } catch (uploadError) {
+      if (paths.length > 0) {
+        const { error: cleanupError } = await supabase.storage
+          .from('workflow_message_attachments')
+          .remove(paths);
+        if (cleanupError) console.error('Unlinked attachment cleanup failed:', cleanupError.message);
+      }
+      throw uploadError;
+    }
+  };
 
+  const clearComposer = () => {
+    setDraft('');
+    setSelectedFiles([]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const refreshAfterSend = async (notify: (text: string) => void = setNotice) => {
+    if (!userId) return;
+    try {
+      await refreshLatest(userId);
+      await refreshSharedAttachments();
+    } catch (refreshError) {
+      console.error('Message was sent but the conversation did not refresh:', refreshError);
+      notify('Your action succeeded, but the conversation did not refresh. Reload this page to see the latest messages.');
+    }
+  };
+
+  const sendPlainMessage = async (
+    body: string,
+    files: File[],
+    notify: (text: string) => void = setNotice,
+    routingStepId: string | null = selectedThreadStepId,
+  ) => {
+    if (!userId) throw new Error('Sign in to send this message.');
+    const messageId = crypto.randomUUID();
+    const { rows, paths } = await uploadMessageAttachments(files, messageId, routingStepId);
+    let messageSent = false;
+    let attachmentsSaved = true;
+    try {
       const { error: messageError } = await supabase
         .from('workflow_messages')
         .insert({
           id: messageId,
           submission_id: submissionId,
+          routing_step_id: routingStepId,
           sender_id: userId,
           body,
         });
       if (messageError) throw new Error(`Could not send message: ${messageError.message}`);
       messageSent = true;
 
-      setDraft('');
-      setSelectedFiles([]);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-
-      if (attachmentRows.length > 0) {
+      if (rows.length > 0) {
         const { error: attachmentError } = await supabase
           .from('workflow_message_attachments')
-          .insert(attachmentRows);
+          .insert(rows);
         if (attachmentError) {
+          attachmentsSaved = false;
           console.error('Message was sent but its attachments were not saved:', attachmentError.message);
           const { error: cleanupError } = await supabase.storage
             .from('workflow_message_attachments')
-            .remove(uploadedPaths);
-          if (cleanupError) {
-            console.error('Unlinked message attachment cleanup failed:', cleanupError.message);
-          }
-          setNotice('Your message was sent, but its attachments could not be saved. Please try sending the files again.');
+            .remove(paths);
+          if (cleanupError) console.error('Unlinked message attachment cleanup failed:', cleanupError.message);
+          notify('Your message was sent, but its attachments could not be saved. Please try sending the files again.');
         }
       }
-
-      try {
-        await refreshLatest(userId);
-      } catch (refreshError) {
-        console.error('Message was sent but the conversation did not refresh:', refreshError);
-        setNotice('Your message was sent, but the conversation did not refresh. Reload this page to see the latest messages.');
-      }
+      return attachmentsSaved;
     } catch (sendError) {
-      console.error('Document message send failed:', sendError);
-      if (!messageSent && uploadedPaths.length > 0) {
+      if (!messageSent && paths.length > 0) {
         const { error: cleanupError } = await supabase.storage
           .from('workflow_message_attachments')
-          .remove(uploadedPaths);
+          .remove(paths);
         if (cleanupError) console.error('Unlinked message attachment cleanup failed:', cleanupError.message);
       }
-      setError(sendError instanceof Error ? sendError.message : 'Could not send this message.');
+      throw sendError;
+    }
+  };
+
+  const performWorkflowAction = async (action: ComposerAction) => {
+    if (!workflowComposer) return false;
+    const message = draft.trim();
+    const files = selectedFiles;
+    const needsMessage = action.requiresMessage ?? false;
+    if (needsMessage && !message) {
+      setError('Enter a message before continuing.');
+      messageInputRef.current?.focus();
+      return false;
+    }
+    if (message.length > 5000) {
+      setError('Messages must be 5,000 characters or fewer.');
+      messageInputRef.current?.focus();
+      return false;
+    }
+    if (action.value === 'respond_changes' && files.length > 1) {
+      setError('A changes response can include one revised document.');
+      return false;
+    }
+    if (action.value === 'close_submission' && files.length > 1) {
+      setError('Completing a submission can include one completion document.');
+      return false;
+    }
+    if (
+      !['send_message', 'forward', 'respond_changes', 'close_submission', 'complete_assignment', 'return_assignment'].includes(action.value)
+      && files.length > 0
+    ) {
+      setError('Attachments are not supported for this action.');
+      return false;
+    }
+
+    setSending(true);
+    setError('');
+    setNotice('');
+    try {
+      if (action.value === 'send_message') {
+        if (!message) throw new Error('Enter a message before sending.');
+        const actionThreadId = selectedRecipient === 'submitter'
+          ? null
+          : workflowComposer.activeAssignmentStepId ?? selectedThreadStepId;
+        const attachmentsSaved = await sendPlainMessage(message, files, setNotice, actionThreadId);
+        if (attachmentsSaved) setNotice('Message sent.');
+      } else if (action.value === 'forward') {
+        if (!userId) throw new Error('Sign in to forward this submission.');
+        if (!workflowComposer.sourceDocument?.filePath) {
+          throw new Error('The current document file is not available for automatic forwarding.');
+        }
+        if (files.length >= MAX_ATTACHMENTS) {
+          throw new Error('Forwarding includes the current document automatically and allows up to four additional files.');
+        }
+        const { data: currentDocumentBlob, error: documentError } = await supabase.storage
+          .from('workflow_uploads')
+          .download(workflowComposer.sourceDocument.filePath);
+        if (documentError || !currentDocumentBlob) {
+          throw new Error(`Could not load the current document: ${documentError?.message ?? 'File unavailable'}`);
+        }
+        const currentDocument = new File([currentDocumentBlob], fileName, {
+          type: workflowComposer.sourceDocument.fileType || 'application/octet-stream',
+        });
+        const messageId = crypto.randomUUID();
+        const assignmentId = crypto.randomUUID();
+        const { rows, paths } = await uploadMessageAttachments(
+          [currentDocument, ...files],
+          messageId,
+          assignmentId,
+        );
+        let forwarded = false;
+        try {
+          const { error: forwardError } = await supabase.rpc('forward_workflow_submission_to_office', {
+            target_submission_id: submissionId,
+            target_office_role: selectedRecipient.replace(/^office:/, ''),
+            message_id: messageId,
+            target_assignment_id: assignmentId,
+            message_body: message || null,
+            attachment_records: rows,
+          });
+          if (forwardError) throw new Error(forwardError.message);
+          forwarded = true;
+        } catch (forwardError) {
+          if (!forwarded && paths.length > 0) {
+            const { error: cleanupError } = await supabase.storage
+              .from('workflow_message_attachments')
+              .remove(paths);
+            if (cleanupError) console.error('Unlinked forwarded attachment cleanup failed:', cleanupError.message);
+          }
+          throw forwardError;
+        }
+        await workflowComposer.onForwarded?.();
+        setNotice(`Recommendation requested from ${recipientLabel}.`);
+      } else {
+        let actionFiles = files;
+        if (files.length > 0 && ['complete_assignment', 'return_assignment'].includes(action.value)) {
+          const attachmentsSaved = await sendPlainMessage(
+            'Supporting document shared for this assignment.',
+            files,
+            setNotice,
+            workflowComposer.activeAssignmentStepId ?? selectedThreadStepId,
+          );
+          if (!attachmentsSaved) {
+            throw new Error('The workflow action was not completed because the attached document could not be saved.');
+          }
+          setSelectedFiles([]);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          if (userId) await refreshLatest(userId);
+          await refreshSharedAttachments();
+          actionFiles = [];
+        }
+        await workflowComposer.onWorkflowAction(
+          action.value,
+          selectedRecipient,
+          message,
+          actionFiles,
+        );
+        setNotice(`${action.label} completed.`);
+      }
+
+      clearComposer();
+      setConfirmingAction(null);
+      if (action.value === 'close_submission') setCloseDialogOpen(false);
+      await refreshAfterSend();
+      messageInputRef.current?.focus();
+      return true;
+    } catch (actionError) {
+      console.error(`Workflow composer action "${action.value}" failed:`, actionError);
+      setError(actionError instanceof Error ? actionError.message : 'Could not complete this action.');
+      return false;
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const submitComposer = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!workflowComposer || sending || workflowComposer.busy || workflowComposer.isClosed) return;
+    const action = currentAction;
+    if (action.unavailableReason) {
+      setError(action.unavailableReason);
+      return;
+    }
+    if (action.requiresMessage && !draft.trim()) {
+      setError('Enter a message before continuing.');
+      messageInputRef.current?.focus();
+      return;
+    }
+    if (
+      !['send_message', 'forward', 'respond_changes', 'close_submission', 'complete_assignment', 'return_assignment'].includes(action.value)
+      && selectedFiles.length > 0
+    ) {
+      setError('Attachments are not supported for this action.');
+      return;
+    }
+    if (action.value === 'respond_changes' && selectedFiles.length > 1) {
+      setError('A changes response can include one revised document.');
+      return;
+    }
+    if (action.value === 'close_submission' && selectedFiles.length > 1) {
+      setError('Completing a submission can include one completion document.');
+      return;
+    }
+    if (action.value === 'forward' && selectedFiles.length >= MAX_ATTACHMENTS) {
+      setError('Forwarding includes the current document automatically and allows up to four additional files.');
+      return;
+    }
+    if (action.value === 'close_submission') {
+      setError('');
+      setCloseDialogOpen(true);
+      return;
+    }
+    if (action.confirmation) {
+      setConfirmingAction(action);
+      return;
+    }
+    await performWorkflowAction(action);
+  };
+
+  const sendConversationMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const body = conversationDraft.trim();
+    if (
+      !userId
+      || sending
+      || workflowComposer?.busy
+      || workflowComposer?.isClosed
+      || !canSendCurrentConversation
+    ) return;
+    if (!body) {
+      setConversationError('Write a message before sending.');
+      conversationInputRef.current?.focus();
+      return;
+    }
+    if (body.length > 5000) {
+      setConversationError('Messages must be 5,000 characters or fewer.');
+      conversationInputRef.current?.focus();
+      return;
+    }
+
+    setSending(true);
+    setConversationError('');
+    setConversationNotice('');
+    try {
+      await sendPlainMessage(body, conversationFiles, setConversationNotice);
+      setConversationDraft('');
+      setConversationFiles([]);
+      if (conversationFileInputRef.current) conversationFileInputRef.current.value = '';
+      await refreshAfterSend(setConversationNotice);
+      conversationInputRef.current?.focus();
+    } catch (sendError) {
+      console.error('Document conversation message send failed:', sendError);
+      setConversationError(sendError instanceof Error ? sendError.message : 'Could not send this message.');
     } finally {
       setSending(false);
     }
@@ -420,228 +1014,584 @@ export default function DocumentMessaging({
       .createSignedUrl(attachment.file_path, 300);
     if (urlError || !data?.signedUrl) {
       console.error('Could not authorize message attachment download:', urlError?.message);
-      setError('Could not open this attachment. Please try again.');
+      setConversationError('Could not open this attachment. Please try again.');
       return;
     }
     await downloadFile(data.signedUrl, attachment.file_name);
   };
 
-  const removeSelectedFile = (fileToRemove: File) => {
-    setSelectedFiles((current) => current.filter((file) => file !== fileToRemove));
-  };
+  // ─── Derived UI state ──────────────────────────────────────────────────────
+  const actionSubmitDisabled = sending
+    || !userId
+    || Boolean(workflowComposer?.busy)
+    || Boolean(workflowComposer?.isClosed)
+    || Boolean(currentAction.unavailableReason);
+  const actionSubmitLabel = sending || workflowComposer?.busy
+    ? 'Working...'
+    : currentAction.buttonLabel ?? currentAction.label;
+  const actionSubmitClasses = currentAction.tone === 'warning'
+    ? 'border border-pending-text bg-pending-bg text-pending-text hover:bg-pending-bg/70'
+    : currentAction.tone === 'neutral'
+      ? 'border border-warm-border bg-white text-warm-text hover:bg-sidebar'
+      : 'bg-clay text-white hover:bg-warm-text';
 
-  return (
-    <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-      <header className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-warm-border pb-4">
-        <div>
-          <h2 className="text-sm font-semibold text-warm-text">Document communication</h2>
-          <p className="mt-1 text-[11px] text-muted-text">
-            {trackingNumber || fileName} · Shared with the applicant and authorized workflow staff
-          </p>
+  const conversation = (
+    <div
+      ref={listRef}
+      aria-live="polite"
+      aria-relevant="additions text"
+      aria-label="Document messages"
+      className="max-h-[520px] min-h-64 space-y-5 overflow-y-auto p-5 md:p-6"
+    >
+      {hasEarlier && (
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={() => void loadEarlierMessages()}
+            disabled={loadingEarlier}
+            className="rounded-full border border-warm-border bg-card px-3.5 py-1.5 text-[10px] font-bold text-warm-text hover:bg-sidebar disabled:opacity-50"
+          >
+            {loadingEarlier ? 'Loading...' : 'Load earlier messages'}
+          </button>
         </div>
-        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-medium ${
-          liveStatus === 'connected' ? 'bg-approved-bg text-approved-text' : 'bg-sidebar text-muted-text'
-        }`}>
-          <span className="h-1.5 w-1.5 rounded-full bg-current" />
-          {liveStatus === 'connected'
-            ? 'Live conversation'
-            : liveStatus === 'disconnected'
-              ? 'Live updates paused'
-              : 'Connecting...'}
-        </span>
-      </header>
-
-      <div role="tablist" aria-label="Document communication" className="mb-4 flex gap-2 border-b border-warm-border">
-        <button
-          id={`messages-tab-${submissionId}`}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'messages'}
-          aria-controls={`messages-panel-${submissionId}`}
-          onClick={() => setActiveTab('messages')}
-          className={`border-b-2 px-3 py-2 text-[11px] font-semibold ${
-            activeTab === 'messages'
-              ? 'border-clay text-clay'
-              : 'border-transparent text-muted-text hover:text-warm-text'
-          }`}
-        >
-          Messages
-        </button>
-        <button
-          id={`activity-tab-${submissionId}`}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'activity'}
-          aria-controls={`activity-panel-${submissionId}`}
-          onClick={() => setActiveTab('activity')}
-          className={`border-b-2 px-3 py-2 text-[11px] font-semibold ${
-            activeTab === 'activity'
-              ? 'border-clay text-clay'
-              : 'border-transparent text-muted-text hover:text-warm-text'
-          }`}
-        >
-          Activity
-        </button>
-      </div>
-
-      {activeTab === 'activity' ? (
-        <div
-          id={`activity-panel-${submissionId}`}
-          role="tabpanel"
-          aria-labelledby={`activity-tab-${submissionId}`}
-        >
-          {activity}
+      )}
+      {loading ? (
+        <p className="py-10 text-center text-xs text-muted-text">Loading conversation...</p>
+      ) : messages.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-10 text-center">
+          <span className="grid h-10 w-10 place-items-center rounded-full bg-sidebar text-muted-text">
+            <Icon name="message" size={18} />
+          </span>
+          <p className="text-xs font-semibold text-warm-text">No messages yet</p>
+          <p className="max-w-xs text-[11px] leading-relaxed text-muted-text">
+            Write a message below to start the conversation about this document.
+          </p>
         </div>
       ) : (
-        <div
-          id={`messages-panel-${submissionId}`}
-          role="tabpanel"
-          aria-labelledby={`messages-tab-${submissionId}`}
-        >
-      <div
-        aria-live="polite"
-        aria-relevant="additions text"
-        aria-label="Document messages"
-        className="max-h-[460px] space-y-3 overflow-y-auto rounded-xl bg-sidebar/60 p-3 max-md:p-2"
-      >
-        {hasEarlier && (
-          <div className="flex justify-center">
-            <button
-              type="button"
-              onClick={() => void loadEarlierMessages()}
-              disabled={loadingEarlier}
-              className="rounded-full border border-warm-border bg-card px-3 py-1.5 text-[10px] font-semibold text-warm-text disabled:opacity-50"
-            >
-              {loadingEarlier ? 'Loading...' : 'Load earlier messages'}
-            </button>
-          </div>
-        )}
-        {loading ? (
-          <p className="py-8 text-center text-xs text-muted-text">Loading conversation...</p>
-        ) : messages.length === 0 ? (
-          <p className="py-8 text-center text-xs text-muted-text">
-            No messages yet. Send a message to start the conversation about this document.
-          </p>
-        ) : (
-          messages.map((message) => {
-            const isOwnMessage = message.sender_id === userId;
-            return (
-              <article
-                key={message.id}
-                className={`flex ${isOwnMessage ? 'justify-end' : 'justify-start'}`}
-              >
-                <div className={`max-w-[min(90%,42rem)] rounded-2xl px-4 py-3 ${
-                  isOwnMessage
-                    ? 'rounded-br-md bg-clay text-white'
-                    : 'rounded-bl-md border border-warm-border bg-card text-warm-text'
-                }`}>
-                  <div className={`mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] ${
-                    isOwnMessage ? 'text-white/75' : 'text-muted-text'
-                  }`}>
-                    <span className={`font-semibold ${isOwnMessage ? 'text-white' : 'text-warm-text'}`}>
-                      {isOwnMessage ? 'You' : message.sender_name}
+        messages.map((message) => {
+          const isOwnMessage = message.sender_id === userId;
+          const stamp = new Date(message.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+          const role = message.sender_role.replaceAll('_', ' ');
+          const attachmentList = message.attachments.length > 0 && (
+            <ul className={`mt-3 space-y-1.5 border-t pt-2 ${isOwnMessage ? 'border-white/25' : 'border-warm-border'}`}>
+              {message.attachments.map((attachment) => (
+                <li key={attachment.id}>
+                  <button
+                    type="button"
+                    onClick={() => void downloadAttachment(attachment)}
+                    className={`inline-flex max-w-full items-center gap-1.5 text-left text-[11px] font-bold hover:underline ${
+                      isOwnMessage ? 'text-white' : 'text-clay'
+                    }`}
+                  >
+                    <Icon name="file" size={13} />
+                    <span className="truncate">{attachment.file_name}</span>
+                    <span className="shrink-0 font-medium opacity-75">
+                      ({(attachment.file_size / 1024).toFixed(0)} KB)
                     </span>
-                    <span className="capitalize">{message.sender_role.replaceAll('_', ' ')}</span>
-                    <time dateTime={message.created_at}>
-                      {new Date(message.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
-                    </time>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          );
+
+          if (isOwnMessage) {
+            return (
+              <article key={message.id} className="flex justify-end">
+                <div className="max-w-[min(85%,36rem)] text-right">
+                  <div className="mb-1.5 flex flex-wrap items-baseline justify-end gap-2">
+                    <span className="text-[10px] text-muted-text">You · {stamp}</span>
+                    <p className="text-xs font-bold text-warm-text">{message.sender_name}</p>
                   </div>
-                  <p className="whitespace-pre-wrap break-words text-xs leading-relaxed">{message.body}</p>
-                  {message.attachments.length > 0 && (
-                    <ul className={`mt-3 space-y-1.5 border-t pt-2 ${
-                      isOwnMessage ? 'border-white/20' : 'border-warm-border'
-                    }`}>
-                      {message.attachments.map((attachment) => (
-                        <li key={attachment.id}>
-                          <button
-                            type="button"
-                            onClick={() => void downloadAttachment(attachment)}
-                            className={`max-w-full truncate text-left text-[11px] font-semibold underline underline-offset-2 ${
-                              isOwnMessage ? 'text-white' : 'text-clay'
-                            }`}
-                          >
-                            {attachment.file_name} ({(attachment.file_size / 1024).toFixed(0)} KB)
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {isOwnMessage && (
-                    <p className="mt-1.5 text-right text-[9px] text-white/70">
-                      {message.readCount > 0
-                        ? `Seen by ${message.readCount} participant${message.readCount === 1 ? '' : 's'}`
-                        : 'Sent'}
-                    </p>
-                  )}
+                  <div className="rounded-l-xl rounded-br-xl bg-clay px-4 py-3 text-left text-white">
+                    <p className="whitespace-pre-wrap break-words text-xs leading-relaxed">{message.body}</p>
+                    {attachmentList}
+                  </div>
+                  <p className="mt-1 text-[9px] text-muted-text">
+                    {message.readCount > 0
+                      ? `Seen by ${message.readCount} participant${message.readCount === 1 ? '' : 's'}`
+                      : 'Sent'}
+                  </p>
                 </div>
               </article>
             );
-          })
-        )}
+          }
+
+          return (
+            <article key={message.id} className="flex gap-3">
+              <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#dce4dc] text-[10px] font-bold text-[#486049]">
+                {getInitials(message.sender_name)}
+              </div>
+              <div className="min-w-0 max-w-[min(85%,36rem)]">
+                <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
+                  <p className="text-xs font-bold text-warm-text">{message.sender_name}</p>
+                  <span className="text-[10px] capitalize text-muted-text">{role} · {stamp}</span>
+                </div>
+                <div className="rounded-r-xl rounded-bl-xl bg-sidebar px-4 py-3 text-warm-text">
+                  <p className="whitespace-pre-wrap break-words text-xs leading-relaxed">{message.body}</p>
+                  {attachmentList}
+                </div>
+              </div>
+            </article>
+          );
+        })
+      )}
+    </div>
+  );
+  const conversationLabel = selectedThreadStepId
+    ? selectedAssignmentConversation?.label ?? 'Office assignment conversation'
+    : 'Submitter conversation';
+  const canChooseConversation = assignmentConversations.length > 1
+    || (canViewSubmitterConversation && assignmentConversations.length > 0);
+
+  return (
+    <section className="space-y-5">
+      {workflowComposer && workflowComposer.showStatusLine !== false && (
+        <div className="flex items-center gap-2.5 rounded-xl border border-warm-border bg-card px-4 py-2.5 text-[11px] font-medium text-muted-text" role="status">
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-clay" />
+          {workflowComposer.statusLine}
+        </div>
+      )}
+
+      {/* ── Messages (70%) + Activity (30%) side by side ── */}
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)]">
+        <section className="min-w-0 overflow-hidden rounded-2xl border border-warm-border bg-card">
+          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-warm-border px-5 py-4 md:px-6">
+            <div className="flex items-center gap-2.5">
+              <span className="text-clay"><Icon name="message" size={17} /></span>
+              <div>
+                <h3 className="text-sm font-bold text-warm-text">Messages</h3>
+                <p className="mt-0.5 text-[10px] text-muted-text">
+                  {trackingNumber || fileName} · {conversationLabel}
+                </p>
+              </div>
+              <span className="rounded-full bg-clay-soft px-2 py-0.5 text-[10px] font-bold text-clay">{messages.length}</span>
+            </div>
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold ${
+              liveStatus === 'connected' ? 'bg-approved-bg text-approved-text' : 'bg-sidebar text-muted-text'
+            }`}>
+              <span className={`h-1.5 w-1.5 rounded-full bg-current ${liveStatus === 'connecting' ? 'animate-pulse' : ''}`} />
+              {liveStatus === 'connected' ? 'Live' : liveStatus === 'disconnected' ? 'Paused' : 'Connecting...'}
+            </span>
+          </header>
+
+          {canChooseConversation && (
+            <nav
+              aria-label="Choose conversation"
+              className="flex flex-wrap gap-2 border-b border-warm-border bg-[#fbf9f6] px-4 py-3 md:px-5"
+            >
+              {canViewSubmitterConversation && (
+                <button
+                  type="button"
+                  aria-pressed={selectedThreadStepId === null}
+                  onClick={() => {
+                    setSelectedThreadStepId(null);
+                    setConversationDraft('');
+                    setConversationFiles([]);
+                    setConversationError('');
+                  }}
+                  className={`rounded-full border px-3 py-1.5 text-[10px] font-bold transition-colors ${
+                    selectedThreadStepId === null
+                      ? 'border-clay bg-clay text-white'
+                      : 'border-warm-border bg-white text-warm-text hover:border-clay'
+                  }`}
+                >
+                  Submitter conversation
+                </button>
+              )}
+              {assignmentConversations.map((thread) => (
+                <button
+                  key={thread.stepId}
+                  type="button"
+                  aria-pressed={selectedThreadStepId === thread.stepId}
+                  onClick={() => {
+                    setSelectedThreadStepId(thread.stepId);
+                    setConversationDraft('');
+                    setConversationFiles([]);
+                    setConversationError('');
+                  }}
+                  className={`rounded-full border px-3 py-1.5 text-[10px] font-bold transition-colors ${
+                    selectedThreadStepId === thread.stepId
+                      ? 'border-clay bg-clay text-white'
+                      : 'border-warm-border bg-white text-warm-text hover:border-clay'
+                  }`}
+                >
+                  {thread.label}
+                </button>
+              ))}
+            </nav>
+          )}
+
+          <div id={`messages-panel-${submissionId}`}>{conversation}</div>
+
+          <form
+            onSubmit={(event) => void sendConversationMessage(event)}
+            className="space-y-3 border-t border-warm-border bg-[#f8f5f1] p-4 md:p-5"
+          >
+            {!workflowComposer && error && (
+              <p role="alert" className="rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">{error}</p>
+            )}
+            {conversationError && (
+              <p role="alert" className="rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">{conversationError}</p>
+            )}
+            {conversationNotice && (
+              <p role="status" className="rounded-xl border border-pending-bg bg-pending-bg/50 px-4 py-3 text-xs font-medium text-pending-text">{conversationNotice}</p>
+            )}
+            <label htmlFor={`conversation-message-${submissionId}`} className="sr-only">
+              Write a message in {conversationLabel}
+            </label>
+            <textarea
+              ref={conversationInputRef}
+              id={`conversation-message-${submissionId}`}
+              value={conversationDraft}
+              onChange={(event) => {
+                setConversationDraft(event.target.value);
+                setConversationError('');
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              maxLength={5000}
+              rows={3}
+              disabled={conversationDisabled}
+              placeholder={`Write a message in ${conversationLabel}…`}
+              className="block min-h-20 w-full resize-y rounded-xl border border-warm-border bg-white p-3 text-xs leading-relaxed text-warm-text outline-none placeholder:text-muted-text/70 focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:bg-sidebar disabled:opacity-70"
+            />
+            <FileChips
+              files={conversationFiles}
+              disabled={sending}
+              onRemove={(file) => setConversationFiles((current) => current.filter((selected) => selected !== file))}
+            />
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <AttachControl
+                id={`conversation-files-${submissionId}`}
+                inputRef={conversationFileInputRef}
+                disabled={conversationDisabled}
+                limit={MAX_ATTACHMENTS}
+                onFiles={handleConversationFileSelection}
+              />
+              <div className="flex items-center gap-3">
+                <span className="hidden text-[9px] text-muted-text md:block">
+                  {conversationDraft.length}/5000 · Ctrl + Enter to send
+                </span>
+                <button
+                  type="submit"
+                  disabled={conversationDisabled}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-clay px-5 text-[11px] font-bold text-white transition-colors hover:bg-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {sending ? 'Sending...' : 'Send message'} <Icon name="send" size={14} />
+                </button>
+              </div>
+            </div>
+            {workflowComposer?.isClosed && (
+              <p role="status" className="text-[11px] font-medium text-muted-text">
+                {workflowComposer.closedMessage ?? 'This submission is completed.'}
+              </p>
+            )}
+            {!canSendCurrentConversation && !workflowComposer?.busy && (
+              <p role="status" className="text-[11px] font-medium text-muted-text">
+                This conversation is closed for new messages.
+              </p>
+            )}
+            {workflowComposer?.busy && !sending && (
+              <p role="status" className="text-[11px] font-medium text-muted-text">
+                Messaging is temporarily unavailable while the submission is updating.
+              </p>
+            )}
+            {!workflowComposer && notice && (
+              <p role="status" className="text-[11px] font-medium text-pending-text">{notice}</p>
+            )}
+          </form>
+        </section>
+
+        <aside className="min-w-0 space-y-5">
+          <section className="overflow-hidden rounded-2xl border border-warm-border bg-card">
+            <header className="flex items-center gap-2.5 border-b border-warm-border px-5 py-4">
+              <span className="text-clay"><Icon name="clock" size={17} /></span>
+              <div>
+                <h3 className="text-sm font-bold text-warm-text">Activity</h3>
+                <p className="mt-0.5 text-[10px] text-muted-text">Workflow history and audit events</p>
+              </div>
+            </header>
+            <div className="max-h-[560px] overflow-y-auto p-5">{activity}</div>
+          </section>
+        </aside>
       </div>
 
-      {error && <p role="alert" className="mt-3 text-xs text-rejected-text">{error}</p>}
-      {notice && <p role="status" className="mt-3 text-xs text-pending-text">{notice}</p>}
-
-      <form onSubmit={(event) => void sendMessage(event)} className="mt-4 space-y-3">
-        <label htmlFor={`message-${submissionId}`} className="sr-only">Write a message</label>
-        <textarea
-          id={`message-${submissionId}`}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          disabled={sending}
-          maxLength={5000}
-          rows={3}
-          placeholder="Write a message about this document..."
-          className="w-full resize-y rounded-xl border border-warm-border bg-cream px-3 py-2.5 text-xs text-warm-text outline-none focus:border-clay"
-        />
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0 flex-1">
-            <label htmlFor={`message-files-${submissionId}`} className="mb-1 block text-[10px] font-medium text-muted-text">
-              Attach files (up to {MAX_ATTACHMENTS}, 10 MB each)
-            </label>
-            <input
-              ref={fileInputRef}
-              id={`message-files-${submissionId}`}
-              type="file"
-              accept={WORKFLOW_ATTACHMENT_ACCEPT}
-              multiple
-              disabled={sending}
-              onChange={(event) => {
-                handleFileSelection(Array.from(event.target.files ?? []));
-                event.target.value = '';
-              }}
-              className="block w-full text-[10px] text-muted-text file:mr-2 file:rounded-full file:border-0 file:bg-sidebar file:px-3 file:py-2 file:text-[10px] file:font-semibold file:text-clay"
-            />
-            {selectedFiles.length > 0 && (
-              <ul className="mt-2 flex flex-wrap gap-1.5">
-                {selectedFiles.map((file) => (
-                  <li key={`${file.name}-${file.size}-${file.lastModified}`} className="inline-flex max-w-full items-center gap-2 rounded-full bg-sidebar px-2.5 py-1 text-[10px] text-warm-text">
-                    <span className="max-w-52 truncate">{file.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeSelectedFile(file)}
-                      disabled={sending}
-                      aria-label={`Remove ${file.name}`}
-                      className="font-bold text-muted-text hover:text-rejected-text"
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+      <section className="overflow-hidden rounded-2xl border border-warm-border bg-card">
+        <header className="flex items-center justify-between gap-2 border-b border-warm-border px-5 py-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="shrink-0 text-clay"><Icon name="paperclip" size={17} /></span>
+            <div>
+              <h3 className="text-sm font-bold text-warm-text">Shared files</h3>
+              <p className="mt-0.5 text-[10px] text-muted-text">Files shared in messages and office actions</p>
+            </div>
           </div>
-          <button
-            type="submit"
-            disabled={sending || loading || !userId || !draft.trim()}
-            className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+          <span className="shrink-0 rounded-full bg-sidebar px-2.5 py-1 text-[10px] font-bold text-muted-text">
+            {sharedAttachments.length}
+          </span>
+        </header>
+        <div className="max-h-64 overflow-y-auto p-4">
+          {sharedAttachments.length === 0 ? (
+            <p className="rounded-xl bg-sidebar/60 px-4 py-3 text-[11px] text-muted-text">No files shared yet.</p>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {sharedAttachments.map((attachment) => (
+                <button
+                  key={attachment.id}
+                  type="button"
+                  onClick={() => void downloadAttachment(attachment)}
+                  className="flex w-full min-w-0 items-center gap-3 rounded-xl border border-warm-border bg-white px-3 py-2.5 text-left text-warm-text transition-colors hover:border-clay"
+                >
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-clay-soft text-clay">
+                    <Icon name="file" size={16} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[11px] font-semibold">{attachment.file_name}</span>
+                    <span className="mt-0.5 block truncate text-[9px] text-muted-text">
+                      {Math.max(1, Math.round(attachment.file_size / 1024))} KB
+                      {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
+                    </span>
+                    <span className="mt-0.5 block truncate text-[9px] text-muted-text">
+                      {attachment.conversation_label} · {attachment.sender_name}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-[10px] font-semibold text-clay">Open</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {afterSharedFiles}
+
+      {/* ── Your office action ── */}
+      {workflowComposer && workflowComposer.showWorkflowActions !== false && (
+        <div className="space-y-3">
+          {error && (
+            <p role="alert" className="rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">{error}</p>
+          )}
+          {notice && (
+            <p role="status" className="rounded-xl border border-approved-bg bg-approved-bg/50 px-4 py-3 text-xs font-medium text-approved-text">{notice}</p>
+          )}
+          <form
+            onSubmit={(event) => void submitComposer(event)}
+            className="overflow-hidden rounded-2xl border border-warm-border bg-card shadow-[0_10px_30px_rgba(65,49,39,0.06)]"
           >
-            {sending ? 'Sending...' : 'Send message'}
-          </button>
+            <header className="border-b border-warm-border px-5 py-4 md:px-6">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-clay">
+                {isOfficeWorkspace ? 'Your office action' : 'Submission response'}
+              </p>
+              <h3 className="mt-1 font-serif text-xl font-semibold text-warm-text">
+                {isOfficeWorkspace ? 'Process this request' : 'Respond to this request'}
+              </h3>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-text">
+                {isOfficeWorkspace
+                  ? 'Review the request, communicate as needed, and complete it when your office has finished processing.'
+                  : 'Choose an available action and add a note when needed.'}
+              </p>
+            </header>
+
+            <div className="space-y-4 bg-[#f8f5f1] p-5 md:p-6">
+              {workflowComposer.contextNote && (
+                <p className="whitespace-pre-wrap rounded-xl border border-pending-bg bg-pending-bg/40 px-3 py-2 text-[11px] text-warm-text">
+                  {workflowComposer.contextNote}
+                </p>
+              )}
+              {workflowComposer.renderActionFields?.(currentAction.value)}
+
+              <div>
+                <label htmlFor={`message-${submissionId}`} className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+                  Action details
+                </label>
+                <textarea
+                  ref={messageInputRef}
+                  id={`message-${submissionId}`}
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                      event.preventDefault();
+                      event.currentTarget.form?.requestSubmit();
+                    }
+                  }}
+                  disabled={actionDisabled}
+                  maxLength={5000}
+                  rows={4}
+                  placeholder={currentAction.requiresMessage
+                    ? currentAction.value === 'respond_changes'
+                      ? 'Explain how you addressed the requested changes (required)…'
+                      : 'Provide the required details for this action…'
+                    : 'Provide context or add a note (optional)…'}
+                  className="block min-h-28 w-full resize-y rounded-xl border border-warm-border bg-white p-3 text-xs leading-relaxed text-warm-text outline-none placeholder:text-muted-text/70 focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:bg-sidebar disabled:opacity-70"
+                />
+                <p className="mt-1 text-right text-[9px] text-muted-text">{draft.length}/5000</p>
+              </div>
+
+              <FileChips
+                files={selectedFiles}
+                disabled={actionDisabled}
+                onRemove={(file) => setSelectedFiles((current) => current.filter((selected) => selected !== file))}
+              />
+
+              <div className="flex flex-wrap items-center gap-2 border-t border-warm-border/70 pt-3">
+                <AttachControl
+                  id={`message-files-${submissionId}`}
+                  inputRef={fileInputRef}
+                  disabled={actionDisabled}
+                  limit={actionAttachLimit}
+                  onFiles={handleFileSelection}
+                  compact
+                />
+                <div className="flex min-w-0 flex-wrap items-center justify-start gap-2">
+                  <label className="sr-only" htmlFor={`recipient-${submissionId}`}>Recipient</label>
+                  <select
+                    id={`recipient-${submissionId}`}
+                    aria-label="To"
+                    value={selectedRecipient}
+                    onChange={(event) => {
+                      const recipient = event.target.value;
+                      setSelectedRecipient(recipient);
+                      setSelectedAction(getDefaultAction(getActionList(
+                        workflowComposer.actionsByRecipient[recipient]
+                      )).value);
+                      setError('');
+                    }}
+                    disabled={actionDisabled}
+                    className="h-10 w-36 max-w-full cursor-pointer rounded-full border border-warm-border bg-white px-3 text-xs font-medium text-warm-text outline-none transition-colors duration-200 hover:border-clay focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {workflowComposer.recipients.map((recipient) => (
+                      <option key={recipient.value} value={recipient.value}>{recipient.label}</option>
+                    ))}
+                  </select>
+                  <label className="sr-only" htmlFor={`action-${submissionId}`}>Action</label>
+                  <select
+                    id={`action-${submissionId}`}
+                    aria-label="Action"
+                    value={currentAction.value}
+                    onChange={(event) => {
+                      setSelectedAction(event.target.value);
+                      setError('');
+                    }}
+                    disabled={actionDisabled}
+                    className="h-10 w-36 max-w-full cursor-pointer rounded-full border border-warm-border bg-white px-3 text-xs font-medium text-warm-text outline-none transition-colors duration-200 hover:border-clay focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {actionGroups.map((group) => group.label ? (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.actions.map(renderActionOption)}
+                      </optgroup>
+                    ) : group.actions.map(renderActionOption))}
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  disabled={actionSubmitDisabled}
+                  className={`ml-auto inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full px-5 text-[11px] font-bold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 ${actionSubmitClasses}`}
+                >
+                  {actionSubmitLabel} <Icon name="send" size={14} />
+                </button>
+              </div>
+              {currentAction.unavailableReason && (
+                <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-pending-text" role="status">
+                  <span className="mt-0.5 shrink-0"><Icon name="info" size={13} /></span>
+                  {currentAction.unavailableReason}
+                </p>
+              )}
+              {currentAction.description && (
+                <p className="text-[10px] leading-relaxed text-muted-text" aria-live="polite">
+                  {currentAction.description}
+                </p>
+              )}
+
+              {workflowComposer.isClosed && (
+                <p className="text-xs font-medium text-muted-text" role="status">
+                  {workflowComposer.closedMessage ?? 'This submission is completed.'}
+                </p>
+              )}
+              {workflowComposer.busy && !sending && (
+                <p className="text-xs font-medium text-muted-text" role="status">
+                  This submission is being updated. Messaging and attachments will be available when the action finishes.
+                </p>
+              )}
+              {!workflowComposer.isClosed && !workflowComposer.busy && !userId && !loading && (
+                <p className="text-xs font-medium text-rejected-text" role="alert">
+                  Your session could not be verified. Sign in again to send messages or attach files.
+                </p>
+              )}
+            </div>
+          </form>
         </div>
-      </form>
-        </div>
+      )}
+
+      {workflowComposer && (
+        <>
+          {confirmingAction && (
+            <div
+              className="fixed inset-0 z-50 grid place-items-center bg-[#302c29]/45 p-4 backdrop-blur-[2px]"
+              onMouseDown={() => setConfirmingAction(null)}
+            >
+              <section
+                role="alertdialog"
+                aria-modal="true"
+                aria-labelledby={`confirm-${submissionId}-title`}
+                onMouseDown={(event) => event.stopPropagation()}
+                className="w-full max-w-md rounded-2xl border border-warm-border bg-card p-6 shadow-2xl"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <span className="grid h-11 w-11 place-items-center rounded-full bg-pending-bg text-pending-text">
+                    <Icon name="info" size={20} />
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingAction(null)}
+                    aria-label="Close dialog"
+                    className="grid h-8 w-8 place-items-center rounded-full text-muted-text hover:bg-sidebar"
+                  >
+                    <Icon name="x" size={17} />
+                  </button>
+                </div>
+                <h2 id={`confirm-${submissionId}-title`} className="mt-5 font-serif text-2xl font-semibold text-warm-text">
+                  Confirm {confirmingAction.label.toLowerCase()}?
+                </h2>
+                <p className="mt-2 text-xs leading-relaxed text-muted-text">{confirmingAction.confirmation}</p>
+                <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingAction(null)}
+                    className="h-10 rounded-full border border-warm-border px-5 text-xs font-bold text-warm-text hover:bg-sidebar"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void performWorkflowAction(confirmingAction)}
+                    disabled={sending || workflowComposer.busy}
+                    className="h-10 rounded-full bg-clay px-5 text-xs font-bold text-white hover:bg-warm-text disabled:opacity-50"
+                  >
+                    {sending || workflowComposer.busy ? 'Working...' : confirmingAction.label}
+                  </button>
+                </div>
+              </section>
+            </div>
+          )}
+          <CloseSubmissionDialog
+            open={closeDialogOpen}
+            pendingAssignmentCount={workflowComposer.pendingAssignmentCount ?? 0}
+            updating={sending || Boolean(workflowComposer.busy)}
+            error={error}
+            note={draft}
+            file={selectedFiles[0] ?? null}
+            onCancel={() => setCloseDialogOpen(false)}
+            onConfirm={() => {
+              const action = workflowComposer.actionsByRecipient[selectedRecipient]
+                ?.find((candidate) => candidate.value === 'close_submission');
+              if (action) void performWorkflowAction(action);
+            }}
+          />
+        </>
       )}
     </section>
   );

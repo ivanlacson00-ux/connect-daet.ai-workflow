@@ -3,9 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
-import { OFFICE_CONFIG, type OfficeRole } from '@/lib/workflow/offices';
-import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
-import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
+import {
+  getWorkflowDocumentTypeLabel,
+  getOfficeFileManagementPath,
+  OFFICE_CONFIG,
+  type OfficeRole,
+} from '@/lib/workflow/offices';
+import {
+  matchesOfficeDashboardFilter,
+  type OfficeDashboardFilter,
+} from '@/lib/workflow/office-dashboard';
+import { getSubmissionStatusLabel } from '@/lib/workflow/status';
 
 interface Submission {
   id: string;
@@ -13,58 +21,46 @@ interface Submission {
   file_name: string;
   file_type: string | null;
   category: string | null;
+  other_document_type: string | null;
   status: string;
   created_at: string;
   selected_office_role: string | null;
+  initial_destination_role: string | null;
   officeRecord: {
     status: string;
     comments: string | null;
     decided_at: string | null;
+    completed_at: string | null;
   } | null;
 }
 
-type Filter = 'all' | 'needs_review' | 'with_mayor' | 'completed' | 'rejected' | 'processed';
+type Filter = OfficeDashboardFilter;
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All assigned documents' },
-  { key: 'needs_review', label: 'Needs review' },
-  { key: 'with_mayor', label: 'With Mayor' },
-  { key: 'completed', label: 'Completed' },
-  { key: 'rejected', label: 'Rejected' },
+  { key: 'needs_action', label: 'Needs action' },
+  { key: 'changes_requested', label: 'Changes Requested' },
+  { key: 'completed', label: 'Completed submissions' },
+  { key: 'returned', label: 'Returned' },
+  { key: 'withdrawn', label: 'Withdrawn' },
   { key: 'processed', label: 'Processed by this office' },
 ];
 
-function matchesFilter(submission: Submission, filter: Filter, role: OfficeRole) {
-  switch (filter) {
-    case 'needs_review':
-      return submission.status === 'pending_office'
-        && submission.selected_office_role === role;
-    case 'with_mayor':
-      return submission.status === 'pending_mayor'
-        || (role === 'mayor_office'
-          && submission.status === 'pending_office'
-          && submission.selected_office_role === role);
-    case 'completed':
-      return submission.status === 'completed';
-    case 'rejected':
-      return submission.status.startsWith('declined_by_');
-    case 'processed':
-      return submission.officeRecord?.status === 'approved'
-        || submission.officeRecord?.status === 'rejected';
-    default:
-      return true;
-  }
+function statusLabel(status: string, assignment = false) {
+  if (assignment && ['pending', 'in_progress'].includes(status)) return 'Pending assignment';
+  return getSubmissionStatusLabel(status);
 }
 
-function statusLabel(status: string) {
-  return status.replaceAll('_', ' ');
-}
-
-export default function OfficeDashboard({ role }: { role: OfficeRole }) {
+export default function OfficeDashboard({
+  role,
+  view,
+}: {
+  role: OfficeRole;
+  view: 'dashboard' | 'file-management';
+}) {
   const office = OFFICE_CONFIG[role];
   const supabase = useMemo(() => createClient(), []);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const routesBySubmission = useRoutePreviews(submissions);
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -73,7 +69,7 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
   const fetchSubmissions = useCallback(async () => {
     const { data: plans, error: plansError } = await supabase
       .from('workflow_routing_plans')
-      .select('id, submission_id, version')
+      .select('id, submission_id, version, is_current')
       .in('status', ['finalized', 'superseded'])
       .order('created_at', { ascending: false })
       .limit(500);
@@ -90,16 +86,19 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
     const planIds = (plans ?? []).map((plan) => plan.id);
     let routeSteps: {
       routing_plan_id: string;
+      office_role: string;
+      assigned_by_role: string | null;
       status: string;
       comments: string | null;
       decided_at: string | null;
+      completed_at: string | null;
     }[] = [];
 
     if (planIds.length > 0) {
       const { data: steps, error: stepsError } = await supabase
         .from('workflow_routing_steps')
-        .select('routing_plan_id, status, comments, decided_at')
-        .eq('office_role', role)
+        .select('routing_plan_id, office_role, assigned_by_role, status, comments, decided_at, completed_at')
+        .or(`office_role.eq.${role},assigned_by_role.eq.${role}`)
         .neq('status', 'skipped')
         .in('routing_plan_id', planIds);
 
@@ -115,7 +114,7 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
 
     const officeRecords = new Map<
       string,
-      { status: string; comments: string | null; decided_at: string | null; version: number }
+      { status: string; comments: string | null; decided_at: string | null; completed_at: string | null; version: number }
     >();
     for (const step of routeSteps) {
       const plan = planById.get(step.routing_plan_id);
@@ -127,19 +126,23 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
           status: step.status,
           comments: step.comments,
           decided_at: step.decided_at,
+          completed_at: step.completed_at,
           version: plan.version,
         });
       }
     }
+    const activeRouteSubmissionIds = routeSteps
+      .filter((step) => step.status === 'pending' || step.status === 'in_progress')
+      .map((step) => planById.get(step.routing_plan_id))
+      .filter((plan): plan is NonNullable<typeof plan> => Boolean(plan?.is_current))
+      .map((plan) => plan.submission_id);
 
     let currentAssignmentsQuery = supabase
       .from('workflow_submissions')
       .select('id')
       .order('created_at', { ascending: false })
       .limit(200);
-    currentAssignmentsQuery = role === 'mayor_office'
-      ? currentAssignmentsQuery.or('selected_office_role.eq.mayor_office,status.eq.pending_mayor')
-      : currentAssignmentsQuery.eq('selected_office_role', role);
+    currentAssignmentsQuery = currentAssignmentsQuery.eq('selected_office_role', role);
     const { data: currentAssignments, error: assignmentsError } = await currentAssignmentsQuery;
 
     if (assignmentsError) {
@@ -151,6 +154,7 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
 
     const submissionIds = Array.from(new Set([
       ...officeRecords.keys(),
+      ...activeRouteSubmissionIds,
       ...(currentAssignments ?? []).map((submission) => submission.id),
     ]));
 
@@ -162,7 +166,7 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
 
     const { data, error: fetchError } = await supabase
       .from('workflow_submissions')
-      .select('id, tracking_number, file_name, file_type, category, status, created_at, selected_office_role')
+      .select('id, tracking_number, file_name, file_type, category, other_document_type, status, created_at, selected_office_role, initial_destination_role')
       .in('id', submissionIds)
       .order('created_at', { ascending: false })
       .limit(200);
@@ -176,11 +180,6 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
 
     setSubmissions((data ?? []).map((submission) => {
       const officeRecord = officeRecords.get(submission.id);
-      const isCurrentlyAssigned =
-        submission.status === 'pending_office'
-        && submission.selected_office_role === role;
-      const isMayorFinalReview =
-        role === 'mayor_office' && submission.status === 'pending_mayor';
       return {
         ...submission,
         officeRecord: officeRecord
@@ -188,10 +187,11 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
               status: officeRecord.status,
               comments: officeRecord.comments,
               decided_at: officeRecord.decided_at,
+              completed_at: officeRecord.completed_at,
             }
-          : isCurrentlyAssigned || isMayorFinalReview
-            ? { status: 'in_progress', comments: null, decided_at: null }
-            : null,
+          : submission.selected_office_role === role && submission.status === 'completed'
+              ? { status: 'completed', comments: null, decided_at: null, completed_at: null }
+              : null,
       };
     }));
     setLoading(false);
@@ -223,16 +223,19 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
         submission.file_name.toLowerCase().includes(query) ||
         (submission.tracking_number ?? '').toLowerCase().includes(query) ||
         (submission.category ?? '').toLowerCase().includes(query);
-      return matchesSearch && matchesFilter(submission, filter, role);
+      return matchesSearch && matchesOfficeDashboardFilter(submission, filter, role);
     });
   }, [filter, role, search, submissions]);
 
   const needsReview = submissions.filter((submission) =>
-    matchesFilter(submission, 'needs_review', role)
+    matchesOfficeDashboardFilter(submission, 'needs_action', role)
   ).length;
   const completed = submissions.filter((submission) =>
-    matchesFilter(submission, 'completed', role)
+    matchesOfficeDashboardFilter(submission, 'completed', role)
   ).length;
+  const recentActionItems = submissions
+    .filter((submission) => matchesOfficeDashboardFilter(submission, 'needs_action', role))
+    .slice(0, 5);
 
   return (
     <div className="w-full">
@@ -241,173 +244,224 @@ export default function OfficeDashboard({ role }: { role: OfficeRole }) {
           <span className="h-1.5 w-1.5 rounded-full bg-clay" /> Office workspace
         </p>
         <h1 className="font-serif text-[32px] leading-tight text-warm-text max-md:text-[26px]">
-          {office.label}
+          {view === 'dashboard' ? `${office.label} dashboard` : 'File management'}
         </h1>
         <p className="mt-2 text-xs text-muted-text">
-          Review documents routed to your office, leave feedback, and send them to the
-          next station.
+          {view === 'dashboard'
+            ? 'Review your office workload and continue processing documents that need action.'
+            : 'Search, filter, and review documents routed to or processed by your office.'}
         </p>
       </header>
 
-      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2">
-        {[
-          { label: 'Needs review', value: needsReview, hint: 'Waiting for office feedback' },
-          { label: 'Completed', value: completed, hint: 'Finished submissions' },
-        ].map((stat) => (
-          <section
-            key={stat.label}
-            className="rounded-2xl border border-warm-border bg-card p-5"
-          >
-            <h2 className="text-xs font-medium text-muted-text">{stat.label}</h2>
-            <p className="mt-3 font-serif text-[34px] leading-none text-warm-text">
-              {stat.value}
-            </p>
-            <p className="mt-3 text-[11px] text-muted-text">{stat.hint}</p>
-          </section>
-        ))}
-      </div>
-
-      <section>
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold text-warm-text">Office document history</h2>
-            <span className="rounded-md bg-sidebar px-2 py-1 text-[10px] font-medium text-muted-text">
-              {filteredSubmissions.length}
-            </span>
+      {view === 'dashboard' ? (
+        <>
+          <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {[
+              { label: 'Needs action', value: needsReview, hint: 'Responsible submissions and active assignments' },
+              { label: 'Completed', value: completed, hint: 'Finished submissions' },
+              { label: 'In office history', value: submissions.length, hint: 'Current and previously routed documents' },
+            ].map((stat) => (
+              <section key={stat.label} className="rounded-2xl border border-warm-border bg-card p-5">
+                <h2 className="text-xs font-medium text-muted-text">{stat.label}</h2>
+                <p className="mt-3 font-serif text-[34px] leading-none text-warm-text">{stat.value}</p>
+                <p className="mt-3 text-[11px] text-muted-text">{stat.hint}</p>
+              </section>
+            ))}
           </div>
-          <label className="sr-only" htmlFor="office-search">Search documents</label>
-          <input
-            id="office-search"
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search title, tracking number, or category"
-            className="h-10 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay sm:max-w-sm"
-          />
-          <button
-            type="button"
-            onClick={() => void fetchSubmissions()}
-            disabled={loading}
-            className="h-10 shrink-0 rounded-full border border-warm-border bg-card px-4 text-xs font-medium text-warm-text hover:bg-sidebar disabled:opacity-50"
-          >
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </button>
-        </div>
 
-        <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
-          {FILTERS.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => setFilter(item.key)}
-              aria-pressed={filter === item.key}
-              className={`h-10 shrink-0 rounded-full border px-4 text-xs font-medium transition-colors ${
-                filter === item.key
-                  ? 'border-clay bg-clay text-white'
-                  : 'border-warm-border bg-card text-warm-text hover:bg-sidebar'
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+          <section className="rounded-2xl border border-warm-border bg-card p-5 max-md:px-3.5">
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-warm-text">Needs your attention</h2>
+                <p className="mt-1 text-[11px] text-muted-text">The next submissions and assignments to process.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void fetchSubmissions()}
+                  disabled={loading}
+                  className="h-10 rounded-full border border-warm-border bg-card px-4 text-xs font-medium text-warm-text hover:bg-sidebar disabled:opacity-50"
+                >
+                  {loading ? 'Refreshing...' : 'Refresh'}
+                </button>
+                <Link
+                  href={getOfficeFileManagementPath(role)}
+                  className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
+                >
+                  File management <span className="ml-2" aria-hidden="true">→</span>
+                </Link>
+              </div>
+            </div>
 
-        {error ? (
-          <div className="rounded-2xl border border-rejected-bg bg-rejected-bg/50 px-5 py-6 text-xs text-rejected-text">
-            <p>{error}</p>
+            {error ? (
+              <div role="alert" className="rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-4 text-xs text-rejected-text">
+                <p>{error}</p>
+                <button type="button" onClick={() => void fetchSubmissions()} className="mt-3 font-semibold underline">
+                  Retry
+                </button>
+              </div>
+            ) : loading ? (
+              <p className="rounded-xl bg-sidebar px-4 py-6 text-xs text-muted-text">Loading your office overview...</p>
+            ) : recentActionItems.length === 0 ? (
+              <div className="rounded-xl bg-sidebar px-4 py-8 text-center">
+                <p className="font-serif text-xl text-warm-text">You’re all caught up</p>
+                <p className="mt-2 text-xs text-muted-text">There are no submissions or assignments requiring action right now.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {recentActionItems.map((submission) => {
+                  const isAssignment = submission.selected_office_role !== role
+                    && ['pending', 'in_progress'].includes(submission.officeRecord?.status ?? '');
+                  return (
+                    <article
+                      key={submission.id}
+                      className="flex flex-col gap-3 rounded-xl border border-warm-border bg-card px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <h3 className="truncate text-sm font-semibold text-warm-text">{submission.file_name}</h3>
+                        <p className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-muted-text">
+                          <span>{submission.tracking_number || 'Tracking number pending'}</span>
+                          <span aria-hidden="true">·</span>
+                          <span>{getWorkflowDocumentTypeLabel(submission.category, submission.other_document_type)}</span>
+                          <span aria-hidden="true">·</span>
+                          <span>{new Date(submission.created_at).toLocaleDateString()}</span>
+                        </p>
+                        {submission.officeRecord && (
+                          <p className="mt-1 text-[11px] text-muted-text">
+                            This office: {statusLabel(submission.officeRecord.status, true)}
+                          </p>
+                        )}
+                      </div>
+                      <Link
+                        href={`${getOfficeFileManagementPath(role)}/${submission.id}`}
+                        className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
+                      >
+                        {isAssignment ? 'Process assignment' : 'Process submission'}
+                      </Link>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </>
+      ) : (
+        <section>
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <h2 className="text-sm font-semibold text-warm-text">Office document history</h2>
+              <span className="rounded-md bg-sidebar px-2 py-1 text-[10px] font-medium text-muted-text">
+                {filteredSubmissions.length}
+              </span>
+            </div>
+            <label className="sr-only" htmlFor="office-search">Search documents</label>
+            <input
+              id="office-search"
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search title, tracking number, or category"
+              className="h-10 w-full rounded-full border border-warm-border bg-card px-4 text-xs text-warm-text outline-none focus:border-clay sm:max-w-sm"
+            />
             <button
               type="button"
               onClick={() => void fetchSubmissions()}
-              className="mt-3 font-semibold underline"
+              disabled={loading}
+              className="h-10 shrink-0 rounded-full border border-warm-border bg-card px-4 text-xs font-medium text-warm-text hover:bg-sidebar disabled:opacity-50"
             >
-              Retry
+              {loading ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
-        ) : loading ? (
-          <div className="rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
-            Loading office documents...
+
+          <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+            {FILTERS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setFilter(item.key)}
+                aria-pressed={filter === item.key}
+                className={`h-10 shrink-0 rounded-full border px-4 text-xs font-medium transition-colors ${
+                  filter === item.key ? 'border-clay bg-clay text-white' : 'border-warm-border bg-card text-warm-text hover:bg-sidebar'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
           </div>
-        ) : filteredSubmissions.length === 0 ? (
-          <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
-            <p className="font-serif text-2xl text-warm-text">No documents found</p>
-            <p className="mt-2 text-xs text-muted-text">
-              Documents assigned to this office, including past processing records, will appear here.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {filteredSubmissions.map((submission) => {
-              const isMayorFinalReview = role === 'mayor_office' && submission.status === 'pending_mayor';
-              const canReview =
-                (submission.status === 'pending_office' && submission.selected_office_role === role)
-                || isMayorFinalReview;
-              return (
-                <article
-                  key={submission.id}
-                  className="grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-4 sm:grid-cols-12"
-                >
-                  <div className="min-w-0 sm:col-span-7">
-                    <h3 className="truncate text-sm font-semibold text-warm-text">
-                      {submission.file_name}
-                    </h3>
-                    <p className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-muted-text">
-                      <span>{submission.tracking_number || 'Tracking number pending'}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{submission.category || 'Uncategorized'}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{new Date(submission.created_at).toLocaleDateString()}</span>
-                    </p>
-                    {submission.officeRecord
-                      && ['approved', 'rejected'].includes(submission.officeRecord.status)
-                      && (
-                        <p className="mt-2 text-[11px] text-muted-text">
-                          Processed
-                          {submission.officeRecord.decided_at
-                            ? ` on ${new Date(submission.officeRecord.decided_at).toLocaleDateString()}`
-                            : ''}
-                          {submission.officeRecord.comments
-                            ? ` · ${submission.officeRecord.comments}`
-                            : ''}
-                        </p>
-                      )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3 sm:col-span-5 sm:justify-end">
-                    <span className="rounded-full bg-sidebar px-3 py-1.5 text-[11px] font-medium capitalize text-muted-text">
-                      Submission: {statusLabel(submission.status)}
-                    </span>
-                    {submission.officeRecord && (
+
+          {error ? (
+            <div role="alert" className="rounded-2xl border border-rejected-bg bg-rejected-bg/50 px-5 py-6 text-xs text-rejected-text">
+              <p>{error}</p>
+              <button type="button" onClick={() => void fetchSubmissions()} className="mt-3 font-semibold underline">
+                Retry
+              </button>
+            </div>
+          ) : loading ? (
+            <div className="rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
+              Loading office documents...
+            </div>
+          ) : filteredSubmissions.length === 0 ? (
+            <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
+              <p className="font-serif text-2xl text-warm-text">No documents found</p>
+              <p className="mt-2 text-xs text-muted-text">
+                Documents assigned to this office, including past processing records, will appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredSubmissions.map((submission) => {
+                const canReview = matchesOfficeDashboardFilter(submission, 'needs_action', role);
+                const isAssignment = submission.selected_office_role !== role
+                  && ['pending', 'in_progress'].includes(submission.officeRecord?.status ?? '');
+                const processedAt = submission.officeRecord?.completed_at
+                  ?? submission.officeRecord?.decided_at;
+                return (
+                  <article
+                    key={submission.id}
+                    className="grid grid-cols-1 gap-4 rounded-2xl border border-warm-border bg-card px-5 py-4 sm:grid-cols-12"
+                  >
+                    <div className="min-w-0 sm:col-span-7">
+                      <h3 className="truncate text-sm font-semibold text-warm-text">{submission.file_name}</h3>
+                      <p className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-muted-text">
+                        <span>{submission.tracking_number || 'Tracking number pending'}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{getWorkflowDocumentTypeLabel(submission.category, submission.other_document_type)}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{new Date(submission.created_at).toLocaleDateString()}</span>
+                      </p>
+                      {submission.officeRecord
+                        && ['approved', 'completed', 'returned', 'withdrawn'].includes(submission.officeRecord.status)
+                        && (
+                          <p className="mt-2 text-[11px] text-muted-text">
+                            Processed
+                            {processedAt ? ` on ${new Date(processedAt).toLocaleDateString()}` : ''}
+                            {submission.officeRecord.comments ? ` · ${submission.officeRecord.comments}` : ''}
+                          </p>
+                        )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 sm:col-span-5 sm:justify-end">
                       <span className="rounded-full bg-sidebar px-3 py-1.5 text-[11px] font-medium capitalize text-muted-text">
-                        This office: {statusLabel(submission.officeRecord.status)}
+                        Submission: {statusLabel(submission.status)}
                       </span>
-                    )}
-                    <Link
-                      href={`/workflow/approver/file_management/${submission.id}`}
-                      className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
-                    >
-                      {canReview
-                        ? isMayorFinalReview ? 'Final review' : 'Review document'
-                        : 'View document'}
-                    </Link>
-                  </div>
-                  <div className="sm:col-span-12">
-                    <WorkflowRoutingPipeline
-                      variant="compact"
-                      submissionStatus={submission.status}
-                      submittedAt={submission.created_at}
-                      routeSteps={routesBySubmission[submission.id]?.steps ?? []}
-                      routeStatus={routesBySubmission[submission.id]?.status ?? null}
-                      routeFinalizedAt={routesBySubmission[submission.id]?.finalizedAt}
-                      selectedOfficeRole={submission.selected_office_role}
-                      auditEvents={[]}
-                      routeLoadFailed={routesBySubmission[submission.id]?.loadFailed ?? false}
-                    />
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
+                      {submission.officeRecord && (
+                        <span className="rounded-full bg-sidebar px-3 py-1.5 text-[11px] font-medium capitalize text-muted-text">
+                          This office: {statusLabel(submission.officeRecord.status, true)}
+                        </span>
+                      )}
+                      <Link
+                        href={`${getOfficeFileManagementPath(role)}/${submission.id}`}
+                        className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
+                      >
+                        {canReview ? isAssignment ? 'Process assignment' : 'Process submission' : 'View document'}
+                      </Link>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

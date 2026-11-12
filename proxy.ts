@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { getRoleHomePath, isOfficeRole } from '@/lib/workflow/offices'
+import { getRoleHomePath, isOfficeRole, OFFICE_CONFIG } from '@/lib/workflow/offices'
 
 export async function proxy(req: NextRequest) {
   let res = NextResponse.next({
@@ -45,12 +45,19 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from('profiles')
     .select('role, is_active')
     .eq('id', user.id)
     .single()
-  if (profile?.is_active === false) {
+
+  if (profileError || !profile?.role) {
+    const loginUrl = new URL('/login', req.url)
+    loginUrl.searchParams.set('profile', 'unavailable')
+    return NextResponse.redirect(loginUrl)
+  }
+
+  if (profile.is_active === false) {
     await supabase.auth.signOut()
     const disabledResponse = NextResponse.redirect(
       new URL('/login?account=disabled', req.url)
@@ -60,38 +67,36 @@ export async function proxy(req: NextRequest) {
     })
     return disabledResponse
   }
+
   const role = profile?.role ?? null
-  const pathname = req.nextUrl.pathname
+  let pathname = req.nextUrl.pathname
 
-  if (pathname.startsWith('/workflow/user') && role !== 'user') {
-    return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
-  }
-
-  if (pathname.startsWith('/workflow/admin') && role !== 'admin') {
-    return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
-  }
-
-  const officeRoutes = [
-    { path: '/workflow/municipal-treasurer', role: 'municipal_treasurer' },
-    { path: '/workflow/mayor', role: 'mayor_office' },
-    { path: '/workflow/sangguniang-bayan', role: 'sangguniang_bayan' },
-  ] as const
-  const requestedOffice = officeRoutes.find(({ path }) => pathname.startsWith(path))
-
-  if (requestedOffice && role !== requestedOffice.role) {
-    return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
-  }
-
-  if (pathname.startsWith('/workflow/approver')) {
-    const officeReviewPage =
-      pathname.startsWith('/workflow/approver/file_management/')
-
-    if (role !== 'approver' && role !== 'admin') {
-      if (officeReviewPage && isOfficeRole(role)) {
-        return res
-      }
+  if (pathname === '/workflow/approver' || pathname.startsWith('/workflow/approver/')) {
+    const legacySuffix = pathname.slice('/workflow/approver'.length)
+    if (!isOfficeRole(role) && role !== 'system_admin') {
       return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
     }
+
+    const redirectBase = isOfficeRole(role) ? getRoleHomePath(role) : '/workflow/tourism-office'
+    const destination = new URL(`${redirectBase}${legacySuffix}`, req.url)
+    destination.search = req.nextUrl.search
+    return NextResponse.redirect(destination)
+  }
+
+  if (pathname.startsWith('/workflow/user') && role !== 'submitter') {
+    return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
+  }
+
+  if (pathname.startsWith('/workflow/admin') && role !== 'system_admin') {
+    return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
+  }
+
+  const requestedOffice = Object.entries(OFFICE_CONFIG).find(([, office]) =>
+    pathname === office.path || pathname.startsWith(`${office.path}/`)
+  )
+
+  if (requestedOffice && role !== requestedOffice[0] && role !== 'system_admin') {
+    return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
   }
 
   return res

@@ -4,8 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
+import WorkflowActivityTimeline from '@/components/WorkflowActivityTimeline';
 import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
-import { isOfficeRole, OFFICE_CONFIG, type OfficeRole } from '@/lib/workflow/offices';
+import CloseSubmissionDialog from '@/components/CloseSubmissionDialog';
+import {
+  getWorkflowDocumentTypeLabel,
+  isOfficeRole,
+  OFFICE_CONFIG,
+  type OfficeRole,
+} from '@/lib/workflow/offices';
 
 // ─── Styles & Fonts (synced with the approver and user file pages) ───────────
 const fonts = {
@@ -27,6 +34,7 @@ interface Submission extends PreviewableFile {
   file_size: number;
   status: string;
   category?: string | null;
+  other_document_type?: string | null;
   description?: string | null;
   purpose?: string | null;
   requested_action?: string | null;
@@ -57,9 +65,8 @@ interface RouteStep {
   status: string;
   started_at: string | null;
   decided_at: string | null;
+  completed_at: string | null;
 }
-
-type AdminDecision = 'verified' | 'declined' | 'completed';
 
 interface SenderProfile {
   email: string | null;
@@ -79,9 +86,9 @@ interface AuditLog {
 const getStatusStyles = (status: string) => {
   const s = (status || '').toLowerCase();
   if (s === 'pending' || s === 'pending_approver') return { label: 'Under verification', classes: 'bg-pending-bg text-pending-text' };
-  if (s === 'pending_admin') return { label: 'Pending approval', classes: 'bg-review-bg text-review-text' };
+  if (s === 'pending_admin') return { label: 'Pending administrative processing', classes: 'bg-review-bg text-review-text' };
   if (s === 'pending_office') return { label: 'Pending municipal office', classes: 'bg-review-bg text-review-text' };
-  if (s === 'pending_mayor') return { label: "Pending Mayor's decision", classes: 'bg-review-bg text-review-text' };
+  if (s === 'pending_mayor') return { label: "Pending Mayor's office processing", classes: 'bg-review-bg text-review-text' };
   if (s === 'returned_for_requirements') return { label: 'Returned for requirements', classes: 'bg-pending-bg text-pending-text' };
   if (s === 'approved') return { label: 'Approved', classes: 'bg-approved-bg text-approved-text' };
   if (s === 'completed') return { label: 'Completed', classes: 'bg-approved-bg text-approved-text' };
@@ -99,11 +106,18 @@ const getActionLabel = (type: string) => {
     case 'RETURNED_FOR_CORRECTION': return 'Returned for correction';
     case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Office route step assigned';
     case 'OFFICE_ROUTE_STEP_APPROVED': return 'Office route step approved';
-    case 'ROUTE_PROPOSED': return 'Approver proposed office route';
+    case 'OFFICE_ASSIGNMENT_FORWARDED': return 'Office forwarded submission for Recommendation';
+    case 'OFFICE_FORWARDED_TO_TOURISM_OFFICER': return 'Municipal office forwarded for Tourism Officer review';
+    case 'TOURISM_OFFICER_ASSIGNMENTS_CREATED': return 'Tourism Officer assigned additional offices';
+    case 'TOURISM_OFFICER_ASSIGNMENTS_COMPLETED': return 'Additional office assignments completed';
+    case 'OFFICE_FINAL_DECISION': return 'Final decision by authorized office';
+    case 'REQUIREMENTS_RESUBMITTED': return 'Submitter responded to requested changes';
+    case 'REVISED_DOCUMENT_SUBMITTED': return 'Submitter uploaded a revised document';
+    case 'ROUTE_PROPOSED': return 'Tourism Officer proposed office route';
     case 'ROUTE_REQUIREMENTS_REQUESTED': return 'Mayor requested additional requirements';
     case 'ROUTE_RETURNED_TO_ADMIN': return 'All routed offices approved; returned to Admin';
     case 'WORKFLOW_COMPLETED': return 'Workflow completed';
-    case 'SUBMITTED': return 'Submitted by';
+    case 'SUBMITTED': return 'Submission submitted';
     default: return 'Action by';
   }
 };
@@ -129,6 +143,7 @@ export default function AdminManagePage() {
   const [routeLoadFailed, setRouteLoadFailed] = useState(false);
   const [archiveUpdating, setArchiveUpdating] = useState(false);
   const [retentionDate, setRetentionDate] = useState('');
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
 
   const toggleRouteOffice = (officeRole: OfficeRole) => {
     setSelectedOffices((current) => {
@@ -188,7 +203,7 @@ export default function AdminManagePage() {
         } else if (currentRoute) {
           const { data: steps, error: stepsError } = await supabase
             .from('workflow_routing_steps')
-            .select('sequence_number, office_role, status, started_at, decided_at')
+            .select('sequence_number, office_role, status, started_at, decided_at, completed_at')
             .eq('routing_plan_id', currentRoute.id)
             .order('sequence_number', { ascending: true });
           if (stepsError) {
@@ -212,7 +227,7 @@ export default function AdminManagePage() {
             setRouteReadyForCompletion(
               currentRoute.status === 'finalized'
               && validSteps.length > 0
-              && validSteps.every((step) => step.status === 'approved')
+              && validSteps.every((step) => step.status === 'completed' || step.status === 'approved')
             );
           }
         } else {
@@ -256,29 +271,21 @@ export default function AdminManagePage() {
 
   useEffect(() => { fetchDetails(); }, [fetchDetails]);
 
-  const handleAdminAction = async (decision: AdminDecision) => {
-    if (!sub) return;
-    if (decision === 'completed'
-      && sub.status !== 'approved'
-      && !(sub.status === 'pending_admin' && routeReadyForCompletion)) return;
-    if (decision !== 'completed' && sub.status !== 'pending_admin') return;
-    if (decision === 'verified' && routeLoadFailed) {
+  const handleAdminRoute = async () => {
+    if (!sub || sub.status !== 'pending_admin') return;
+    if (routeLoadFailed) {
       setActionError('Could not verify the current route. Refresh before finalizing offices.');
       return;
     }
-    if (decision === 'verified' && selectedOffices.length === 0) {
+    if (selectedOffices.length === 0) {
       setActionError('Keep at least one municipal office in the finalized route.');
-      return;
-    }
-    if (decision === 'declined' && !adminComment.trim()) {
-      setActionError('Add an administrative rejection reason before archiving this request.');
       return;
     }
 
     setUpdating(true);
     setActionError('');
 
-    if (decision === 'verified' && hasProposedRoute) {
+    if (hasProposedRoute) {
       const { error } = await supabase.rpc('finalize_workflow_route', {
         target_submission_id: sub.id,
         final_office_roles: selectedOffices,
@@ -294,38 +301,34 @@ export default function AdminManagePage() {
       return;
     }
 
-    if (decision === 'completed' && routeReadyForCompletion) {
-      const { error } = await supabase.rpc('complete_workflow_after_route', {
-        target_submission_id: sub.id,
-      });
-      if (error) {
-        console.error('Workflow completion failed:', error.message);
-        setActionError(error.message || 'Could not complete this request.');
-      } else {
-        await fetchDetails();
-      }
-      setUpdating(false);
-      return;
-    }
-    const nextStatus = decision === 'verified'
-      ? 'pending_office'
-      : decision === 'declined'
-        ? 'declined_by_admin'
-        : 'completed';
-
     const { error: updateError } = await supabase.rpc('decide_workflow_submission', {
       target_submission_id: sub.id,
-      next_status: nextStatus,
+      next_status: 'pending_office',
       decision_comments: adminComment.trim() || null,
-      routed_office_role: decision === 'verified'
-        ? selectedOffices[0] || selectedOffice
-        : null,
+      routed_office_role: selectedOffices[0] || selectedOffice,
     });
 
     if (updateError) {
-      console.error('Administrative workflow decision failed:', updateError.message);
-      setActionError(updateError.message || 'Could not save your decision. Please try again.');
+      console.error('Administrative routing failed:', updateError.message);
+      setActionError(updateError.message || 'Could not route this submission. Please try again.');
     } else {
+      await fetchDetails();
+    }
+    setUpdating(false);
+  };
+
+  const closeSubmission = async () => {
+    if (!sub) return;
+    setUpdating(true);
+    setActionError('');
+    const { error } = await supabase.rpc('close_workflow_submission', {
+      target_submission_id: sub.id,
+    });
+    if (error) {
+      setActionError(error.message || 'Could not complete this submission.');
+      setCloseDialogOpen(false);
+    } else {
+      setCloseDialogOpen(false);
       await fetchDetails();
     }
     setUpdating(false);
@@ -437,7 +440,9 @@ export default function AdminManagePage() {
           <section className="space-y-5 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
             <div>
               <p className="mb-1 text-[11px] font-medium text-muted-text">Document type</p>
-              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">{sub.category || 'General'}</p>
+              <p className="inline-flex rounded-md bg-clay-soft px-2.5 py-1 text-xs font-semibold text-clay">
+                {getWorkflowDocumentTypeLabel(sub.category ?? null, sub.other_document_type)}
+              </p>
             </div>
             <div>
               <p className="mb-1 text-[11px] font-medium text-muted-text">Municipal office route</p>
@@ -542,7 +547,7 @@ export default function AdminManagePage() {
 
           {sub.mayor_comments && (
             <section className="no-print rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
-              <p className="mb-2 text-xs font-semibold text-warm-text">Mayor’s decision / requirements</p>
+              <p className="mb-2 text-xs font-semibold text-warm-text">Mayor’s processing notes / requirements</p>
               <p className="whitespace-pre-wrap break-words border-l-2 border-warm-border pl-4 font-serif text-base leading-relaxed text-warm-text">
                 &quot;{sub.mayor_comments}&quot;
               </p>
@@ -607,7 +612,7 @@ export default function AdminManagePage() {
                 </label>
               )}
               <label htmlFor="admin-notes" className="mb-2 block text-xs font-semibold text-warm-text">
-                Administrative review notes
+                Routing notes
               </label>
               <textarea
                 id="admin-notes"
@@ -615,7 +620,7 @@ export default function AdminManagePage() {
                 onChange={(e) => setAdminComment(e.target.value)}
                 style={{ caretColor: 'currentColor' }}
                 className="mb-4 h-32 w-full resize-none rounded-xl border border-warm-border bg-card p-4 text-sm text-warm-text outline-none transition-colors placeholder:text-muted-text/60 focus:border-clay"
-                placeholder="Administrative verification and routing notes..."
+                placeholder="Add notes for the receiving office..."
               />
               {actionError && (
                 <p className="mb-3 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">
@@ -624,18 +629,11 @@ export default function AdminManagePage() {
               )}
               <div className="flex gap-3 max-md:flex-col">
                 <button
-                  onClick={() => handleAdminAction('verified')}
+                  onClick={() => void handleAdminRoute()}
                   disabled={updating}
                   className="inline-flex h-11 flex-1 items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
                 >
-                  {updating ? 'Saving...' : hasProposedRoute ? 'Finalize and start office route' : 'Verify and route to office'}
-                </button>
-                <button
-                  onClick={() => handleAdminAction('declined')}
-                  disabled={updating}
-                  className="inline-flex h-11 flex-1 items-center justify-center rounded-full border border-warm-border px-6 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 disabled:opacity-50"
-                >
-                  Reject and archive
+                  {updating ? 'Saving...' : hasProposedRoute ? 'Finalize office assignments' : 'Route to assigned office'}
                 </button>
               </div>
             </section>
@@ -644,9 +642,9 @@ export default function AdminManagePage() {
           {isRouteReadyForCompletion && (
             <section className="no-print space-y-4 rounded-2xl border border-approved-bg bg-approved-bg/50 p-5 max-md:p-3.5">
               <div>
-                <p className="mb-1 text-xs font-semibold text-approved-text">All routed offices approved</p>
+                <p className="mb-1 text-xs font-semibold text-approved-text">All required office assignments completed</p>
                 <p className="text-xs leading-relaxed text-muted-text">
-                  The request has returned to the Administrator after every required office step was approved, including Mayor review when it was part of the route.
+                  Every required office assignment is complete. Close this legacy request to record that processing is finished.
                 </p>
               </div>
               {actionError && (
@@ -655,11 +653,12 @@ export default function AdminManagePage() {
                 </p>
               )}
               <button
-                onClick={() => handleAdminAction('completed')}
-                disabled={updating}
-                className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
+                type="button"
+                onClick={() => setCloseDialogOpen(true)}
+                disabled={updating || routeLoadFailed}
+                className="inline-flex h-12 w-full items-center justify-center rounded-full bg-clay px-6 text-sm font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
               >
-                {updating ? 'Saving...' : 'Complete request and notify sender'}
+                Close Submission
               </button>
             </section>
           )}
@@ -668,7 +667,7 @@ export default function AdminManagePage() {
             <section className="no-print rounded-2xl border border-approved-bg bg-approved-bg/50 p-5 max-md:p-3.5">
               <p className="mb-1 text-xs font-semibold text-approved-text">Legacy approved request</p>
               <p className="mb-4 text-xs leading-relaxed text-muted-text">
-                Complete this request using the existing workflow.
+                Record that processing of this legacy request has finished.
               </p>
               {actionError && (
                 <p className="mb-3 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">
@@ -676,11 +675,12 @@ export default function AdminManagePage() {
                 </p>
               )}
               <button
-                onClick={() => handleAdminAction('completed')}
-                disabled={updating}
-                className="inline-flex h-11 w-full items-center justify-center rounded-full bg-clay px-6 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
+                type="button"
+                onClick={() => setCloseDialogOpen(true)}
+                disabled={updating || routeLoadFailed}
+                className="inline-flex h-12 w-full items-center justify-center rounded-full bg-clay px-6 text-sm font-semibold text-white transition-colors hover:bg-warm-text disabled:opacity-50"
               >
-                {updating ? 'Saving...' : 'Mark as completed'}
+                Close Submission
               </button>
             </section>
           )}
@@ -746,35 +746,17 @@ export default function AdminManagePage() {
             trackingNumber={sub.tracking_number ?? null}
             activity={(
               <div className="no-print">
-                <h3 className="mb-4 text-xs font-semibold text-warm-text">Activity</h3>
-                {auditLogs.length === 0 ? (
-                  <p className="text-xs text-muted-text">No activity recorded yet.</p>
-                ) : (
-                  <div className="relative ml-1 space-y-6 border-l border-warm-border">
-                    {auditLogs.map((log) => (
-                      <div key={log.id} className="relative pl-5">
-                        <span className="absolute -left-[4.5px] top-1.5 h-2 w-2 rounded-full bg-clay ring-4 ring-card" />
-                        <p className="text-[11px] font-semibold text-clay">{getActionLabel(log.action_type)}</p>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-2">
-                          <p className="text-[11px] font-medium text-warm-text">{log.profiles?.full_name || 'System'}</p>
-                          {log.profiles?.role && (
-                            <span className="rounded-md bg-sidebar px-1.5 py-0.5 text-[10px] font-medium capitalize text-muted-text">
-                              {log.profiles.role}
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-0.5 text-[10px] text-muted-text">
-                          {new Date(log.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
-                        </p>
-                        {log.comments && (
-                          <p className="mt-2 whitespace-pre-wrap break-words rounded-xl bg-sidebar p-3 font-serif text-sm leading-relaxed text-warm-text">
-                            &quot;{log.comments}&quot;
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <WorkflowActivityTimeline
+                  events={auditLogs.map((log) => ({
+                    id: log.id,
+                    actionType: log.action_type,
+                    label: getActionLabel(log.action_type),
+                    createdAt: log.created_at,
+                    actor: log.profiles?.full_name || 'System',
+                    actorRole: log.profiles?.role,
+                    comments: log.comments,
+                  }))}
+                />
               </div>
             )}
           />
@@ -816,6 +798,15 @@ export default function AdminManagePage() {
           .no-print { display: none !important; }
         }
       `}</style>
+      <CloseSubmissionDialog
+        open={closeDialogOpen}
+        pendingAssignmentCount={routeSteps.filter(
+          (step) => step.status === 'pending' || step.status === 'in_progress'
+        ).length}
+        updating={updating}
+        onCancel={() => setCloseDialogOpen(false)}
+        onConfirm={() => void closeSubmission()}
+      />
     </div>
   );
 }

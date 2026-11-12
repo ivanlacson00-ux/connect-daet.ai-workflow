@@ -4,13 +4,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import FilePreview from '@/components/FilePreview';
 import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
+import { getWorkflowDocumentTypeLabel } from '@/lib/workflow/offices';
 import { createClient } from '@/lib/supabase/client';
 import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 type Role =
-  | 'user'
-  | 'approver'
-  | 'admin'
+  | 'submitter'
+  | 'tourism_officer'
+  | 'system_admin'
   | 'municipal_treasurer'
   | 'mayor_office'
   | 'sangguniang_bayan';
@@ -33,6 +34,7 @@ interface Submission {
   file_type: string | null;
   file_size: number | null;
   category: string | null;
+  other_document_type: string | null;
   status: string;
   description: string | null;
   purpose: string | null;
@@ -45,21 +47,21 @@ interface Submission {
 const PAGE_SIZE = 500;
 
 const ROLE_GROUPS: { role: Role; label: string }[] = [
-  { role: 'user', label: 'Submitters' },
-  { role: 'approver', label: 'Approvers' },
+  { role: 'submitter', label: 'Submitters' },
+  { role: 'tourism_officer', label: 'Tourism Officers' },
   { role: 'municipal_treasurer', label: "Municipal Treasurer's Office" },
   { role: 'mayor_office', label: "Mayor's Office" },
   { role: 'sangguniang_bayan', label: 'Sangguniang Bayan Office' },
-  { role: 'admin', label: 'Administrators' },
+  { role: 'system_admin', label: 'System Administrators' },
 ];
 
 const ROLE_STYLES: Record<Role, string> = {
-  user: 'bg-sidebar text-muted-text',
-  approver: 'bg-review-bg text-review-text',
+  submitter: 'bg-sidebar text-muted-text',
+  tourism_officer: 'bg-review-bg text-review-text',
   municipal_treasurer: 'bg-approved-bg text-approved-text',
   mayor_office: 'bg-pending-bg text-pending-text',
   sangguniang_bayan: 'bg-rejected-bg text-rejected-text',
-  admin: 'bg-clay-soft text-clay',
+  system_admin: 'bg-clay-soft text-clay',
 };
 
 function StatusStamp({ status }: { status: string }) {
@@ -117,7 +119,7 @@ async function fetchAllSubmissions(supabase: ReturnType<typeof createClient>) {
   for (let offset = 0; ; offset += PAGE_SIZE) {
     const { data, error } = await supabase
       .from('workflow_submissions')
-      .select('id, user_id, tracking_number, file_name, file_url, file_path, file_type, file_size, category, status, description, purpose, requested_action, intended_recipient, selected_office_role, created_at')
+      .select('id, user_id, tracking_number, file_name, file_url, file_path, file_type, file_size, category, other_document_type, status, description, purpose, requested_action, intended_recipient, selected_office_role, created_at')
       .order('created_at', { ascending: false })
       .range(offset, offset + PAGE_SIZE - 1);
     if (error) throw new Error(`Could not load submitted documents: ${error.message}`);
@@ -255,7 +257,14 @@ export default function AdminDashboard() {
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         {profile && <RoleBadge role={profile.role} />}
                         <StatusStamp status={submission.status} />
-                        {submission.category && <span className="text-[11px] text-muted-text">{submission.category}</span>}
+                        {submission.category && (
+                          <span className="text-[11px] text-muted-text">
+                            {getWorkflowDocumentTypeLabel(
+                              submission.category,
+                              submission.other_document_type
+                            )}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="flex shrink-0 gap-2 max-sm:w-full max-sm:flex-col">
@@ -283,7 +292,9 @@ export default function AdminDashboard() {
                       routeStatus={routesBySubmission[submission.id]?.status ?? null}
                       routeFinalizedAt={routesBySubmission[submission.id]?.finalizedAt}
                       selectedOfficeRole={submission.selected_office_role}
-                      auditEvents={[]}
+                      initialDestinationRole={routesBySubmission[submission.id]?.initialDestinationRole}
+                      finalDecisionOfficeRole={routesBySubmission[submission.id]?.finalDecisionOfficeRole}
+                      auditEvents={routesBySubmission[submission.id]?.auditEvents ?? []}
                       routeLoadFailed={routesBySubmission[submission.id]?.loadFailed ?? false}
                     />
                   </div>

@@ -59,7 +59,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       { status: 503, headers: { 'Cache-Control': 'no-store' } }
     );
   }
-  if (actorProfile?.role !== 'admin') {
+  if (actorProfile?.role !== 'system_admin') {
     return NextResponse.json(
       { error: 'Only administrators can delete users.' },
       { status: 403, headers: { 'Cache-Control': 'no-store' } }
@@ -101,11 +101,11 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       { status: 404, headers: { 'Cache-Control': 'no-store' } }
     );
   }
-  if (targetProfile.is_active && targetProfile.role === 'admin') {
+  if (targetProfile.is_active && targetProfile.role === 'system_admin') {
     const { count, error: adminCountError } = await adminClient
       .from('profiles')
       .select('id', { count: 'exact', head: true })
-      .eq('role', 'admin')
+      .eq('role', 'system_admin')
       .eq('is_active', true);
     if (adminCountError) {
       console.error('Could not verify remaining administrators:', adminCountError.message);

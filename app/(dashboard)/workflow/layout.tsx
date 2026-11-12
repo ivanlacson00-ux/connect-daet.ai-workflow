@@ -1,10 +1,15 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { getRoleHomePath, isOfficeRole } from '@/lib/workflow/offices';
+import {
+  getOfficeFileManagementPath,
+  getOfficeNotificationsPath,
+  getRoleHomePath,
+  isOfficeRole,
+} from '@/lib/workflow/offices';
 
 export default function WorkflowLayout({
   children,
@@ -19,6 +24,15 @@ export default function WorkflowLayout({
   const pathname = usePathname();
   const supabase = useMemo(() => createClient(), []);
 
+  const refreshHasUnread = useCallback(async () => {
+    const { data, error } = await supabase.rpc('has_unread_workflow_notifications');
+    if (error) {
+      console.error('Could not check unread notifications:', error.message);
+      return;
+    }
+    setHasUnread(data === true);
+  }, [supabase]);
+
   // 1. Initial User & Role Fetch
   useEffect(() => {
     const getUserInfo = async () => {
@@ -32,24 +46,16 @@ export default function WorkflowLayout({
           .eq('id', user.id)
           .single();
         
-        setRole(profile?.role || 'user');
-        const { count } = await supabase
-          .from('workflow_notifications')
-          .select('id', { count: 'exact', head: true })
-          .eq('recipient_id', user.id)
-          .is('read_at', null);
-        setHasUnread((count ?? 0) > 0);
+        setRole(profile?.role || 'submitter');
+        await refreshHasUnread();
       }
     };
     getUserInfo();
-  }, [supabase]);
+  }, [refreshHasUnread, supabase]);
 
   // 2. Realtime Subscription Effect (Fixed to prevent "subscribe()" errors)
   useEffect(() => {
-    // Only subscribe if we have the necessary user data and aren't on the notifs page
-    if (!role || pathname.includes('notifications')) {
-      return;
-    }
+    if (!userId) return;
 
     const channel = supabase
       .channel(`sidebar-notifs-${userId}`)
@@ -61,14 +67,18 @@ export default function WorkflowLayout({
           table: 'workflow_notifications',
           filter: `recipient_id=eq.${userId}`,
         },
-        () => setHasUnread(true)
+        () => void refreshHasUnread()
       )
       .subscribe();
 
+    const handleNotificationChange = () => void refreshHasUnread();
+    window.addEventListener('workflow-notifications-changed', handleNotificationChange);
+
     return () => {
       supabase.removeChannel(channel);
+      window.removeEventListener('workflow-notifications-changed', handleNotificationChange);
     };
-  }, [supabase, role, userId, pathname]);
+  }, [supabase, userId, refreshHasUnread]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -76,7 +86,7 @@ export default function WorkflowLayout({
   };
 
   const navLinks = () => {
-    if (role === 'user') {
+    if (role === 'submitter') {
       return [
         { href: '/workflow/user', label: 'Dashboard', icon: '◰' },
         { href: '/workflow/user/upload', label: 'Upload', icon: '⊕' },
@@ -84,20 +94,15 @@ export default function WorkflowLayout({
         { href: '/workflow/user/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
       ];
     }
-    if (role === 'approver') {
-      return [
-        { href: '/workflow/approver', label: 'Dashboard', icon: '⎚' },
-        { href: '/workflow/approver/file_management', label: 'File Registry', icon: '▤' },
-        { href: '/workflow/approver/notifications', label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
-      ];
-    }
     if (isOfficeRole(role)) {
       return [
-        { href: getRoleHomePath(role), label: 'Office Dashboard', icon: '▤' },
+        { href: getRoleHomePath(role), label: 'Dashboard', icon: '▤' },
+        { href: getOfficeFileManagementPath(role), label: 'File Registry', icon: '▤' },
+        { href: getOfficeNotificationsPath(role), label: 'Notifications', icon: '⌁', alert: hasUnread && !pathname.includes('notifications') },
         { href: '/workflow/retrieval', label: 'Scan QR Code', icon: '⌗' },
       ];
     }
-    if (role === 'admin') {
+    if (role === 'system_admin') {
       return [
         { href: '/workflow/admin', label: 'Dashboard', icon: '⌬' },
         { href: '/workflow/admin/user_management', label: 'User Registry', icon: '☍' },

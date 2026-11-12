@@ -45,6 +45,11 @@ export default function LoginPage() {
       params.delete('verification');
     }
 
+    if (params.get('profile') === 'unavailable') {
+      setError('Your account profile could not be loaded. Sign in again or contact an administrator if the problem continues.');
+      params.delete('profile');
+    }
+
     const query = params.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
   }, []);

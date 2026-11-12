@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 
 const OFFICIAL_ROLES = new Set([
-  'approver',
+  'tourism_officer',
   'municipal_treasurer',
   'mayor_office',
   'sangguniang_bayan',
@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
     console.error('Could not verify account status access:', profileError.message);
     return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
   }
-  if (profile?.role !== 'admin') {
+  if (profile?.role !== 'system_admin') {
     return withAuthCookies(NextResponse.json({ error: 'Only administrators can view account verification status.' }, { status: 403 }));
   }
 
@@ -136,7 +136,7 @@ export async function POST(request: NextRequest) {
     console.error('Could not verify account creation permission:', profileError.message);
     return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
   }
-  if (profile?.role !== 'admin') {
+  if (profile?.role !== 'system_admin') {
     return withAuthCookies(NextResponse.json({ error: 'Only administrators can create official accounts.' }, { status: 403 }));
   }
 
@@ -305,7 +305,7 @@ export async function DELETE(request: NextRequest) {
     console.error('Could not verify profile deletion permission:', requesterProfileError.message);
     return withAuthCookies(NextResponse.json({ error: 'Could not verify administrator access.' }, { status: 500 }));
   }
-  if (requesterProfile?.role !== 'admin') {
+  if (requesterProfile?.role !== 'system_admin') {
     return withAuthCookies(NextResponse.json({ error: 'Only administrators can delete profiles.' }, { status: 403 }));
   }
 
@@ -341,11 +341,11 @@ export async function DELETE(request: NextRequest) {
     return withAuthCookies(NextResponse.json({ error: 'The profile no longer exists.' }, { status: 404 }));
   }
 
-  if (targetProfile.role === 'admin') {
+  if (targetProfile.role === 'system_admin') {
     const { data: anotherAdmin, error: anotherAdminError } = await adminClient
       .from('profiles')
       .select('id')
-      .eq('role', 'admin')
+      .eq('role', 'system_admin')
       .neq('id', targetUserId)
       .limit(1)
       .maybeSingle();

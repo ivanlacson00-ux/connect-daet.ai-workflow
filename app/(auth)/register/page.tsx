@@ -54,7 +54,7 @@ export default function RegisterPage() {
         emailRedirectTo: `${window.location.origin}/auth/callback`,
         data: {
           full_name: trimmedName,
-          role: 'user',
+          role: 'submitter',
         },
       },
     });
@@ -74,7 +74,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-cream px-4 py-12">
+    <div className="workflow-system flex min-h-screen items-center justify-center bg-cream px-4 py-12">
       <div className="w-full max-w-[380px]">
         {/* Identity */}
         <div className="mb-8 flex flex-col items-center text-center max-md:mb-6">

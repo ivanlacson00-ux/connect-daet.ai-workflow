@@ -5,7 +5,6 @@ import Link from 'next/link';
 import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
 import { useSubmissions } from '@/hooks/useSubmissions';
 import { getWorkflowTiming, workflowTimingClasses } from '@/lib/workflow/timing';
-import { OFFICE_CONFIG } from '@/lib/workflow/offices';
 import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
@@ -13,25 +12,21 @@ const fonts = {
   serif: 'font-serif',
 };
 
-type FilterStatus = 'all' | 'pending' | 'approved' | 'declined';
-
-const CATEGORIES = [...new Set(Object.values(OFFICE_CONFIG).flatMap((office) => office.categories))];
+type FilterStatus = 'all' | 'pending' | 'processed' | 'declined';
 
 const STATUS_FILTERS: { value: FilterStatus; label: string }[] = [
   { value: 'all', label: 'All' },
-  { value: 'pending', label: 'Pending approval' },
-  { value: 'approved', label: 'Approved' },
+  { value: 'pending', label: 'Needs processing' },
+  { value: 'processed', label: 'Processed' },
   { value: 'declined', label: 'Declined' },
 ];
 
-// "Pending" looks specifically for items waiting on the admin.
-// "Approved" includes completed files, since completing is the step after approval.
 const matchesStatus = (status: string, filter: FilterStatus) => {
   const s = status.toLowerCase();
   switch (filter) {
     case 'pending':
       return ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'returned_for_requirements'].includes(s);
-    case 'approved':
+    case 'processed':
       return s === 'approved' || s === 'completed';
     case 'declined':
       return s.includes('declined');
@@ -51,7 +46,7 @@ function StatusStamp({ status }: { status: string }) {
     // Admin stage logic
     if (s === 'pending_admin') return { label: 'Administrative review', styles: 'bg-review-bg text-review-text' };
     if (s === 'pending_office') return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
-    if (s === 'pending_mayor') return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
+    if (s === 'pending_mayor') return { label: "Mayor's office processing", styles: 'bg-review-bg text-review-text' };
     if (s === 'returned_for_requirements') return { label: 'Returned for requirements', styles: 'bg-pending-bg text-pending-text' };
     if (s === 'completed') return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
     if (s.includes('approved')) return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
@@ -85,6 +80,12 @@ export default function SubmissionsPage() {
     () => [...new Set(submissions.map((s) => s.file_type).filter(Boolean))],
     [submissions]
   );
+  const categories = useMemo(
+    () => [...new Set(submissions.map((submission) => submission.category).filter(
+      (category): category is string => Boolean(category)
+    ))].sort(),
+    [submissions]
+  );
 
   // Everything except the status pills, so each pill can show its own count
   const baseFiltered = useMemo(() => {
@@ -110,9 +111,9 @@ export default function SubmissionsPage() {
   }, [submissions, searchQuery, categoryFilter, fileTypeFilter, fromDate, toDate]);
 
   const statusCounts = useMemo(() => {
-    const counts: Record<FilterStatus, number> = { all: baseFiltered.length, pending: 0, approved: 0, declined: 0 };
+    const counts: Record<FilterStatus, number> = { all: baseFiltered.length, pending: 0, processed: 0, declined: 0 };
     baseFiltered.forEach((sub) => {
-      (['pending', 'approved', 'declined'] as const).forEach((key) => {
+      (['pending', 'processed', 'declined'] as const).forEach((key) => {
         if (matchesStatus(sub.status, key)) counts[key]++;
       });
     });
@@ -163,7 +164,7 @@ export default function SubmissionsPage() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label="Category" className={fieldClasses}>
             <option value="all">All categories</option>
-            {CATEGORIES.map((c) => (
+            {categories.map((c) => (
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
@@ -284,7 +285,9 @@ export default function SubmissionsPage() {
                     routeStatus={routesBySubmission[sub.id]?.status ?? null}
                     routeFinalizedAt={routesBySubmission[sub.id]?.finalizedAt}
                     selectedOfficeRole={sub.selected_office_role}
-                    auditEvents={[]}
+                    initialDestinationRole={routesBySubmission[sub.id]?.initialDestinationRole}
+                    finalDecisionOfficeRole={routesBySubmission[sub.id]?.finalDecisionOfficeRole}
+                    auditEvents={routesBySubmission[sub.id]?.auditEvents ?? []}
                     routeLoadFailed={routesBySubmission[sub.id]?.loadFailed ?? false}
                   />
                 </div>

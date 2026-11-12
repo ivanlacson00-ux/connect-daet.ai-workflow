@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import WorkflowAuthoritySettings from '@/components/WorkflowAuthoritySettings';
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const fonts = {
@@ -10,9 +11,9 @@ const fonts = {
 };
 
 type Role =
-  | 'user'
-  | 'approver'
-  | 'admin'
+  | 'submitter'
+  | 'tourism_officer'
+  | 'system_admin'
   | 'municipal_treasurer'
   | 'mayor_office'
   | 'sangguniang_bayan';
@@ -26,10 +27,11 @@ interface UserProfile {
   role: string;
   created_at: string;
   is_active: boolean;
+  verificationStatus: VerificationStatus;
 }
 
 const OFFICIAL_ROLES: Role[] = [
-  'approver',
+  'tourism_officer',
   'municipal_treasurer',
   'mayor_office',
   'sangguniang_bayan',
@@ -37,27 +39,27 @@ const OFFICIAL_ROLES: Role[] = [
 
 const FILTERS: { key: RoleFilter; label: string }[] = [
   { key: 'all', label: 'All' },
-  { key: 'admin', label: 'Admin' },
-  { key: 'approver', label: 'Approver' },
+  { key: 'system_admin', label: 'System Administrator' },
+  { key: 'tourism_officer', label: 'Tourism Officer' },
   { key: 'municipal_treasurer', label: "Treasurer's Office" },
   { key: 'mayor_office', label: "Mayor's Office" },
   { key: 'sangguniang_bayan', label: 'Sangguniang Bayan' },
-  { key: 'user', label: 'User' },
+  { key: 'submitter', label: 'Submitter' },
 ];
 
 const ROLE_STYLES: Record<string, string> = {
-  admin: 'bg-clay-soft text-clay',
-  approver: 'bg-review-bg text-review-text',
+  system_admin: 'bg-clay-soft text-clay',
+  tourism_officer: 'bg-review-bg text-review-text',
   municipal_treasurer: 'bg-approved-bg text-approved-text',
   mayor_office: 'bg-pending-bg text-pending-text',
   sangguniang_bayan: 'bg-rejected-bg text-rejected-text',
-  user: 'bg-sidebar text-muted-text',
+  submitter: 'bg-sidebar text-muted-text',
 };
 
 const ROLE_LABELS: Record<Role, string> = {
-  user: 'User',
-  approver: 'Approver',
-  admin: 'Admin',
+  submitter: 'Submitter',
+  tourism_officer: 'Tourism Officer',
+  system_admin: 'System Administrator',
   municipal_treasurer: "Municipal Treasurer's Office",
   mayor_office: "Mayor's Office",
   sangguniang_bayan: 'Sangguniang Bayan Office',
@@ -68,7 +70,7 @@ const capitalize = (s: string) => ROLE_LABELS[s as Role] ?? s.charAt(0).toUpperC
 // ─── Role Badge ──────────────────────────────────────────────────────────────
 function RoleBadge({ role }: { role: string }) {
   return (
-    <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${ROLE_STYLES[role] ?? ROLE_STYLES.user}`}>
+    <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${ROLE_STYLES[role] ?? ROLE_STYLES.submitter}`}>
       <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
       {capitalize(role || 'unknown')}
     </span>
@@ -99,7 +101,21 @@ export default function UserManagementPage() {
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
   const [showInactive, setShowInactive] = useState(false);
   const [updating, setUpdating] = useState<string | null>(null);
-  const [roleUpdateError, setRoleUpdateError] = useState('');
+  const [newAccountDetails, setNewAccountDetails] = useState({
+    firstName: '',
+    middleName: '',
+    lastName: '',
+    phoneNumber: '',
+    age: '',
+    sex: '',
+    address: '',
+  });
+  const [newAccountEmail, setNewAccountEmail] = useState('');
+  const [newAccountRole, setNewAccountRole] = useState<Role>('tourism_officer');
+  const [creatingAccount, setCreatingAccount] = useState(false);
+  const [accountCreationStatus, setAccountCreationStatus] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+  const [invitationLink, setInvitationLink] = useState<{ email: string; fullName: string; role: Role; url: string } | null>(null);
+  const [linkActionStatus, setLinkActionStatus] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [userFetchError, setUserFetchError] = useState('');
 
@@ -108,7 +124,7 @@ export default function UserManagementPage() {
     setUsersError('');
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, email, role, created_at, is_active')
+      .select('id, email, full_name, role, created_at, is_active')
       .eq('is_active', !showInactive)
       .order('created_at', { ascending: false });
 
@@ -119,7 +135,30 @@ export default function UserManagementPage() {
       return;
     }
     setUserFetchError('');
-    setUsers(data ?? []);
+
+    const profiles = data ?? [];
+    try {
+      const response = await fetch('/api/admin/accounts', { cache: 'no-store' });
+      const result = await response.json() as {
+        error?: string;
+        verificationStatuses?: Record<string, Exclude<VerificationStatus, 'unknown'>>;
+      };
+      if (!response.ok || !result.verificationStatuses) {
+        throw new Error(result.error || 'Could not load account verification statuses.');
+      }
+
+      setUsers(profiles.map((profile) => ({
+        ...profile,
+        verificationStatus: result.verificationStatuses?.[profile.id] ?? 'unknown',
+      })));
+    } catch (verificationError) {
+      const message = verificationError instanceof Error
+        ? verificationError.message
+        : 'Could not load account verification statuses.';
+      console.error('Account verification status refresh failed:', message);
+      setUsers(profiles.map((profile) => ({ ...profile, verificationStatus: 'unknown' })));
+      setUsersError(message);
+    }
     setLoading(false);
   }, [showInactive, supabase]);
 
@@ -237,9 +276,9 @@ export default function UserManagementPage() {
   const roleCounts = useMemo(() => {
     const counts: Record<RoleFilter, number> = {
       all: users.length,
-      admin: 0,
-      approver: 0,
-      user: 0,
+      system_admin: 0,
+      tourism_officer: 0,
+      submitter: 0,
       municipal_treasurer: 0,
       mayor_office: 0,
       sangguniang_bayan: 0,
@@ -270,6 +309,8 @@ export default function UserManagementPage() {
           Control who can submit, review and administer files. Total users: <span className="text-warm-text">{users.length}</span>
         </p>
       </div>
+
+      <WorkflowAuthoritySettings />
 
       <section className="mb-6 rounded-2xl border border-warm-border bg-card p-5 max-md:p-3.5">
         <div className="mb-4">
@@ -607,25 +648,12 @@ export default function UserManagementPage() {
                     <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Processing...
                   </div>
                 ) : (
-                  <>
-                    <select
-                      value={user.role}
-                      onChange={(e) => updateRole(user.id, e.target.value as Role)}
-                      aria-label={`Change role for ${user.email}`}
-                      className="h-10 cursor-pointer rounded-full border border-warm-border bg-card px-4 text-xs font-medium text-warm-text outline-none transition-colors hover:bg-sidebar focus:border-clay max-md:h-11 max-md:w-full"
-                    >
-                      {ROLES.map(r => (
-                        <option key={r} value={r}>{capitalize(r)}</option>
-                      ))}
-                    </select>
-
-                    <button
-                      onClick={() => deleteUser(user.id, user.email)}
-                      className="inline-flex h-10 items-center justify-center rounded-full border border-rejected-bg px-5 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 max-md:h-11 max-md:w-full"
-                    >
-                      {user.is_active ? 'Remove account' : 'Free email for re-registration'}
-                    </button>
-                  </>
+                  <button
+                    onClick={() => deleteUser(user.id, user.email)}
+                    className="inline-flex h-10 items-center justify-center rounded-full border border-rejected-bg px-5 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 max-md:h-11 max-md:w-full"
+                  >
+                    {user.is_active ? 'Remove account' : 'Free email for re-registration'}
+                  </button>
                 )}
               </div>
             </article>

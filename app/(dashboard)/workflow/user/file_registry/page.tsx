@@ -5,6 +5,8 @@ import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
 import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
+import { getWorkflowDocumentTypeLabel } from '@/lib/workflow/offices';
+import { getSubmissionStatusLabel } from '@/lib/workflow/status';
 import { useRoutePreviews } from '@/lib/workflow/useRoutePreviews';
 
 // ─── Styles & Fonts (synced with dashboard) ──────────────────────────────────
@@ -13,23 +15,22 @@ const fonts = {
   mono: "font-sans text-xs",
 };
 
-// ─── Status groups (same lists as the user dashboard) ────────────────────────
-const PENDING_STATUSES = ['pending', 'pending_approver', 'pending_admin'];
-const APPROVED_STATUSES = ['approved', 'completed'];
-const REJECTED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'rejected'];
-
-const FILTERS = ['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const;
+const FILTERS = ['ALL', 'ACTIVE', 'CHANGES REQUESTED', 'RETURNED', 'COMPLETED', 'WITHDRAWN'] as const;
 type Filter = (typeof FILTERS)[number];
 
 const matchesFilter = (status: string, filter: Filter) => {
   const s = (status || '').toLowerCase();
   switch (filter) {
-    case 'PENDING':
-      return PENDING_STATUSES.includes(s);
-    case 'APPROVED':
-      return APPROVED_STATUSES.includes(s);
-    case 'REJECTED':
-      return REJECTED_STATUSES.includes(s);
+    case 'ACTIVE':
+      return ['submitted', 'in_process', 'pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor'].includes(s);
+    case 'CHANGES REQUESTED':
+      return s === 'changes_requested' || s === 'returned_for_requirements';
+    case 'RETURNED':
+      return s === 'returned';
+    case 'COMPLETED':
+      return s === 'completed' || s === 'approved';
+    case 'WITHDRAWN':
+      return s === 'withdrawn';
     default:
       return true;
   }
@@ -47,6 +48,7 @@ interface FileSubmission extends PreviewSubmission {
   created_at: string;
   status: string;
   category?: string | null;
+  other_document_type?: string | null;
   file_size?: number | null;
   selected_office_role?: string | null;
 }
@@ -187,7 +189,7 @@ export default function UserFileRegistry() {
                       <div className="min-w-0 flex-1">
                         <div className="mb-1.5 flex flex-wrap items-center gap-2">
                           <span className="rounded-md bg-clay-soft px-2 py-1 text-[10px] font-medium text-clay">
-                            {file.category || 'General'}
+                            {getWorkflowDocumentTypeLabel(file.category ?? null, file.other_document_type)}
                           </span>
                           <span className="text-[11px] text-muted-text">
                             ID: {String(file.id).slice(0, 8)}
@@ -249,7 +251,9 @@ export default function UserFileRegistry() {
                         routeStatus={route?.status ?? null}
                         routeFinalizedAt={route?.finalizedAt}
                         selectedOfficeRole={file.selected_office_role}
-                        auditEvents={[]}
+                        initialDestinationRole={route?.initialDestinationRole}
+                        finalDecisionOfficeRole={route?.finalDecisionOfficeRole}
+                        auditEvents={route?.auditEvents ?? []}
                         routeLoadFailed={route?.loadFailed ?? false}
                       />
                     </div>
@@ -309,22 +313,17 @@ export default function UserFileRegistry() {
 function StatusBadge({ status }: { status: string }) {
   const getStatusDisplay = (raw: string) => {
     const s = (raw || '').toLowerCase();
-    switch (s) {
-      case 'pending':
-      case 'pending_approver':
-        return { label: 'PENDING', styles: "bg-pending-bg text-pending-text" };
-      case 'pending_admin':
-        return { label: 'UNDER REVIEW', styles: "bg-review-bg text-review-text" };
-      case 'approved':
-      case 'completed':
-        return { label: 'APPROVED', styles: "bg-approved-bg text-approved-text" };
-      case 'declined_by_approver':
-      case 'declined_by_admin':
-      case 'rejected':
-        return { label: 'REJECTED', styles: "bg-rejected-bg text-rejected-text" };
-      default:
-        return { label: s.toUpperCase().replaceAll('_', ' ') || 'UNKNOWN', styles: "bg-sidebar text-muted-text" };
+    if (s.startsWith('declined') || s === 'rejected') {
+      return { label: 'REJECTED', styles: 'bg-rejected-bg text-rejected-text' };
     }
+    const styles = ['completed', 'approved'].includes(s)
+      ? 'bg-approved-bg text-approved-text'
+      : ['in_process', 'pending_office', 'pending_mayor'].includes(s)
+        ? 'bg-review-bg text-review-text'
+        : ['returned', 'changes_requested', 'returned_for_requirements', 'submitted', 'pending', 'pending_approver'].includes(s)
+          ? 'bg-pending-bg text-pending-text'
+          : 'bg-sidebar text-muted-text';
+    return { label: getSubmissionStatusLabel(s).toUpperCase(), styles };
   };
 
   const { label, styles } = getStatusDisplay(status);
