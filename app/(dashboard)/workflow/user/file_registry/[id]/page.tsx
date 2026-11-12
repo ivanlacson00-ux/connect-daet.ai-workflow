@@ -443,6 +443,7 @@ export default function UserFileDetail() {
       case 'RETURNED_TO_SUBMITTER': return 'Returned to submitter for redirection';
       case 'SUBMISSION_WITHDRAWN': return 'Submission withdrawn';
       case 'SUBMISSION_CLOSED': return 'Submission closed';
+      case 'SUBMISSION_REOPENED': return 'Submission reopened';
       case 'FILE_VERSION_ADDED': return 'Document version added';
       case 'ROUTE_PROPOSED': return 'Tourism Officer proposed office route';
       case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Assigned to municipal office';
@@ -491,7 +492,9 @@ export default function UserFileDetail() {
   const isWithdrawn = sub.status === 'withdrawn';
   const isRedirectable = sub.status === 'returned';
   const canWithdraw = sub.status === 'submitted' && !sub.received_at;
-  const canRespondToChanges = sub.status === 'changes_requested';
+  const lastClosure = [...auditLogs].reverse().find((log) => log.action_type === 'SUBMISSION_CLOSED');
+  const canReopen = sub.status === 'completed' && lastClosure?.old_status === 'changes_requested';
+  const canRespondToChanges = sub.status === 'changes_requested' || canReopen;
   const currentDestinationRole = sub.selected_office_role ?? sub.initial_destination_role ?? null;
   const currentDestinationLabel = isOfficeRole(currentDestinationRole)
     ? OFFICE_CONFIG[currentDestinationRole].label
@@ -826,7 +829,7 @@ export default function UserFileDetail() {
             {canRespondToChanges && (
               <form onSubmit={(event) => void handleRequirementsSubmit(event)} className="space-y-3 rounded-xl border border-warm-border bg-card p-4 md:col-span-2">
                 <div>
-                  <h3 className="text-xs font-semibold text-warm-text">Respond to requested changes</h3>
+                  <h3 className="text-xs font-semibold text-warm-text">{canReopen ? 'Reopen and resubmit' : 'Respond to requested changes'}</h3>
                   <p className="mt-1 text-[11px] leading-relaxed text-muted-text">
                     {requirementsRequest?.comments || sub.office_comments || sub.mayor_comments || 'The responsible office has requested changes to your submission.'}
                   </p>

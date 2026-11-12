@@ -28,7 +28,7 @@ export function matchesOfficeDashboardFilter(
   switch (filter) {
     case 'needs_action':
       return (isResponsibleOffice
-        && ['submitted', 'in_process', 'pending_office', 'pending_mayor', 'changes_requested'].includes(submission.status))
+        && ['submitted', 'in_process', 'pending_office', 'pending_mayor'].includes(submission.status))
         || (['in_process', 'pending_office'].includes(submission.status) && hasPendingAssignment);
     case 'changes_requested':
       return isResponsibleOffice && submission.status === 'changes_requested';
@@ -39,7 +39,9 @@ export function matchesOfficeDashboardFilter(
     case 'withdrawn':
       return submission.status === 'withdrawn';
     case 'processed':
-      return ['approved', 'completed', 'returned', 'withdrawn'].includes(submission.officeRecord?.status ?? '');
+      // Waiting on the submitter is out of the office's queue, like completed work.
+      return (isResponsibleOffice && submission.status === 'changes_requested')
+        || ['approved', 'completed', 'returned', 'withdrawn'].includes(submission.officeRecord?.status ?? '');
     default:
       return true;
   }

@@ -72,9 +72,13 @@ export function buildRoutingPipelineSteps({
   );
   const timeFor = (...actions: string[]) =>
     events.find((event) => actions.includes(event.action_type))?.created_at ?? null;
+  const latestIndexOf = (action: string) =>
+    events.map((event) => event.action_type).lastIndexOf(action);
+  // A submitter can reopen a closed submission; only a closure after the last reopen counts.
+  const closedByEvent = latestIndexOf('SUBMISSION_CLOSED') > latestIndexOf('SUBMISSION_REOPENED');
   const isClosed = ['completed', 'approved', 'withdrawn'].includes(status)
     || isDeclined(status)
-    || Boolean(timeFor('SUBMISSION_CLOSED'));
+    || closedByEvent;
   const nextStepPlaceholder: RoutingPipelineStep = {
     key: 'next-step-placeholder',
     title: 'Next workflow update',

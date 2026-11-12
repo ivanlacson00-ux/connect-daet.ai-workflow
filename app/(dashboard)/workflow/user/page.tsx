@@ -42,7 +42,7 @@ const withTimeout = <T,>(promise: PromiseLike<T>, ms: number, label: string): Pr
 
 // ─── Status groups ───────────────────────────────────────────────────────────
 // Add any other status values from your database to these lists
-const PENDING_STATUSES = ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'returned_for_requirements'];
+const PENDING_STATUSES = ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'returned_for_requirements', 'changes_requested'];
 const COMPLETED_STATUSES = ['approved', 'completed'];
 const REJECTED_STATUSES = ['declined_by_approver', 'declined_by_admin', 'declined_by_office', 'declined_by_mayor', 'rejected'];
 

@@ -171,6 +171,7 @@ const getActionLabel = (type: string) => {
     case 'RETURNED_TO_SUBMITTER': return 'Returned to submitter for redirection';
     case 'SUBMISSION_WITHDRAWN': return 'Submission withdrawn';
     case 'SUBMISSION_CLOSED': return 'Submission closed';
+    case 'SUBMISSION_REOPENED': return 'Submitter reopened the submission';
     case 'FILE_VERSION_ADDED': return 'Document version added';
     case 'STAGE_1_AUTHORIZED': return 'Stage 1 approved';
     case 'STAGE_1_REJECTED': return 'Stage 1 rejected';
