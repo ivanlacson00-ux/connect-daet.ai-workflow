@@ -26,6 +26,7 @@ interface UserProfile {
   full_name: string | null;
   role: string;
   created_at: string;
+  is_active: boolean;
   verificationStatus: VerificationStatus;
 }
 
@@ -98,6 +99,7 @@ export default function UserManagementPage() {
   const [usersError, setUsersError] = useState('');
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
+  const [showInactive, setShowInactive] = useState(false);
   const [updating, setUpdating] = useState<string | null>(null);
   const [newAccountDetails, setNewAccountDetails] = useState({
     firstName: '',
@@ -114,45 +116,51 @@ export default function UserManagementPage() {
   const [accountCreationStatus, setAccountCreationStatus] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
   const [invitationLink, setInvitationLink] = useState<{ email: string; fullName: string; role: Role; url: string } | null>(null);
   const [linkActionStatus, setLinkActionStatus] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [userFetchError, setUserFetchError] = useState('');
 
   // ─── Data actions ──────────────────────────────────────────────────────────
   const fetchUsers = useCallback(async () => {
     setUsersError('');
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, email, full_name, role, created_at')
+      .select('id, email, full_name, role, created_at, is_active')
+      .eq('is_active', !showInactive)
       .order('created_at', { ascending: false });
 
     if (error) {
       console.error('User registry fetch failed:', error.message);
-      setUsersError('Could not load the user registry. Check your connection and try again.');
-    } else {
-      const profiles = data ?? [];
-      try {
-        const response = await fetch('/api/admin/accounts', { cache: 'no-store' });
-        const result = await response.json() as {
-          error?: string;
-          verificationStatuses?: Record<string, Exclude<VerificationStatus, 'unknown'>>;
-        };
-        if (!response.ok || !result.verificationStatuses) {
-          throw new Error(result.error || 'Could not load account verification statuses.');
-        }
+      setUserFetchError(`Could not load the user registry: ${error.message}`);
+      setLoading(false);
+      return;
+    }
+    setUserFetchError('');
 
-        setUsers(profiles.map((profile) => ({
-          ...profile,
-          verificationStatus: result.verificationStatuses?.[profile.id] ?? 'unknown',
-        })));
-      } catch (verificationError) {
-        const message = verificationError instanceof Error
-          ? verificationError.message
-          : 'Could not load account verification statuses.';
-        console.error('Account verification status refresh failed:', message);
-        setUsers(profiles.map((profile) => ({ ...profile, verificationStatus: 'unknown' })));
-        setUsersError(message);
+    const profiles = data ?? [];
+    try {
+      const response = await fetch('/api/admin/accounts', { cache: 'no-store' });
+      const result = await response.json() as {
+        error?: string;
+        verificationStatuses?: Record<string, Exclude<VerificationStatus, 'unknown'>>;
+      };
+      if (!response.ok || !result.verificationStatuses) {
+        throw new Error(result.error || 'Could not load account verification statuses.');
       }
+
+      setUsers(profiles.map((profile) => ({
+        ...profile,
+        verificationStatus: result.verificationStatuses?.[profile.id] ?? 'unknown',
+      })));
+    } catch (verificationError) {
+      const message = verificationError instanceof Error
+        ? verificationError.message
+        : 'Could not load account verification statuses.';
+      console.error('Account verification status refresh failed:', message);
+      setUsers(profiles.map((profile) => ({ ...profile, verificationStatus: 'unknown' })));
+      setUsersError(message);
     }
     setLoading(false);
-  }, [supabase]);
+  }, [showInactive, supabase]);
 
   const createOfficialAccount = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -220,28 +228,33 @@ export default function UserManagementPage() {
 
   const deleteUser = async (userId: string, email: string) => {
     const confirmed = window.confirm(
-      `WARNING: Are you sure you want to delete ${email}? This will remove their profile record.`
+      `Disable ${email}'s sign-in, free this email for a new registration, and anonymize their old workflow history?`
     );
     if (!confirmed) return;
 
     setUpdating(userId);
+    setDeleteError('');
     try {
-      const response = await fetch('/api/admin/accounts', {
+      const response = await fetch(`/api/admin/users/${userId}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId }),
       });
-      const result = await response.json() as { error?: string };
+      const result: unknown = await response.json();
+      const errorMessage =
+        typeof result === 'object'
+        && result !== null
+        && 'error' in result
+        && typeof result.error === 'string'
+          ? result.error
+          : 'Could not remove this user.';
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to delete user profile.');
+        setDeleteError(errorMessage);
+        return;
       }
-
-      setUsers((previousUsers) => previousUsers.filter((registeredUser) => registeredUser.id !== userId));
+      setUsers(prev => prev.filter(u => u.id !== userId));
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to delete user profile.';
-      console.error('Delete error:', message);
-      alert(message);
+      console.error('User deletion request failed:', error);
+      setDeleteError('Could not reach the server to delete this user. Please try again.');
     } finally {
       setUpdating(null);
     }
@@ -504,6 +517,22 @@ export default function UserManagementPage() {
           <button type="button" onClick={() => void fetchUsers()} className="font-semibold underline">Retry</button>
         </div>
       )}
+      {deleteError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text"
+        >
+          Account removal failed: {deleteError}
+        </p>
+      )}
+      {userFetchError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text"
+        >
+          {userFetchError}
+        </p>
+      )}
 
       {/* Toolbar */}
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -520,6 +549,18 @@ export default function UserManagementPage() {
 
         {/* Role filter pills (scroll inside their own row on mobile) */}
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden">
+          <button
+            type="button"
+            onClick={() => setShowInactive((current) => !current)}
+            aria-pressed={showInactive}
+            className={`inline-flex h-10 shrink-0 items-center rounded-full border px-4 text-xs font-medium transition-colors max-md:h-11 ${
+              showInactive
+                ? 'border-clay bg-clay text-white'
+                : 'border-warm-border bg-card text-warm-text hover:bg-sidebar'
+            }`}
+          >
+            {showInactive ? 'Showing removed accounts' : 'Show removed accounts'}
+          </button>
           {FILTERS.map(f => {
             const active = roleFilter === f.key;
             return (
@@ -553,6 +594,10 @@ export default function UserManagementPage() {
       {loading ? (
         <div className="flex items-center gap-3 rounded-2xl border border-warm-border bg-card px-5 py-8 text-xs text-muted-text">
           <span className="h-2 w-2 animate-pulse rounded-full bg-clay" /> Loading users...
+        </div>
+      ) : userFetchError ? (
+        <div className="rounded-2xl border border-rejected-bg bg-card px-5 py-8 text-center text-xs text-rejected-text">
+          The registry could not be loaded. Resolve the error above and try again.
         </div>
       ) : filtered.length === 0 ? (
         <div className="rounded-2xl border border-warm-border bg-card py-16 text-center">
@@ -607,7 +652,7 @@ export default function UserManagementPage() {
                     onClick={() => deleteUser(user.id, user.email)}
                     className="inline-flex h-10 items-center justify-center rounded-full border border-rejected-bg px-5 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/50 max-md:h-11 max-md:w-full"
                   >
-                    Delete
+                    {user.is_active ? 'Remove account' : 'Free email for re-registration'}
                   </button>
                 )}
               </div>
