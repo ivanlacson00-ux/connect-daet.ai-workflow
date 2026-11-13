@@ -111,5 +111,5 @@ export function useSubmissions(statusFilter?: string) {
     };
   }, [fetchSubmissions, supabase]);
 
-  return { submissions, loading, adminApprove, adminDecline };
+  return { submissions, loading, adminApprove, adminDecline, refreshSubmissions: fetchSubmissions };
 }

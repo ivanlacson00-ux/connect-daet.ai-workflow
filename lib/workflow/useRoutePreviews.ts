@@ -29,10 +29,15 @@ const ROUTING_AUDIT_ACTIONS = [
   'TOURISM_OFFICER_ASSIGNMENTS_CREATED',
   'OFFICE_FINAL_DECISION',
   'WORKFLOW_COMPLETED',
+  'SUBMISSION_APPROVED',
+  'SUBMISSION_REJECTED',
   'SUBMISSION_CLOSED',
   'SUBMISSION_REOPENED',
   'CHANGES_REQUESTED',
+  'CHANGES_RESPONDED',
   'ROUTE_REQUIREMENTS_REQUESTED',
+  'REQUIREMENTS_RESUBMITTED',
+  'REVISED_DOCUMENT_SUBMITTED',
   'RETURNED_TO_SUBMITTER',
   'SUBMISSION_WITHDRAWN',
   'OFFICE_REJECTED',
@@ -44,9 +49,34 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
   const submissionKey = [...new Set(submissions.map((submission) => submission.id))]
     .sort()
     .join(',');
+  // Reload when any submission's status changes, not only when the list changes.
+  const statusKey = submissions
+    .map((submission) => `${submission.id}:${submission.status}`)
+    .sort()
+    .join(',');
+  const [refreshToken, setRefreshToken] = useState(0);
   const [routesBySubmission, setRoutesBySubmission] = useState<
     Record<string, WorkflowRoutePreview>
   >({});
+
+  // Office assignments change without changing the submission status, so listen for them.
+  useEffect(() => {
+    if (!submissionKey) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleRefresh = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => setRefreshToken((token) => token + 1), 400);
+    };
+    const channel = supabase
+      .channel(`route-previews-${Math.random().toString(36).slice(2)}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'workflow_routing_steps' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'workflow_routing_plans' }, scheduleRefresh)
+      .subscribe();
+    return () => {
+      if (timer) clearTimeout(timer);
+      void supabase.removeChannel(channel);
+    };
+  }, [submissionKey, supabase]);
 
   useEffect(() => {
     let active = true;
@@ -58,19 +88,23 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
 
     const loadRoutes = async () => {
       const [routeResult, submissionResult, auditResult] = await Promise.all([
+        // Every forward starts a new routing plan, so earlier plans hold earlier assignments.
         supabase
           .from('workflow_routing_plans')
           .select(`
             submission_id,
             status,
+            is_current,
             finalized_at,
             workflow_routing_steps (
               sequence_number,
               office_role,
               status,
+              outcome,
               responsibility,
               assignment_source,
               assigned_by_role,
+              assigned_at,
               started_at,
               decided_at,
               completed_at,
@@ -78,7 +112,7 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
             )
           `)
           .in('submission_id', submissionIds)
-          .eq('is_current', true),
+          .in('status', ['finalized', 'superseded']),
         supabase
           .from('workflow_submissions')
           .select('id, initial_destination_role, final_decision_office_role')
@@ -116,15 +150,15 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
         return;
       }
 
-      const initialDestinationById = new Map(
+      const submissionDetailsById = new Map(
         (submissionResult.data ?? []).map((submission) => [submission.id, submission])
       );
       const previews: Record<string, WorkflowRoutePreview> = Object.fromEntries(
         submissionIds.map((id) => [
           id,
           {
-            initialDestinationRole: initialDestinationById.get(id)?.initial_destination_role ?? null,
-            finalDecisionOfficeRole: initialDestinationById.get(id)?.final_decision_office_role ?? null,
+            initialDestinationRole: submissionDetailsById.get(id)?.initial_destination_role ?? null,
+            finalDecisionOfficeRole: submissionDetailsById.get(id)?.final_decision_office_role ?? null,
             status: null,
             finalizedAt: null,
             steps: [],
@@ -135,12 +169,13 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
       );
 
       for (const route of routeResult.data ?? []) {
-        previews[route.submission_id] = {
-          ...previews[route.submission_id],
-          status: route.status,
-          finalizedAt: route.finalized_at,
-          steps: route.workflow_routing_steps ?? [],
-        };
+        const preview = previews[route.submission_id];
+        if (!preview) continue;
+        preview.steps.push(...(route.workflow_routing_steps ?? []));
+        if (route.is_current) {
+          preview.status = route.status;
+          preview.finalizedAt = route.finalized_at;
+        }
       }
       for (const event of auditResult.data ?? []) {
         previews[event.submission_id]?.auditEvents.push({
@@ -156,7 +191,7 @@ export function useRoutePreviews(submissions: RoutePreviewSubmission[]) {
     return () => {
       active = false;
     };
-  }, [submissionKey, supabase]);
+  }, [submissionKey, statusKey, refreshToken, supabase]);
 
   return useMemo(() => {
     const activeSubmissionIds = new Set(submissionKey ? submissionKey.split(',') : []);

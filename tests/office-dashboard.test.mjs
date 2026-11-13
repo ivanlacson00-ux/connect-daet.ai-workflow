@@ -27,6 +27,38 @@ test('pending office assignments remain visible even when the submission is pend
   }, 'needs_action', 'municipal_treasurer'), true);
 });
 
+test('a responsible office waiting on another office is not in needs-action', () => {
+  const waiting = {
+    status: 'in_process',
+    selected_office_role: 'tourism_officer',
+    officeRecord: null,
+    consultedRecord: { status: 'in_progress' },
+  };
+  assert.equal(matchesOfficeDashboardFilter(waiting, 'needs_action', 'tourism_officer'), false);
+  assert.equal(matchesOfficeDashboardFilter(waiting, 'waiting_on_office', 'tourism_officer'), true);
+});
+
+test('a responsible office returns to needs-action once the other office responds', () => {
+  const responded = {
+    status: 'in_process',
+    selected_office_role: 'tourism_officer',
+    officeRecord: null,
+    consultedRecord: { status: 'completed' },
+  };
+  assert.equal(matchesOfficeDashboardFilter(responded, 'needs_action', 'tourism_officer'), true);
+  assert.equal(matchesOfficeDashboardFilter(responded, 'waiting_on_office', 'tourism_officer'), false);
+});
+
+test('a rejected final decision is treated as processed rather than pending work', () => {
+  const rejected = {
+    status: 'declined_by_office',
+    selected_office_role: 'municipal_treasurer',
+    officeRecord: null,
+  };
+  assert.equal(matchesOfficeDashboardFilter(rejected, 'needs_action', 'municipal_treasurer'), false);
+  assert.equal(matchesOfficeDashboardFilter(rejected, 'processed', 'municipal_treasurer'), true);
+});
+
 test('unrelated offices do not see a direct submission in needs-action', () => {
   assert.equal(matchesOfficeDashboardFilter({
     status: 'pending_office',

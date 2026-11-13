@@ -99,20 +99,35 @@ export default function AdminNotificationsPage() {
       );
       if (error) throw error;
       const rows = data || [];
-      const { data: dismissed, error: dismissedError } = rows.length
-        ? await supabase
-          .from('workflow_notification_dismissals')
-          .select('notification_id')
-          .eq('user_id', user.id)
-          .in('notification_id', rows.map((notification) => notification.id))
-        : { data: [], error: null };
+      const [
+        { data: dismissed, error: dismissedError },
+        { data: archived, error: archiveError },
+      ] = rows.length
+        ? await Promise.all([
+          supabase
+            .from('workflow_notification_dismissals')
+            .select('notification_id')
+            .eq('user_id', user.id)
+            .in('notification_id', rows.map((notification) => notification.id)),
+          supabase
+            .from('workflow_notification_archives')
+            .select('notification_id')
+            .eq('user_id', user.id)
+            .in('notification_id', rows.map((notification) => notification.id)),
+        ])
+        : [
+          { data: [], error: null },
+          { data: [], error: null },
+        ];
       if (dismissedError) throw dismissedError;
+      if (archiveError) throw archiveError;
       const dismissedIds = new Set((dismissed || []).map((item) => item.notification_id));
+      const archivedIds = new Set((archived || []).map((item) => item.notification_id));
 
       // Keep only the latest notification per submission
       const latestBySubmission = new Map<string, AdminNotification>();
       rows.forEach((notification) => {
-        if (dismissedIds.has(notification.id)) return;
+        if (dismissedIds.has(notification.id) || archivedIds.has(notification.id)) return;
         if (!latestBySubmission.has(notification.submission_id)) {
           latestBySubmission.set(notification.submission_id, {
             ...notification.workflow_submissions,
@@ -179,7 +194,7 @@ export default function AdminNotificationsPage() {
     setActionBusy(true);
     setErrorMessage(null);
     try {
-      const { error } = await supabase.rpc('dismiss_all_workflow_notifications');
+      const { error } = await supabase.rpc('archive_all_workflow_notifications');
       if (error) {
         setErrorMessage(error.message);
         return;
@@ -188,7 +203,7 @@ export default function AdminNotificationsPage() {
       setPage(0);
       await fetchNotifications(0);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Could not clear notifications.');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not archive notifications.');
     } finally {
       setActionBusy(false);
     }
@@ -231,6 +246,7 @@ export default function AdminNotificationsPage() {
 
       <WorkflowNotificationControls
         filter={filter}
+        archiveHref="/workflow/admin/notifications/archive"
         onFilterChange={(nextFilter) => {
           setFilter(nextFilter);
           setPage(0);

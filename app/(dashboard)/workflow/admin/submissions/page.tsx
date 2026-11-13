@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import AdminDeleteSubmissionButton from '@/components/AdminDeleteSubmissionButton';
 import WorkflowRoutingPipeline from '@/components/WorkflowRoutingPipeline';
 import { useSubmissions } from '@/hooks/useSubmissions';
 import { getWorkflowTiming, workflowTimingClasses } from '@/lib/workflow/timing';
@@ -73,7 +74,7 @@ export default function SubmissionsPage() {
   const [fileTypeFilter, setFileTypeFilter] = useState('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
-  const { submissions, loading } = useSubmissions();
+  const { submissions, loading, refreshSubmissions } = useSubmissions();
   const routesBySubmission = useRoutePreviews(submissions);
 
   const fileTypes = useMemo(
@@ -275,6 +276,11 @@ export default function SubmissionsPage() {
                   >
                     View document <span aria-hidden="true">→</span>
                   </Link>
+                  <AdminDeleteSubmissionButton
+                    submissionId={sub.id}
+                    fileName={sub.file_name}
+                    onDeleted={() => void refreshSubmissions()}
+                  />
                 </div>
                 <div className="sm:col-span-12">
                   <WorkflowRoutingPipeline

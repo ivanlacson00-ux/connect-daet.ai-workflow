@@ -144,6 +144,8 @@ interface AssignmentConversation {
   stepId: string;
   label: string;
   canSend: boolean;
+  /** Shown when the assignment is finished, e.g. the office's outcome and note. */
+  closedSummary?: string;
 }
 
 interface Message extends MessageRow {
@@ -172,12 +174,17 @@ interface DocumentMessagingProps {
     initialRecipient: string;
     initialAction: string;
     initialMessage?: string;
+    actionSectionId?: string;
     statusLine: string;
+    workflowStatus?: ReactNode;
     showStatusLine?: boolean;
     processingNote?: string;
     contextNote?: string;
     isClosed?: boolean;
     closedMessage?: string;
+    startReviewMessage?: string;
+    startReviewDisabled?: boolean;
+    onStartReview?: () => Promise<void>;
     busy?: boolean;
     pendingAssignmentCount?: number;
     isOfficeWorkspace?: boolean;
@@ -189,6 +196,13 @@ interface DocumentMessagingProps {
       fileSize: number;
     };
     renderActionFields?: (action: string) => ReactNode;
+    /**
+     * The forwarding office's own response when it forwards its assignment onward.
+     * Returns null when no response applies; throws when a required response is missing.
+     */
+    getForwardResponse?: () => { outcome: string; note: string | null } | null;
+    /** Returns a message when extra action fields are incomplete; checked before anything is sent. */
+    validateAction?: (action: string) => string | null;
     onWorkflowAction: (
       action: string,
       recipient: string,
@@ -209,6 +223,8 @@ interface ComposerAction {
   unavailableReason?: string;
   requiresMessage?: boolean;
   confirmation?: string;
+  /** Shown after the action succeeds; defaults to "<label> completed." */
+  successMessage?: string;
 }
 
 interface UploadedAttachment {
@@ -294,7 +310,11 @@ export default function DocumentMessaging({
   const [hasEarlier, setHasEarlier] = useState(false);
   const [sending, setSending] = useState(false);
   const [liveStatus, setLiveStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-  const [selectedRecipient, setSelectedRecipient] = useState(workflowComposer?.initialRecipient ?? 'submitter');
+  const [selectedRecipient, setSelectedRecipient] = useState(
+    workflowComposer?.recipients.find((recipient) => recipient.value.startsWith('office:'))?.value
+      ?? workflowComposer?.initialRecipient
+      ?? 'submitter',
+  );
   const [selectedAction, setSelectedAction] = useState(workflowComposer?.initialAction ?? '');
   const [confirmingAction, setConfirmingAction] = useState<ComposerAction | null>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
@@ -317,9 +337,47 @@ export default function DocumentMessaging({
     ? Boolean(selectedAssignmentConversation?.canSend)
     : canViewSubmitterConversation && canSendSubmitterThread;
 
-  // Actions depend on the selected recipient. Conversation messages have a separate composer.
-  const recipientActions = workflowComposer?.actionsByRecipient[selectedRecipient] ?? [];
-  const actionList = getActionList(recipientActions);
+  // Conversation messages have a separate composer; workflow actions are chosen before their target.
+  const forwardingRecipients = workflowComposer?.recipients.filter((recipient) =>
+    recipient.value.startsWith('office:')
+  ) ?? [];
+  const withdrawalRecipients = forwardingRecipients.filter((recipient) =>
+    workflowComposer?.actionsByRecipient[recipient.value]?.some(
+      (action) => action.value === 'withdraw_assignment' && !action.unavailableReason
+    )
+  );
+  const actionPriority = [
+    'close_submission',
+    'complete_assignment',
+    'approve',
+    'reject',
+    'request_changes',
+    'forward',
+    'return_to_submitter',
+    'return_assignment',
+    'withdraw_assignment',
+  ];
+  const actionValues = [...new Set(
+    Object.values(workflowComposer?.actionsByRecipient ?? {}).flat().map((action) => action.value)
+  )].sort((first, second) => {
+    const firstPriority = actionPriority.indexOf(first);
+    const secondPriority = actionPriority.indexOf(second);
+    return (firstPriority < 0 ? actionPriority.length : firstPriority)
+      - (secondPriority < 0 ? actionPriority.length : secondPriority);
+  });
+  const actionList = getActionList(actionValues.flatMap((value) => {
+    const recipientForAction = value === 'forward' || value === 'withdraw_assignment'
+      ? selectedRecipient
+      : workflowComposer?.initialRecipient;
+    const selectedRecipientAction = recipientForAction
+      ? workflowComposer?.actionsByRecipient[recipientForAction]?.find((action) => action.value === value)
+      : undefined;
+    const fallbackAction = Object.values(workflowComposer?.actionsByRecipient ?? {})
+      .flat()
+      .find((action) => action.value === value);
+    const action = selectedRecipientAction ?? fallbackAction;
+    return action ? [action] : [];
+  }));
   const actionGroups = actionList.reduce<{ label: string; actions: ComposerAction[] }[]>(
     (groups, action) => {
       const label = action.groupLabel ?? '';
@@ -332,7 +390,11 @@ export default function DocumentMessaging({
   );
   const currentAction = actionList.find((action) => action.value === selectedAction)
     ?? getDefaultAction(actionList);
-  const recipientLabel = workflowComposer?.recipients.find((recipient) => recipient.value === selectedRecipient)?.label
+  const needsOfficeRecipient = currentAction.value === 'forward' || currentAction.value === 'withdraw_assignment';
+  const actionRecipient = needsOfficeRecipient
+    ? selectedRecipient
+    : workflowComposer?.initialRecipient ?? selectedRecipient;
+  const recipientLabel = workflowComposer?.recipients.find((recipient) => recipient.value === actionRecipient)?.label
     ?? 'recipient';
   const actionDisabled = sending || Boolean(workflowComposer?.busy) || Boolean(workflowComposer?.isClosed);
   const conversationDisabled = sending
@@ -343,7 +405,10 @@ export default function DocumentMessaging({
 
   useEffect(() => {
     if (!workflowComposer) return;
-    setSelectedRecipient(workflowComposer.initialRecipient);
+    setSelectedRecipient(
+      workflowComposer.recipients.find((recipient) => recipient.value.startsWith('office:'))?.value
+        ?? workflowComposer.initialRecipient,
+    );
     setSelectedAction(workflowComposer.initialAction);
   }, [submissionId, workflowComposer?.initialAction, workflowComposer?.initialRecipient]);
 
@@ -799,8 +864,13 @@ export default function DocumentMessaging({
     const message = draft.trim();
     const files = selectedFiles;
     const needsMessage = action.requiresMessage ?? false;
+    const fieldError = workflowComposer.validateAction?.(action.value) ?? null;
+    if (fieldError) {
+      setError(fieldError);
+      return false;
+    }
     if (needsMessage && !message) {
-      setError('Enter a message before continuing.');
+      setError(`Add details in the box below before you choose “${action.buttonLabel ?? action.label}”.`);
       messageInputRef.current?.focus();
       return false;
     }
@@ -831,7 +901,7 @@ export default function DocumentMessaging({
     try {
       if (action.value === 'send_message') {
         if (!message) throw new Error('Enter a message before sending.');
-        const actionThreadId = selectedRecipient === 'submitter'
+        const actionThreadId = actionRecipient === 'submitter'
           ? null
           : workflowComposer.activeAssignmentStepId ?? selectedThreadStepId;
         const attachmentsSaved = await sendPlainMessage(message, files, setNotice, actionThreadId);
@@ -844,6 +914,7 @@ export default function DocumentMessaging({
         if (files.length >= MAX_ATTACHMENTS) {
           throw new Error('Forwarding includes the current document automatically and allows up to four additional files.');
         }
+        const forwardResponse = workflowComposer.getForwardResponse?.() ?? null;
         const { data: currentDocumentBlob, error: documentError } = await supabase.storage
           .from('workflow_uploads')
           .download(workflowComposer.sourceDocument.filePath);
@@ -864,11 +935,13 @@ export default function DocumentMessaging({
         try {
           const { error: forwardError } = await supabase.rpc('forward_workflow_submission_to_office', {
             target_submission_id: submissionId,
-            target_office_role: selectedRecipient.replace(/^office:/, ''),
+            target_office_role: actionRecipient.replace(/^office:/, ''),
             message_id: messageId,
             target_assignment_id: assignmentId,
             message_body: message || null,
             attachment_records: rows,
+            forwarder_outcome: forwardResponse?.outcome ?? null,
+            forwarder_note: forwardResponse?.note ?? null,
           });
           if (forwardError) throw new Error(forwardError.message);
           forwarded = true;
@@ -903,11 +976,11 @@ export default function DocumentMessaging({
         }
         await workflowComposer.onWorkflowAction(
           action.value,
-          selectedRecipient,
+          actionRecipient,
           message,
           actionFiles,
         );
-        setNotice(`${action.label} completed.`);
+        setNotice(action.successMessage ?? `${action.label} completed.`);
       }
 
       clearComposer();
@@ -933,8 +1006,13 @@ export default function DocumentMessaging({
       setError(action.unavailableReason);
       return;
     }
+    const fieldError = workflowComposer.validateAction?.(action.value) ?? null;
+    if (fieldError) {
+      setError(fieldError);
+      return;
+    }
     if (action.requiresMessage && !draft.trim()) {
-      setError('Enter a message before continuing.');
+      setError(`Add details in the box below before you choose “${action.buttonLabel ?? action.label}”.`);
       messageInputRef.current?.focus();
       return;
     }
@@ -1034,6 +1112,93 @@ export default function DocumentMessaging({
     : currentAction.tone === 'neutral'
       ? 'border border-warm-border bg-white text-warm-text hover:bg-sidebar'
       : 'bg-clay text-white hover:bg-warm-text';
+  const actionAudienceNote = currentAction.value === 'forward'
+    ? `Your message and attached files go to ${recipientLabel}.`
+    : ['complete_assignment', 'return_assignment'].includes(currentAction.value)
+      ? `Your note goes to ${recipientLabel}. Attached files are shared in this assignment conversation.`
+      : currentAction.value === 'close_submission'
+        ? 'The completion note and optional document are saved with the submission and shared with the submitter.'
+        : actionRecipient === 'submitter'
+          ? 'These action details are sent to the submitter.'
+          : `These action details are sent to ${recipientLabel}.`;
+  const actionDropdown = workflowComposer ? (
+    <div className="flex items-center gap-2">
+      <label className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text" htmlFor={`action-${submissionId}`}>
+        Action
+      </label>
+      <select
+        id={`action-${submissionId}`}
+        aria-label="Action"
+        value={currentAction.value}
+        onChange={(event) => {
+          const action = event.target.value;
+          setSelectedAction(action);
+          if (action === 'forward' && forwardingRecipients[0]) {
+            setSelectedRecipient(forwardingRecipients[0].value);
+          } else if (action === 'withdraw_assignment' && withdrawalRecipients[0]) {
+            setSelectedRecipient(withdrawalRecipients[0].value);
+          }
+          setError('');
+        }}
+        disabled={actionDisabled}
+        className="h-10 w-44 max-w-full cursor-pointer rounded-full border border-warm-border bg-white px-3 text-xs font-medium text-warm-text outline-none transition-colors duration-200 hover:border-clay focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {actionGroups.map((group) => group.label ? (
+          <optgroup key={group.label} label={group.label}>
+            {group.actions.map(renderActionOption)}
+          </optgroup>
+        ) : group.actions.map(renderActionOption))}
+      </select>
+      {currentAction.value === 'forward' && forwardingRecipients.length > 0 && (
+        <>
+          <label className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text" htmlFor={`recipient-${submissionId}`}>
+            Recipient
+          </label>
+          <select
+            id={`recipient-${submissionId}`}
+            aria-label="Recipient"
+            value={selectedRecipient}
+            onChange={(event) => {
+              setSelectedRecipient(event.target.value);
+              setError('');
+            }}
+            disabled={actionDisabled}
+            className="h-10 w-44 max-w-full cursor-pointer rounded-full border border-warm-border bg-white px-3 text-xs font-medium text-warm-text outline-none transition-colors duration-200 hover:border-clay focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {forwardingRecipients.map((recipient) => (
+              <option key={recipient.value} value={recipient.value}>{recipient.label}</option>
+            ))}
+          </select>
+        </>
+      )}
+    </div>
+  ) : null;
+  const actionSelectionFields = workflowComposer ? (
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      {currentAction.value === 'withdraw_assignment' && withdrawalRecipients.length > 0 && (
+        <div className="flex items-center gap-2">
+          <label className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text" htmlFor={`assignment-${submissionId}`}>
+            Assignment
+          </label>
+          <select
+            id={`assignment-${submissionId}`}
+            aria-label="Office assignment to withdraw"
+            value={selectedRecipient}
+            onChange={(event) => {
+              setSelectedRecipient(event.target.value);
+              setError('');
+            }}
+            disabled={actionDisabled}
+            className="h-10 w-44 max-w-full cursor-pointer rounded-full border border-warm-border bg-white px-3 text-xs font-medium text-warm-text outline-none transition-colors duration-200 hover:border-clay focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {withdrawalRecipients.map((recipient) => (
+              <option key={recipient.value} value={recipient.value}>{recipient.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
+  ) : null;
 
   const conversation = (
     <div
@@ -1144,7 +1309,7 @@ export default function DocumentMessaging({
     || (canViewSubmitterConversation && assignmentConversations.length > 0);
 
   return (
-    <section className="space-y-5">
+    <section className={workflowComposer?.isOfficeWorkspace ? 'flex flex-col gap-5' : 'space-y-5'}>
       {workflowComposer && workflowComposer.showStatusLine !== false && (
         <div className="flex items-center gap-2.5 rounded-xl border border-warm-border bg-card px-4 py-2.5 text-[11px] font-medium text-muted-text" role="status">
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-clay" />
@@ -1153,7 +1318,9 @@ export default function DocumentMessaging({
       )}
 
       {/* ── Messages (70%) + Activity (30%) side by side ── */}
-      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)]">
+      <div className={`grid items-start gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] ${
+        workflowComposer?.isOfficeWorkspace ? 'order-2' : ''
+      }`}>
         <section className="min-w-0 overflow-hidden rounded-2xl border border-warm-border bg-card">
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-warm-border px-5 py-4 md:px-6">
             <div className="flex items-center gap-2.5">
@@ -1259,6 +1426,11 @@ export default function DocumentMessaging({
               placeholder={`Write a message in ${conversationLabel}…`}
               className="block min-h-20 w-full resize-y rounded-xl border border-warm-border bg-white p-3 text-xs leading-relaxed text-warm-text outline-none placeholder:text-muted-text/70 focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:bg-sidebar disabled:opacity-70"
             />
+            {workflowComposer?.isOfficeWorkspace && (
+              <p className="text-[10px] leading-relaxed text-muted-text">
+                Only participants in this conversation can view these messages and attachments.
+              </p>
+            )}
             <FileChips
               files={conversationFiles}
               disabled={sending}
@@ -1291,8 +1463,10 @@ export default function DocumentMessaging({
               </p>
             )}
             {!canSendCurrentConversation && !workflowComposer?.busy && (
-              <p role="status" className="text-[11px] font-medium text-muted-text">
-                This conversation is closed for new messages.
+              <p role="status" className="whitespace-pre-wrap text-[11px] font-medium text-muted-text">
+                {selectedThreadStepId && selectedAssignmentConversation?.closedSummary
+                  ? `${selectedAssignmentConversation.closedSummary}\nThis conversation is closed for new messages.`
+                  : 'This conversation is closed for new messages.'}
               </p>
             )}
             {workflowComposer?.busy && !sending && (
@@ -1320,57 +1494,70 @@ export default function DocumentMessaging({
         </aside>
       </div>
 
-      <section className="overflow-hidden rounded-2xl border border-warm-border bg-card">
-        <header className="flex items-center justify-between gap-2 border-b border-warm-border px-5 py-4">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span className="shrink-0 text-clay"><Icon name="paperclip" size={17} /></span>
-            <div>
-              <h3 className="text-sm font-bold text-warm-text">Shared files</h3>
-              <p className="mt-0.5 text-[10px] text-muted-text">Files shared in messages and office actions</p>
+      {workflowComposer?.isOfficeWorkspace && workflowComposer.workflowStatus ? (
+        workflowComposer.workflowStatus
+      ) : (
+        <section className="overflow-hidden rounded-2xl border border-warm-border bg-card">
+          <header className="flex items-center justify-between gap-2 border-b border-warm-border px-5 py-4">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="shrink-0 text-clay"><Icon name="paperclip" size={17} /></span>
+              <div>
+                <h3 className="text-sm font-bold text-warm-text">Shared files</h3>
+                <p className="mt-0.5 text-[10px] text-muted-text">Files shared in messages and office actions</p>
+              </div>
             </div>
+            <span className="shrink-0 rounded-full bg-sidebar px-2.5 py-1 text-[10px] font-bold text-muted-text">
+              {sharedAttachments.length}
+            </span>
+          </header>
+          <div className="max-h-64 overflow-y-auto p-4">
+            {sharedAttachments.length === 0 ? (
+              <p className="rounded-xl bg-sidebar/60 px-4 py-3 text-[11px] text-muted-text">No files shared yet.</p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {sharedAttachments.map((attachment) => (
+                  <button
+                    key={attachment.id}
+                    type="button"
+                    onClick={() => void downloadAttachment(attachment)}
+                    className="flex w-full min-w-0 items-center gap-3 rounded-xl border border-warm-border bg-white px-3 py-2.5 text-left text-warm-text transition-colors hover:border-clay"
+                  >
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-clay-soft text-clay">
+                      <Icon name="file" size={16} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[11px] font-semibold">{attachment.file_name}</span>
+                      <span className="mt-0.5 block truncate text-[9px] text-muted-text">
+                        {Math.max(1, Math.round(attachment.file_size / 1024))} KB
+                        {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
+                      </span>
+                      <span className="mt-0.5 block truncate text-[9px] text-muted-text">
+                        {attachment.conversation_label} · {attachment.sender_name}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-[10px] font-semibold text-clay">Open</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          <span className="shrink-0 rounded-full bg-sidebar px-2.5 py-1 text-[10px] font-bold text-muted-text">
-            {sharedAttachments.length}
-          </span>
-        </header>
-        <div className="max-h-64 overflow-y-auto p-4">
-          {sharedAttachments.length === 0 ? (
-            <p className="rounded-xl bg-sidebar/60 px-4 py-3 text-[11px] text-muted-text">No files shared yet.</p>
-          ) : (
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-              {sharedAttachments.map((attachment) => (
-                <button
-                  key={attachment.id}
-                  type="button"
-                  onClick={() => void downloadAttachment(attachment)}
-                  className="flex w-full min-w-0 items-center gap-3 rounded-xl border border-warm-border bg-white px-3 py-2.5 text-left text-warm-text transition-colors hover:border-clay"
-                >
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-clay-soft text-clay">
-                    <Icon name="file" size={16} />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[11px] font-semibold">{attachment.file_name}</span>
-                    <span className="mt-0.5 block truncate text-[9px] text-muted-text">
-                      {Math.max(1, Math.round(attachment.file_size / 1024))} KB
-                      {attachment.file_type ? ` · ${attachment.file_type.split('/').pop()?.toUpperCase()}` : ''}
-                    </span>
-                    <span className="mt-0.5 block truncate text-[9px] text-muted-text">
-                      {attachment.conversation_label} · {attachment.sender_name}
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-[10px] font-semibold text-clay">Open</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </section>
+        </section>
+      )}
 
-      {afterSharedFiles}
+      {afterSharedFiles && (
+        <div className={workflowComposer?.isOfficeWorkspace ? 'order-3' : ''}>
+          {afterSharedFiles}
+        </div>
+      )}
 
       {/* ── Your office action ── */}
-      {workflowComposer && workflowComposer.showWorkflowActions !== false && (
-        <div className="space-y-3">
+      {workflowComposer && (
+        (workflowComposer.showWorkflowActions !== false || Boolean(workflowComposer.onStartReview))
+      ) && (
+        <div
+          id={workflowComposer.actionSectionId}
+          className={`space-y-3 ${workflowComposer.isOfficeWorkspace ? 'order-1 scroll-mt-6' : ''}`}
+        >
           {error && (
             <p role="alert" className="rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">{error}</p>
           )}
@@ -1396,9 +1583,37 @@ export default function DocumentMessaging({
             </header>
 
             <div className="space-y-4 bg-[#f8f5f1] p-5 md:p-6">
+              {workflowComposer.onStartReview ? (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-[11px] leading-relaxed text-muted-text">
+                    {workflowComposer.startReviewMessage}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void workflowComposer.onStartReview?.()}
+                    disabled={workflowComposer.busy || workflowComposer.startReviewDisabled}
+                    className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-clay px-5 text-xs font-bold text-white transition-colors hover:bg-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {workflowComposer.busy ? 'Starting...' : 'Start processing'}
+                  </button>
+                </div>
+              ) : (
+                <>
               {workflowComposer.contextNote && (
                 <p className="whitespace-pre-wrap rounded-xl border border-pending-bg bg-pending-bg/40 px-3 py-2 text-[11px] text-warm-text">
                   {workflowComposer.contextNote}
+                </p>
+              )}
+              {actionSelectionFields}
+              {currentAction.unavailableReason && (
+                <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-pending-text" role="status">
+                  <span className="mt-0.5 shrink-0"><Icon name="info" size={13} /></span>
+                  {currentAction.unavailableReason}
+                </p>
+              )}
+              {currentAction.description && (
+                <p className="text-[10px] leading-relaxed text-muted-text" aria-live="polite">
+                  {currentAction.description}
                 </p>
               )}
               {workflowComposer.renderActionFields?.(currentAction.value)}
@@ -1407,6 +1622,9 @@ export default function DocumentMessaging({
                 <label htmlFor={`message-${submissionId}`} className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
                   Action details
                 </label>
+                <p className="mb-2 text-[10px] leading-relaxed text-muted-text">
+                  {actionAudienceNote}
+                </p>
                 <textarea
                   ref={messageInputRef}
                   id={`message-${submissionId}`}
@@ -1446,46 +1664,7 @@ export default function DocumentMessaging({
                   onFiles={handleFileSelection}
                   compact
                 />
-                <div className="flex min-w-0 flex-wrap items-center justify-start gap-2">
-                  <label className="sr-only" htmlFor={`recipient-${submissionId}`}>Recipient</label>
-                  <select
-                    id={`recipient-${submissionId}`}
-                    aria-label="To"
-                    value={selectedRecipient}
-                    onChange={(event) => {
-                      const recipient = event.target.value;
-                      setSelectedRecipient(recipient);
-                      setSelectedAction(getDefaultAction(getActionList(
-                        workflowComposer.actionsByRecipient[recipient]
-                      )).value);
-                      setError('');
-                    }}
-                    disabled={actionDisabled}
-                    className="h-10 w-36 max-w-full cursor-pointer rounded-full border border-warm-border bg-white px-3 text-xs font-medium text-warm-text outline-none transition-colors duration-200 hover:border-clay focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {workflowComposer.recipients.map((recipient) => (
-                      <option key={recipient.value} value={recipient.value}>{recipient.label}</option>
-                    ))}
-                  </select>
-                  <label className="sr-only" htmlFor={`action-${submissionId}`}>Action</label>
-                  <select
-                    id={`action-${submissionId}`}
-                    aria-label="Action"
-                    value={currentAction.value}
-                    onChange={(event) => {
-                      setSelectedAction(event.target.value);
-                      setError('');
-                    }}
-                    disabled={actionDisabled}
-                    className="h-10 w-36 max-w-full cursor-pointer rounded-full border border-warm-border bg-white px-3 text-xs font-medium text-warm-text outline-none transition-colors duration-200 hover:border-clay focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {actionGroups.map((group) => group.label ? (
-                      <optgroup key={group.label} label={group.label}>
-                        {group.actions.map(renderActionOption)}
-                      </optgroup>
-                    ) : group.actions.map(renderActionOption))}
-                  </select>
-                </div>
+                {actionDropdown}
                 <button
                   type="submit"
                   disabled={actionSubmitDisabled}
@@ -1494,18 +1673,6 @@ export default function DocumentMessaging({
                   {actionSubmitLabel} <Icon name="send" size={14} />
                 </button>
               </div>
-              {currentAction.unavailableReason && (
-                <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-pending-text" role="status">
-                  <span className="mt-0.5 shrink-0"><Icon name="info" size={13} /></span>
-                  {currentAction.unavailableReason}
-                </p>
-              )}
-              {currentAction.description && (
-                <p className="text-[10px] leading-relaxed text-muted-text" aria-live="polite">
-                  {currentAction.description}
-                </p>
-              )}
-
               {workflowComposer.isClosed && (
                 <p className="text-xs font-medium text-muted-text" role="status">
                   {workflowComposer.closedMessage ?? 'This submission is completed.'}
@@ -1520,6 +1687,8 @@ export default function DocumentMessaging({
                 <p className="text-xs font-medium text-rejected-text" role="alert">
                   Your session could not be verified. Sign in again to send messages or attach files.
                 </p>
+              )}
+                </>
               )}
             </div>
           </form>
@@ -1586,8 +1755,7 @@ export default function DocumentMessaging({
             file={selectedFiles[0] ?? null}
             onCancel={() => setCloseDialogOpen(false)}
             onConfirm={() => {
-              const action = workflowComposer.actionsByRecipient[selectedRecipient]
-                ?.find((candidate) => candidate.value === 'close_submission');
+              const action = actionList.find((candidate) => candidate.value === 'close_submission');
               if (action) void performWorkflowAction(action);
             }}
           />

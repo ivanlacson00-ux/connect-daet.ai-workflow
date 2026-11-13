@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import WorkflowNotificationFeed from '@/components/WorkflowNotificationFeed';
 import SwipeDismissNotification from '@/components/SwipeDismissNotification';
+import { useWorkflowRole } from '@/lib/workflow/role-context';
 import { getOfficeFileManagementPath, getOfficeNotificationsPath, type OfficeRole } from '@/lib/workflow/offices';
 
 // ─── Styles & Fonts (synced with the dashboards) ─────────────────────────────
@@ -88,20 +89,14 @@ const getErrorMessage = (error: unknown, fallback: string) => {
   return fallback;
 };
 
-export default function ApproverNotificationsPage() {
+export default function ApproverNotificationsPage({ role: officeRole }: { role: OfficeRole }) {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
-  const pathname = usePathname();
-  const officePath = pathname.split('/notifications')[0];
-  const officeRole: OfficeRole = officePath === '/workflow/tourism-office'
-    ? 'tourism_officer'
-    : officePath === '/workflow/municipal-treasurer'
-      ? 'municipal_treasurer'
-      : officePath === '/workflow/mayor'
-        ? 'mayor_office'
-        : 'sangguniang_bayan';
+  const viewerRole = useWorkflowRole();
+  const adminOfficeQuery = viewerRole === 'system_admin' ? `?office=${officeRole}` : '';
   const fileManagementPath = getOfficeFileManagementPath(officeRole);
   const notificationsPath = getOfficeNotificationsPath(officeRole);
+  const archiveHref = `${notificationsPath}/archive${adminOfficeQuery}`;
   const fetchInFlight = useRef(false);
   const [notifications, setNotifications] = useState<ApproverNotification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -250,7 +245,7 @@ export default function ApproverNotificationsPage() {
         ));
         window.dispatchEvent(new Event('workflow-notifications-changed'));
       }
-      router.push(`${fileManagementPath}/${notification.id}`);
+      router.push(`${fileManagementPath}/${notification.id}${adminOfficeQuery}`);
     } catch (error) {
       setErrorMessage(getErrorMessage(error, 'Could not open this notification.'));
     }
@@ -330,13 +325,13 @@ export default function ApproverNotificationsPage() {
       </div>
 
       <WorkflowNotificationFeed
-        archiveHref={`${notificationsPath}/archive`}
+        archiveHref={archiveHref}
+        archiveIconOnly
         busy={actionBusy || loading}
         canClear={notifications.length > 0}
         hasMore={hasMore}
         loading={loading}
-        actionLabel="Clear all"
-        iconOnlyAction
+        actionLabel="Clear"
         actionConfirmation="Clear all notifications from this feed? They will be moved to your archive, where you can permanently delete them."
         onClear={clearNotifications}
         onLoadMore={() => fetchNotifications(cursor, true)}
@@ -377,7 +372,7 @@ export default function ApproverNotificationsPage() {
                 busy={actionBusy}
               >
                 <Link
-                  href={`${fileManagementPath}/${note.id}`}
+                  href={`${fileManagementPath}/${note.id}${adminOfficeQuery}`}
                   onClick={(event) => void openNotification(event, note)}
                   className="group flex flex-col gap-5 border border-warm-border bg-card px-5 py-5 pr-14 transition-colors hover:border-clay-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-clay sm:flex-row sm:items-center sm:justify-between max-md:gap-3 max-md:px-3.5 max-md:pr-14 max-md:py-3.5"
                 >

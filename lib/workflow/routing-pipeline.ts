@@ -1,11 +1,18 @@
 import {
   isOfficeRole,
   OFFICE_CONFIG,
-  OFFICE_RESPONSIBILITIES,
   type OfficeRole,
 } from './offices.ts';
 
-export type RoutingPipelineState = 'complete' | 'active' | 'pending' | 'rejected' | 'skipped';
+/**
+ * complete  – done
+ * active    – where the submission is right now
+ * attention – waiting on someone outside the office flow (e.g. the submitter)
+ * rejected  – a rejection
+ * skipped   – stopped or withdrawn
+ * pending   – not reached yet
+ */
+export type RoutingPipelineState = 'complete' | 'active' | 'attention' | 'pending' | 'rejected' | 'skipped';
 
 export interface RoutingPipelineStep {
   key: string;
@@ -21,9 +28,11 @@ export interface RoutingPipelineRouteStep {
   sequence_number: number;
   office_role: string;
   status: string;
+  outcome?: string | null;
   responsibility?: string;
   assignment_source?: string;
   assigned_by_role?: string | null;
+  assigned_at?: string | null;
   started_at?: string | null;
   decided_at?: string | null;
   completed_at?: string | null;
@@ -45,13 +54,60 @@ interface RoutingPipelineInput {
   auditEvents: RoutingPipelineAuditEvent[];
 }
 
-const isDeclined = (status: string) => status.startsWith('declined') || status === 'rejected';
-const getResponsibilityLabel = (responsibility?: string) =>
-  responsibility && Object.prototype.hasOwnProperty.call(OFFICE_RESPONSIBILITIES, responsibility)
-    ? OFFICE_RESPONSIBILITIES[responsibility as keyof typeof OFFICE_RESPONSIBILITIES]
-    : null;
+export interface RoutingPipeline {
+  steps: RoutingPipelineStep[];
+  /** One line saying where the submission is now, e.g. "Under review at Mayor's Office". */
+  whereabouts: string;
+  /** Tone of the whereabouts line. */
+  whereaboutsState: RoutingPipelineState;
+}
 
-export function buildRoutingPipelineSteps({
+const NOT_RECEIVED_STATUSES = ['submitted', 'pending', 'pending_approver', 'pending_office', 'pending_admin'];
+const CHANGES_STATUSES = ['changes_requested', 'returned_for_requirements'];
+const CHANGE_REQUEST_EVENTS = ['CHANGES_REQUESTED', 'ROUTE_REQUIREMENTS_REQUESTED'];
+const CHANGE_RESPONSE_EVENTS = ['CHANGES_RESPONDED', 'REQUIREMENTS_RESUBMITTED', 'REVISED_DOCUMENT_SUBMITTED', 'SUBMISSION_REOPENED'];
+const ASSIGNMENT_SOURCES = ['office_forward', 'tourism_officer'];
+
+export const isDeclinedStatus = (status: string) => status.startsWith('declined') || status === 'rejected';
+
+const officeLabel = (role: string | null | undefined) =>
+  isOfficeRole(role ?? null) ? OFFICE_CONFIG[role as OfficeRole].label : 'the office';
+
+const timeValue = (value?: string | null) => {
+  const time = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isNaN(time) ? Number.POSITIVE_INFINITY : time;
+};
+
+/** What the office did with an assignment, in plain words. */
+function describeAssignment(step: RoutingPipelineRouteStep): { state: RoutingPipelineState; detail: string } {
+  const office = officeLabel(step.office_role);
+  switch (step.status) {
+    case 'pending':
+      return { state: 'active', detail: `Waiting for ${office} to start` };
+    case 'in_progress':
+      return { state: 'active', detail: 'Under review' };
+    case 'completed':
+    case 'approved':
+      if (step.outcome === 'endorsed') return { state: 'complete', detail: 'Approved' };
+      if (step.outcome === 'endorsed_with_conditions') return { state: 'complete', detail: 'Approved with conditions' };
+      if (step.outcome === 'not_endorsed') return { state: 'rejected', detail: 'Rejected' };
+      return { state: 'complete', detail: 'Completed' };
+    case 'rejected':
+      return { state: 'rejected', detail: 'Rejected' };
+    case 'returned':
+      return { state: 'attention', detail: 'Returned without a response' };
+    case 'withdrawn':
+      return { state: 'skipped', detail: 'Withdrawn' };
+    default:
+      return { state: 'complete', detail: step.status.replaceAll('_', ' ') };
+  }
+}
+
+/**
+ * Builds the route a submission has taken, in the order things happened, ending
+ * with where it is now (or its final outcome).
+ */
+export function buildRoutingPipeline({
   submissionStatus,
   submittedAt,
   routeSteps,
@@ -59,308 +115,235 @@ export function buildRoutingPipelineSteps({
   initialDestinationRole,
   finalDecisionOfficeRole,
   auditEvents,
-}: RoutingPipelineInput): RoutingPipelineStep[] {
+}: RoutingPipelineInput): RoutingPipeline {
   const status = submissionStatus.toLowerCase();
-  const events = [...auditEvents].sort(
-    (first, second) => new Date(first.created_at).getTime() - new Date(second.created_at).getTime()
-  );
-  const initialRoleValue = initialDestinationRole ?? selectedOfficeRole ?? null;
-  const initialRole = isOfficeRole(initialRoleValue) ? initialRoleValue : null;
-  const sortedRouteSteps = [...routeSteps].sort(
-    (first, second) => first.sequence_number - second.sequence_number
-      || first.office_role.localeCompare(second.office_role)
-  );
-  const timeFor = (...actions: string[]) =>
-    events.find((event) => actions.includes(event.action_type))?.created_at ?? null;
-  const latestIndexOf = (action: string) =>
-    events.map((event) => event.action_type).lastIndexOf(action);
-  // A submitter can reopen a closed submission; only a closure after the last reopen counts.
-  const closedByEvent = latestIndexOf('SUBMISSION_CLOSED') > latestIndexOf('SUBMISSION_REOPENED');
-  const isClosed = ['completed', 'approved', 'withdrawn'].includes(status)
-    || isDeclined(status)
-    || closedByEvent;
-  const nextStepPlaceholder: RoutingPipelineStep = {
-    key: 'next-step-placeholder',
-    title: 'Next workflow update',
-    subtitle: 'Will appear when an office acts',
-    state: 'pending',
-    detail: 'Awaiting next step',
-    isPlaceholder: true,
-  };
+  const events = [...auditEvents].sort((first, second) => timeValue(first.created_at) - timeValue(second.created_at));
+  const lastTimeFor = (...actions: string[]) =>
+    [...events].reverse().find((event) => actions.includes(event.action_type))?.created_at ?? null;
+
+  // The office currently responsible: where the submitter sent it (after any redirection).
+  const responsibleRoleValue = selectedOfficeRole ?? initialDestinationRole ?? null;
+  const responsibleRole = isOfficeRole(responsibleRoleValue) ? responsibleRoleValue : null;
+  const responsibleOffice = officeLabel(responsibleRole);
+
+  const assignments = routeSteps
+    .filter((step) =>
+      isOfficeRole(step.office_role)
+      && ASSIGNMENT_SOURCES.includes(step.assignment_source ?? '')
+      && step.status !== 'skipped'
+    )
+    .sort((first, second) =>
+      timeValue(first.assigned_at ?? first.started_at ?? first.decided_at ?? first.completed_at)
+        - timeValue(second.assigned_at ?? second.started_at ?? second.decided_at ?? second.completed_at)
+      || first.sequence_number - second.sequence_number
+    );
 
   const steps: RoutingPipelineStep[] = [{
     key: 'submitted',
-    title: 'Request submitted',
-    subtitle: 'Submission received',
+    title: 'Submitted',
+    subtitle: responsibleRole ? `To ${responsibleOffice}` : 'Submission received',
     state: 'complete',
     detail: 'Submitted',
     timestamp: submittedAt,
   }];
 
-  if (!initialRole) return isClosed ? steps : [...steps, nextStepPlaceholder];
+  if (status === 'withdrawn' && !lastTimeFor('SUBMISSION_RECEIVED') && assignments.length === 0) {
+    steps.push({
+      key: 'withdrawn',
+      title: 'Withdrawn',
+      subtitle: 'By the submitter',
+      state: 'skipped',
+      detail: 'Withdrawn',
+      timestamp: lastTimeFor('SUBMISSION_WITHDRAWN'),
+    });
+    return { steps, whereabouts: 'Withdrawn by the submitter', whereaboutsState: 'skipped' };
+  }
 
-  const initialOffice = OFFICE_CONFIG[initialRole].label;
-  const hasForwardedFromInitial = sortedRouteSteps.some((step) =>
-    step.assignment_source === 'office_forward'
-    && step.assigned_by_role === initialRole
-  );
-  const hasReceived = Boolean(timeFor('SUBMISSION_RECEIVED'))
-    || Boolean(timeFor('OFFICE_FORWARDED_TO_TOURISM_OFFICER', 'TOURISM_OFFICER_ASSIGNMENTS_CREATED'))
-    || status === 'in_process'
-    || status === 'changes_requested'
-    || status === 'returned_for_requirements'
-    || status === 'returned'
-    || status === 'completed'
-    || status === 'approved'
-    || isDeclined(status)
-    || hasForwardedFromInitial
-    || sortedRouteSteps.some((step) =>
-      step.office_role === initialRole
-      && (step.started_at || ['in_progress', 'completed', 'approved', 'rejected'].includes(step.status))
-    );
+  if (!responsibleRole) {
+    return { steps, whereabouts: 'Waiting for an office to be assigned', whereaboutsState: 'pending' };
+  }
 
+  const receivedAt = lastTimeFor('SUBMISSION_RECEIVED');
+  const received = Boolean(receivedAt) || !NOT_RECEIVED_STATUSES.includes(status) || assignments.length > 0;
   steps.push({
-    key: 'destination-received',
-    title: 'Received by destination office',
-    subtitle: initialOffice,
-    state: hasReceived ? 'complete' : 'active',
-    detail: hasReceived ? `Received by ${initialOffice}` : `Awaiting receipt by ${initialOffice}`,
-    timestamp: timeFor('SUBMISSION_RECEIVED')
-      ?? sortedRouteSteps.find((step) => step.office_role === initialRole)?.started_at
-      ?? null,
+    key: 'received',
+    title: received ? 'Received' : 'Awaiting receipt',
+    subtitle: responsibleOffice,
+    state: received ? 'complete' : 'active',
+    detail: received ? 'Processing started' : `Waiting for ${responsibleOffice} to start`,
+    timestamp: receivedAt,
   });
+  if (!received) {
+    return {
+      steps,
+      whereabouts: `Waiting for ${responsibleOffice} to start processing`,
+      whereaboutsState: 'active',
+    };
+  }
 
-  const initialForward = sortedRouteSteps.find((step) =>
-    step.assignment_source === 'office_forward'
-    && step.assigned_by_role === initialRole
-    && isOfficeRole(step.office_role)
-  );
-  const initialTourismAssignment = initialRole === 'tourism_officer'
-    ? sortedRouteSteps.find((step) =>
-      step.assignment_source === 'tourism_officer'
-      && step.assigned_by_role === 'tourism_officer'
-      && isOfficeRole(step.office_role)
-    )
-    : undefined;
-  const initialOfficeCompleted = status === 'completed' || status === 'approved';
-  const responsibility = (step?: RoutingPipelineRouteStep) =>
-    getResponsibilityLabel(step?.responsibility);
-  const decisionEvent = timeFor(
-    'OFFICE_ASSIGNMENT_FORWARDED',
-    'OFFICE_FINAL_DECISION',
-    'WORKFLOW_COMPLETED',
-    'SUBMISSION_CLOSED',
-    'CHANGES_REQUESTED',
-    'ROUTE_REQUIREMENTS_REQUESTED',
-    'RETURNED_TO_SUBMITTER',
-    'SUBMISSION_WITHDRAWN',
-    'OFFICE_REJECTED',
-    'FINAL_REJECTION',
-  );
+  // ─── Things that happened after receipt, in order ──────────────────────────
+  const timeline: (RoutingPipelineStep & { sortTime: number })[] = [];
 
-  if (initialForward) {
-    steps.push({
-      key: `forwarded-${initialForward.sequence_number}-${initialForward.office_role}`,
-      title: `Forwarded to ${OFFICE_CONFIG[initialForward.office_role as OfficeRole].label}`,
-      subtitle: responsibility(initialForward) ?? 'Recommendation requested',
-      state: initialForward.status === 'rejected'
-        ? 'rejected'
-        : ['completed', 'approved'].includes(initialForward.status)
-          ? 'complete'
-          : 'active',
-      detail: initialForward.status === 'rejected'
-        ? 'Recommendation declined'
-        : ['completed', 'approved'].includes(initialForward.status)
-          ? 'Assignment completed'
-          : 'Office assignment started',
-      timestamp: initialForward.started_at ?? decisionEvent,
+  for (const assignment of assignments) {
+    const { state, detail } = describeAssignment(assignment);
+    const askedBy = isOfficeRole(assignment.assigned_by_role ?? null)
+      ? `Asked by ${officeLabel(assignment.assigned_by_role)}`
+      : 'Office assignment';
+    timeline.push({
+      key: `assignment-${assignment.office_role}-${assignment.assigned_at ?? assignment.sequence_number}`,
+      title: officeLabel(assignment.office_role),
+      subtitle: askedBy,
+      state,
+      detail,
+      timestamp: assignment.completed_at ?? assignment.decided_at ?? assignment.started_at ?? assignment.assigned_at ?? null,
+      sortTime: timeValue(assignment.assigned_at ?? assignment.started_at ?? assignment.completed_at ?? assignment.decided_at),
     });
-  } else if (initialTourismAssignment) {
-    steps.push({
-      key: `tourism-assigned-${initialTourismAssignment.sequence_number}-${initialTourismAssignment.office_role}`,
-      title: `Assigned to ${OFFICE_CONFIG[initialTourismAssignment.office_role as OfficeRole].label}`,
-      subtitle: responsibility(initialTourismAssignment) ?? 'Tourism Officer assignment',
-      state: ['completed', 'approved'].includes(initialTourismAssignment.status)
+  }
+
+  const changeRequests = events.filter((event) => CHANGE_REQUEST_EVENTS.includes(event.action_type));
+  changeRequests.forEach((request, index) => {
+    const requestTime = timeValue(request.created_at);
+    const nextRequestTime = timeValue(changeRequests[index + 1]?.created_at);
+    const response = events.find((event) =>
+      CHANGE_RESPONSE_EVENTS.includes(event.action_type)
+      && timeValue(event.created_at) > requestTime
+      && timeValue(event.created_at) < nextRequestTime
+    );
+    const isLatest = index === changeRequests.length - 1;
+    const requirementsStep = request.action_type === 'ROUTE_REQUIREMENTS_REQUESTED'
+      ? assignments.find((step) => step.requirements_requested_at)
+      : undefined;
+    timeline.push({
+      key: `changes-${request.created_at}`,
+      title: request.action_type === 'ROUTE_REQUIREMENTS_REQUESTED' ? 'Requirements requested' : 'Changes requested',
+      subtitle: requirementsStep ? officeLabel(requirementsStep.office_role) : responsibleOffice,
+      state: response
         ? 'complete'
-        : initialTourismAssignment.status === 'rejected'
-          ? 'rejected'
-          : initialTourismAssignment.status === 'in_progress' || initialTourismAssignment.started_at
-            ? 'active'
-            : 'pending',
-      detail: ['completed', 'approved'].includes(initialTourismAssignment.status)
-        ? 'Assignment completed'
-        : initialTourismAssignment.status === 'rejected'
-          ? 'Assignment declined'
-          : initialTourismAssignment.status === 'in_progress' || initialTourismAssignment.started_at
-            ? 'Office assignment started'
-            : 'Assignment created',
-      timestamp: initialTourismAssignment.started_at
-        ?? initialTourismAssignment.decided_at
-        ?? timeFor('TOURISM_OFFICER_ASSIGNMENTS_CREATED'),
+        : isLatest && CHANGES_STATUSES.includes(status)
+          ? 'attention'
+          : 'skipped',
+      detail: response
+        ? 'Submitter responded'
+        : isLatest && CHANGES_STATUSES.includes(status)
+          ? 'Waiting for the submitter'
+          : 'No response recorded',
+      timestamp: response?.created_at ?? request.created_at,
+      sortTime: requestTime,
     });
-  } else if (timeFor('OFFICE_FORWARDED_TO_TOURISM_OFFICER')) {
-    steps.push({
-      key: 'forwarded-to-tourism',
-      title: 'Referred to Tourism Office',
-      subtitle: 'Tourism Officer review',
-      state: 'complete',
-      detail: 'Responsible office requested Tourism Officer involvement',
-      timestamp: timeFor('OFFICE_FORWARDED_TO_TOURISM_OFFICER'),
-    });
-  } else if (initialOfficeCompleted) {
-    const finalRoleValue = finalDecisionOfficeRole ?? null;
-    const finalRole = isOfficeRole(finalRoleValue)
-      ? finalRoleValue
-      : initialRole;
-    steps.push({
-      key: 'office-completed',
-      title: 'Submission completed',
-      subtitle: OFFICE_CONFIG[finalRole].label,
-      state: 'complete',
-      detail: 'Completed by the responsible office',
-      timestamp: timeFor('WORKFLOW_COMPLETED', 'SUBMISSION_CLOSED', 'OFFICE_FINAL_DECISION'),
-    });
-  } else if (status === 'changes_requested' || status === 'returned_for_requirements') {
-    steps.push({
+  });
+  if (CHANGES_STATUSES.includes(status) && changeRequests.length === 0) {
+    const requirementsStep = assignments.find((step) => step.requirements_requested_at);
+    timeline.push({
       key: 'changes-requested',
-      title: 'Changes requested',
-      subtitle: initialOffice,
-      state: 'active',
-      detail: 'Waiting for submitter response',
-      timestamp: timeFor('CHANGES_REQUESTED', 'ROUTE_REQUIREMENTS_REQUESTED'),
+      title: status === 'returned_for_requirements' ? 'Requirements requested' : 'Changes requested',
+      subtitle: requirementsStep ? officeLabel(requirementsStep.office_role) : responsibleOffice,
+      state: 'attention',
+      detail: 'Waiting for the submitter',
+      timestamp: requirementsStep?.requirements_requested_at ?? null,
+      sortTime: timeValue(requirementsStep?.requirements_requested_at),
     });
-  } else if (status === 'returned') {
+  }
+
+  timeline.sort((first, second) => first.sortTime - second.sortTime);
+  steps.push(...timeline.map(({ sortTime: _sortTime, ...step }) => step));
+
+  // ─── Final outcome, or where the submission is now ──────────────────────────
+  const decisionOffice = officeLabel(isOfficeRole(finalDecisionOfficeRole ?? null) ? finalDecisionOfficeRole : responsibleRole);
+  if (status === 'approved') {
     steps.push({
-      key: 'returned-to-submitter',
-      title: 'Returned to submitter',
-      subtitle: initialOffice,
-      state: 'active',
-      detail: 'Choose a new destination',
-      timestamp: timeFor('RETURNED_TO_SUBMITTER'),
+      key: 'final-approved',
+      title: 'Approved',
+      subtitle: decisionOffice,
+      state: 'complete',
+      detail: 'Final decision',
+      timestamp: lastTimeFor('SUBMISSION_APPROVED', 'OFFICE_FINAL_DECISION', 'WORKFLOW_COMPLETED', 'SUBMISSION_CLOSED'),
     });
-  } else if (isDeclined(status)) {
+    return { steps, whereabouts: `Approved by ${decisionOffice}`, whereaboutsState: 'complete' };
+  }
+  if (status === 'completed') {
     steps.push({
-      key: 'office-decision-declined',
-      title: 'Submission declined',
-      subtitle: initialOffice,
+      key: 'final-completed',
+      title: 'Completed',
+      subtitle: decisionOffice,
+      state: 'complete',
+      detail: 'Processing finished',
+      timestamp: lastTimeFor('SUBMISSION_CLOSED', 'WORKFLOW_COMPLETED', 'OFFICE_FINAL_DECISION'),
+    });
+    return { steps, whereabouts: `Completed by ${decisionOffice}`, whereaboutsState: 'complete' };
+  }
+  if (isDeclinedStatus(status)) {
+    steps.push({
+      key: 'final-rejected',
+      title: 'Rejected',
+      subtitle: decisionOffice,
       state: 'rejected',
-      detail: 'Decision recorded',
-      timestamp: timeFor('OFFICE_REJECTED', 'FINAL_REJECTION'),
+      detail: 'Final decision',
+      timestamp: lastTimeFor('SUBMISSION_REJECTED', 'OFFICE_REJECTED', 'FINAL_REJECTION'),
     });
+    return { steps, whereabouts: `Rejected by ${decisionOffice}`, whereaboutsState: 'rejected' };
   }
-
-  const displayedAssignment = new Set(
-    [initialForward, initialTourismAssignment]
-      .filter((step): step is RoutingPipelineRouteStep => Boolean(step))
-      .map((step) => `${step.sequence_number}:${step.office_role}`)
-  );
-  for (const step of sortedRouteSteps) {
-    if (
-      !isOfficeRole(step.office_role)
-      || !['office_forward', 'tourism_officer'].includes(step.assignment_source ?? '')
-      || displayedAssignment.has(`${step.sequence_number}:${step.office_role}`)
-      || (step.status === 'pending' && !step.started_at)
-    ) {
-      continue;
-    }
-
-    const completed = ['completed', 'approved'].includes(step.status);
-    const rejected = step.status === 'rejected';
-    const waitingOnSubmitter = ['returned_for_requirements', 'changes_requested'].includes(status)
-      && Boolean(step.requirements_requested_at);
+  if (status === 'returned') {
     steps.push({
-      key: `assignment-${step.sequence_number}-${step.office_role}`,
-      title: step.assignment_source === 'office_forward'
-        ? `Forwarded to ${OFFICE_CONFIG[step.office_role].label}`
-        : `Assigned to ${OFFICE_CONFIG[step.office_role].label}`,
-      subtitle: step.assignment_source === 'office_forward'
-        ? responsibility(step) ?? 'Recommendation requested'
-        : responsibility(step) ?? 'Tourism Officer assignment',
-      state: rejected ? 'rejected' : completed ? 'complete' : 'active',
-      detail: waitingOnSubmitter
-        ? 'Waiting for submitter response'
-        : rejected
-          ? 'Assignment declined'
-          : completed
-            ? 'Assignment completed'
-            : 'Office assignment started',
-      timestamp: step.completed_at ?? step.decided_at ?? step.started_at,
+      key: 'final-returned',
+      title: 'Returned for redirection',
+      subtitle: responsibleOffice,
+      state: 'attention',
+      detail: 'Submitter to choose another office',
+      timestamp: lastTimeFor('RETURNED_TO_SUBMITTER'),
     });
+    return {
+      steps,
+      whereabouts: 'With the submitter to choose another office',
+      whereaboutsState: 'attention',
+    };
   }
-
-  const hasRoutedAssignments = sortedRouteSteps.some((step) =>
-    ['office_forward', 'tourism_officer'].includes(step.assignment_source ?? '')
-  );
-  if (initialOfficeCompleted && hasRoutedAssignments) {
-    const finalRoleValue = finalDecisionOfficeRole ?? null;
-    const finalRole = isOfficeRole(finalRoleValue)
-      ? finalRoleValue
-      : initialRole;
-    if (!steps.some((step) => ['office-completed', 'workflow-completed'].includes(step.key))) {
-      steps.push({
-        key: 'workflow-completed',
-        title: 'Submission completed',
-        subtitle: OFFICE_CONFIG[finalRole].label,
-        state: 'complete',
-        detail: 'Completed by the authorized office',
-        timestamp: timeFor('WORKFLOW_COMPLETED', 'SUBMISSION_CLOSED', 'OFFICE_FINAL_DECISION'),
-      });
-    }
-  }
-
-  if (['changes_requested', 'returned_for_requirements'].includes(status)
-    && !steps.some((step) => step.key === 'changes-requested')
-  ) {
-    const responsibleStep = sortedRouteSteps.find((step) => step.requirements_requested_at);
-    steps.push({
-      key: 'changes-requested',
-      title: status === 'returned_for_requirements' ? 'Additional requirements requested' : 'Changes requested',
-      subtitle: responsibleStep && isOfficeRole(responsibleStep.office_role)
-        ? OFFICE_CONFIG[responsibleStep.office_role].label
-        : initialOffice,
-      state: 'active',
-      detail: 'Waiting for submitter response',
-      timestamp: timeFor('CHANGES_REQUESTED', 'ROUTE_REQUIREMENTS_REQUESTED')
-        ?? responsibleStep?.requirements_requested_at
-        ?? null,
-    });
-  }
-
-  if (status === 'returned' && !steps.some((step) => step.key === 'returned-to-submitter')) {
-    steps.push({
-      key: 'returned-to-submitter',
-      title: 'Returned to submitter',
-      subtitle: initialOffice,
-      state: 'active',
-      detail: 'Choose a new destination',
-      timestamp: timeFor('RETURNED_TO_SUBMITTER'),
-    });
-  }
-
-  if (isDeclined(status) && !steps.some((step) => step.key === 'office-decision-declined')) {
-    const finalRoleValue = finalDecisionOfficeRole ?? null;
-    steps.push({
-      key: 'office-decision-declined',
-      title: 'Submission declined',
-      subtitle: isOfficeRole(finalRoleValue)
-        ? OFFICE_CONFIG[finalRoleValue].label
-        : initialOffice,
-      state: 'rejected',
-      detail: 'Decision recorded',
-      timestamp: timeFor('OFFICE_REJECTED', 'FINAL_REJECTION'),
-    });
-  }
-
   if (status === 'withdrawn') {
     steps.push({
       key: 'withdrawn',
-      title: 'Submission withdrawn',
-      subtitle: 'Workflow stopped',
+      title: 'Withdrawn',
+      subtitle: 'By the submitter',
       state: 'skipped',
       detail: 'Withdrawn',
-      timestamp: timeFor('SUBMISSION_WITHDRAWN'),
+      timestamp: lastTimeFor('SUBMISSION_WITHDRAWN'),
     });
+    return { steps, whereabouts: 'Withdrawn by the submitter', whereaboutsState: 'skipped' };
   }
 
-  return isClosed ? steps : [...steps, nextStepPlaceholder];
+  const openAssignment = [...assignments].reverse().find((step) => ['pending', 'in_progress'].includes(step.status));
+  if (openAssignment) {
+    const office = officeLabel(openAssignment.office_role);
+    return {
+      steps,
+      whereabouts: openAssignment.status === 'pending'
+        ? `Sent to ${office} — waiting for them to start`
+        : `Under review at ${office}`,
+      whereaboutsState: 'active',
+    };
+  }
+  if (CHANGES_STATUSES.includes(status)) {
+    return { steps, whereabouts: 'With the submitter to make changes', whereaboutsState: 'attention' };
+  }
+
+  // Open and back with the responsible office.
+  const lastAssignment = assignments.at(-1);
+  steps.push({
+    key: 'with-responsible-office',
+    title: responsibleOffice,
+    subtitle: 'Responsible office',
+    state: 'active',
+    detail: lastAssignment ? 'Deciding the next step' : 'Reviewing',
+    timestamp: null,
+  });
+  return {
+    steps,
+    whereabouts: lastAssignment
+      ? `Back with ${responsibleOffice} to decide the next step`
+      : `Under review at ${responsibleOffice}`,
+    whereaboutsState: 'active',
+  };
+}
+
+/** Steps only; kept for callers that do not need the whereabouts line. */
+export function buildRoutingPipelineSteps(input: RoutingPipelineInput): RoutingPipelineStep[] {
+  return buildRoutingPipeline(input).steps;
 }

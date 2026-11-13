@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
@@ -12,7 +12,14 @@ import {
 } from '@/lib/workflow/file-types';
 import { getSubmissionStatusLabel, getSubmissionStatusTone } from '@/lib/workflow/status';
 import {
-  getRoleHomePath,
+  ASSIGNMENT_TONE_CLASSES,
+  describeAssignmentState,
+  getOfficeLabel,
+  summarizeAssignment,
+  type AssignmentOutcome,
+} from '@/lib/workflow/assignments';
+import {
+  getOfficeFileManagementPath,
   getWorkflowDocumentTypeLabel,
   isOfficeRole,
   OFFICE_CONFIG,
@@ -72,8 +79,13 @@ interface Submission extends PreviewableFile {
   selected_office_role?: string | null;
   initial_destination_role?: string | null;
   final_decision_office_role?: string | null;
+  final_decided_at?: string | null;
+  final_decision_by?: string | null;
+  approved_at?: string | null;
+  rejected_at?: string | null;
   approver_comments?: string | null;
   office_comments?: string | null;
+  rejection_comment?: string | null;
   admin_comments?: string | null;
   mayor_comments?: string | null;
   sender_response?: string | null;
@@ -82,12 +94,21 @@ interface Submission extends PreviewableFile {
   received_by?: string | null;
   received_at?: string | null;
   closed_by?: string | null;
+  completed_at?: string | null;
   closure_note?: string | null;
   closure_file_path?: string | null;
   closure_file_name?: string | null;
   closure_file_type?: string | null;
   closure_file_size?: number | null;
 }
+
+// Readable role names for activity entries (submitter and admin are not offices).
+const getActorRoleLabel = (actorRole: string | null | undefined) => {
+  if (!actorRole) return null;
+  if (actorRole === 'submitter') return 'Submitter';
+  if (actorRole === 'system_admin') return 'System Administrator';
+  return getOfficeLabel(actorRole);
+};
 
 interface SupportingAttachment {
   id: string;
@@ -107,9 +128,14 @@ interface RouteStep {
   assigned_by_role: string | null;
   responsibility: OfficeResponsibility;
   assignment_source: string;
+  assigned_at: string | null;
   started_at: string | null;
   decided_at: string | null;
+  decided_by: string | null;
   completed_at: string | null;
+  completed_by: string | null;
+  comments: string | null;
+  outcome: string | null;
   requirements_requested_at: string | null;
   requirements_comments: string | null;
 }
@@ -163,7 +189,7 @@ const getActionLabel = (type: string) => {
     case 'SUBMISSION_REDIRECTED': return 'Submission redirected';
     case 'SUBMISSION_RECEIVED': return 'Submission received by office';
     case 'SUBMISSION_FORWARDED': return 'Recommendation requested';
-    case 'ASSIGNMENT_COMPLETED': return 'Office assignment completed';
+    case 'ASSIGNMENT_COMPLETED': return 'Office responded to assignment';
     case 'ASSIGNMENT_RETURNED': return 'Office assignment returned';
     case 'ASSIGNMENT_WITHDRAWN': return 'Office assignment withdrawn';
     case 'CHANGES_REQUESTED': return 'Changes requested';
@@ -171,6 +197,8 @@ const getActionLabel = (type: string) => {
     case 'RETURNED_TO_SUBMITTER': return 'Returned to submitter for redirection';
     case 'SUBMISSION_WITHDRAWN': return 'Submission withdrawn';
     case 'SUBMISSION_CLOSED': return 'Submission completed';
+    case 'SUBMISSION_APPROVED': return 'Submission approved';
+    case 'SUBMISSION_REJECTED': return 'Submission rejected';
     case 'SUBMISSION_REOPENED': return 'Submitter reopened the submission';
     case 'FILE_VERSION_ADDED': return 'Document version added';
     case 'STAGE_1_AUTHORIZED': return 'Stage 1 approved';
@@ -213,6 +241,7 @@ export default function ApproverManagePage() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [attachments, setAttachments] = useState<SupportingAttachment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [updating, setUpdating] = useState(false);
   const [actionError, setActionError] = useState('');
   const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
@@ -223,153 +252,160 @@ export default function ApproverManagePage() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [supportingAttachmentsOpen, setSupportingAttachmentsOpen] = useState(false);
   const [previewingAttachmentId, setPreviewingAttachmentId] = useState<string | null>(null);
+  const knownPlanIdsRef = useRef<Set<string>>(new Set());
 
   const fetchDetails = useCallback(async () => {
+    setLoadError('');
+    // Clear errors from an earlier load; anything still wrong is reported again below.
+    setActionError('');
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
       let currentRole: string | null = null;
       if (user) {
-        const { data: currentProfile } = await supabase
+        const { data: currentProfile, error: profileError } = await supabase
           .from('profiles')
           .select('role')
           .eq('id', user.id)
           .single();
+        if (profileError) throw profileError;
         currentRole = currentProfile?.role ?? null;
         setRole(currentRole);
       }
-      let { data: submission } = await supabase
+      const { data: submission, error: submissionError } = await supabase
         .from('workflow_submissions')
         .select('*')
         .eq('id', id)
         .single();
 
-      if (
-        submission
-        && submission.status === 'submitted'
-        && currentRole === submission.selected_office_role
-      ) {
-        const { error: receiveError } = await supabase.rpc('receive_workflow_submission', {
-          target_submission_id: submission.id,
-        });
-        if (receiveError) {
-          console.error('Could not mark submission received:', receiveError.message);
-          setActionError(receiveError.message || 'Could not receive this submission.');
-        } else {
-          const { data: receivedSubmission, error: refreshError } = await supabase
-            .from('workflow_submissions')
-            .select('*')
-            .eq('id', id)
-            .single();
-          if (refreshError) {
-            console.error('Could not refresh received submission:', refreshError.message);
-          } else {
-            submission = receivedSubmission;
-          }
+      if (submissionError) {
+        if (submissionError.code === 'PGRST116') {
+          setSub(null);
+          return;
         }
+        throw new Error(`Could not load this submission: ${submissionError.message}`);
+      }
+      if (!submission) {
+        setSub(null);
+        return;
       }
 
-      if (submission) {
-        setSub(submission);
+      setSub(submission);
 
-        const { data: routes, error: routeError } = await supabase
-          .from('workflow_routing_plans')
-          .select('id, status, is_current, version')
-          .eq('submission_id', submission.id)
-          .order('version', { ascending: true });
-        if (routeError) {
-          console.error('Could not load workflow route state:', routeError.message);
-          setActionError('Could not load the routing state. Refresh and try again.');
-          setRouteStateError(true);
-          setRouteSteps([]);
-          setCurrentRoutePlanId(null);
-          setRouteStatus(null);
-        } else {
-          const currentRoute = (routes ?? []).find((route) => route.is_current) ?? null;
-          if (currentRoute) {
-            const { data: steps, error: stepsError } = await supabase
-              .from('workflow_routing_steps')
-              .select('id, routing_plan_id, sequence_number, office_role, status, assigned_by, assigned_by_role, responsibility, assignment_source, started_at, decided_at, completed_at, requirements_requested_at, requirements_comments')
-              .in('routing_plan_id', (routes ?? []).map((route) => route.id))
-              .order('sequence_number', { ascending: true });
+      const { data: routes, error: routeError } = await supabase
+        .from('workflow_routing_plans')
+        .select('id, status, is_current, version')
+        .eq('submission_id', submission.id)
+        .order('version', { ascending: true });
+      if (routeError) {
+        console.error('Could not load workflow route state:', routeError.message);
+        setActionError('Could not load the routing state. Refresh and try again.');
+        setRouteStateError(true);
+        setRouteSteps([]);
+        setCurrentRoutePlanId(null);
+        setRouteStatus(null);
+      } else {
+        const currentRoute = (routes ?? []).find((route) => route.is_current) ?? null;
+        if (currentRoute) {
+          const { data: steps, error: stepsError } = await supabase
+            .from('workflow_routing_steps')
+            .select('id, routing_plan_id, sequence_number, office_role, status, assigned_by, assigned_by_role, responsibility, assignment_source, assigned_at, started_at, decided_at, completed_at, comments, outcome, requirements_requested_at, requirements_comments')
+            .in('routing_plan_id', (routes ?? []).map((route) => route.id))
+            .order('sequence_number', { ascending: true });
 
-            if (stepsError) {
-              console.error('Could not load workflow route steps:', stepsError.message);
-              setActionError('Could not load the office route. Refresh and try again.');
-              setRouteStateError(true);
-              setRouteSteps([]);
-              setCurrentRoutePlanId(null);
-              setRouteStatus(null);
-            } else {
-              let resolvedSteps = steps ?? [];
-              const pendingStep = resolvedSteps.find((step) =>
-                step.routing_plan_id === currentRoute.id
-                && step.office_role === currentRole
-                && step.status === 'pending'
-              );
-              let assignmentStartError = false;
-              if (pendingStep) {
-                const { error: startError } = await supabase.rpc('receive_workflow_assignment', {
-                  target_submission_id: submission.id,
-                });
-                if (startError) {
-                  console.error('Could not start the office assignment:', startError.message);
-                  setActionError('Could not start your office assignment. Refresh and try again.');
-                  assignmentStartError = true;
-                } else {
-                  resolvedSteps = resolvedSteps.map((step) => step.id === pendingStep.id
-                    ? { ...step, status: 'in_progress' }
-                    : step);
-                }
-              }
-              const validSteps = resolvedSteps.filter(
-                (step): step is RouteStep => typeof step.id === 'string'
-                  && typeof step.routing_plan_id === 'string'
-                  && isOfficeRole(step.office_role)
-                  && step.responsibility in OFFICE_RESPONSIBILITIES
-              );
-              setRouteSteps(validSteps);
-              setCurrentRoutePlanId(currentRoute.id);
-              setRouteStatus(currentRoute.status);
-              setRouteStateError(assignmentStartError);
-            }
-          } else {
+          if (stepsError) {
+            console.error('Could not load workflow route steps:', stepsError.message);
+            setActionError('Could not load the office route. Refresh and try again.');
+            setRouteStateError(true);
             setRouteSteps([]);
             setCurrentRoutePlanId(null);
             setRouteStatus(null);
+          } else {
+            const validSteps = (steps ?? []).filter(
+              (step): step is RouteStep => typeof step.id === 'string'
+                && typeof step.routing_plan_id === 'string'
+                && isOfficeRole(step.office_role)
+                && step.responsibility in OFFICE_RESPONSIBILITIES
+            );
+            setRouteSteps(validSteps);
+            knownPlanIdsRef.current = new Set((routes ?? []).map((route) => route.id));
+            setCurrentRoutePlanId(currentRoute.id);
+            setRouteStatus(currentRoute.status);
             setRouteStateError(false);
           }
+        } else {
+          setRouteSteps([]);
+          setCurrentRoutePlanId(null);
+          setRouteStatus(null);
+          setRouteStateError(false);
         }
+      }
 
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('email, full_name, role')
-          .eq('id', submission.user_id)
-          .single();
-        if (profile) setSender(profile);
+      const { data: profile, error: senderError } = await supabase
+        .from('profiles')
+        .select('email, full_name, role')
+        .eq('id', submission.user_id)
+        .single();
+      if (senderError) {
+        console.error('Could not load submitter details:', senderError.message);
+      } else {
+        setSender(profile);
+      }
 
-        const { data: logs } = await supabase
-          .from('workflow_audit_logs')
-          .select('*, profiles:action_by (full_name, email, role)')
-          .eq('submission_id', id)
-          .order('created_at', { ascending: false });
-        if (logs) setAuditLogs(logs);
+      const { data: logs, error: logsError } = await supabase
+        .from('workflow_audit_logs')
+        .select('*, profiles:action_by (full_name, email, role)')
+        .eq('submission_id', id)
+        .order('created_at', { ascending: false });
+      if (logsError) {
+        console.error('Could not load submission activity:', logsError.message);
+        setActionError('Could not load submission activity. Refresh and try again.');
+      } else {
+        setAuditLogs(logs ?? []);
+      }
 
-        const { data: supportingFiles, error: attachmentError } = await supabase
-          .from('workflow_submission_attachments')
-          .select('id, file_name, file_path, file_type, file_size')
-          .eq('submission_id', id)
-          .order('created_at', { ascending: true });
-        if (attachmentError) console.error('Could not load supporting attachments:', attachmentError.message);
+      const { data: supportingFiles, error: attachmentError } = await supabase
+        .from('workflow_submission_attachments')
+        .select('id, file_name, file_path, file_type, file_size')
+        .eq('submission_id', id)
+        .order('created_at', { ascending: true });
+      if (attachmentError) {
+        console.error('Could not load supporting attachments:', attachmentError.message);
+        setActionError('Could not load supporting documents. Refresh and try again.');
+      } else {
         setAttachments(supportingFiles ?? []);
       }
     } catch (err) {
       console.error('Failed to load submission:', err);
+      setLoadError(err instanceof Error ? err.message : 'Could not load this submission.');
     } finally {
       setLoading(false);
     }
   }, [id, supabase]);
 
   useEffect(() => { fetchDetails(); }, [fetchDetails]);
+
+  // Refresh when another office acts on an assignment or the submission changes.
+  useEffect(() => {
+    if (typeof id !== 'string') return;
+    const channel = supabase
+      .channel(`office-submission-${id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'workflow_submissions', filter: `id=eq.${id}`,
+      }, () => { void fetchDetails(); })
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'workflow_routing_plans', filter: `submission_id=eq.${id}`,
+      }, () => { void fetchDetails(); })
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'workflow_routing_steps',
+      }, (payload) => {
+        const row = (payload.new && 'routing_plan_id' in payload.new ? payload.new : payload.old) as
+          { routing_plan_id?: string } | null;
+        if (row?.routing_plan_id && knownPlanIdsRef.current.has(row.routing_plan_id)) void fetchDetails();
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [fetchDetails, id, supabase]);
 
   const assignmentConversations = useMemo(() => routeSteps.flatMap((step) => {
     if (
@@ -381,11 +417,15 @@ export default function ApproverManagePage() {
       return [];
     }
 
+    const stepOpen = step.status === 'in_progress';
     return [{
       stepId: step.id,
       label: `${OFFICE_CONFIG[step.assigned_by_role].label} ↔ ${OFFICE_CONFIG[step.office_role].label}`,
-      canSend: ['pending', 'in_progress'].includes(step.status)
-        && !['completed', 'approved', 'withdrawn'].includes(sub?.status ?? ''),
+      canSend: stepOpen
+        && !['completed', 'approved', 'declined_by_approver', 'declined_by_admin', 'declined_by_office', 'declined_by_mayor', 'rejected', 'withdrawn'].includes(sub?.status ?? ''),
+      closedSummary: stepOpen
+        ? undefined
+        : `${summarizeAssignment(step)}.${step.comments ? ` Note: ${step.comments}` : ''}`,
     }];
   }), [role, routeSteps, sub?.status]);
 
@@ -412,6 +452,44 @@ export default function ApproverManagePage() {
       await closeSubmission(message, files[0] ?? null);
       return;
     }
+    if ((action === 'approve' || action === 'reject') && isRecipientOffice) {
+      if (routeStateError) {
+        throw new Error('Could not verify the office assignment. Refresh and try again.');
+      }
+      if (action === 'reject' && !message.trim()) {
+        throw new Error('Explain why your office rejects this assignment.');
+      }
+      setUpdating(true);
+      setActionError('');
+      try {
+        const { error } = await supabase.rpc('complete_workflow_assignment', {
+          target_submission_id: sub.id,
+          completion_notes: message.trim() || null,
+          assignment_outcome: action === 'approve' ? 'endorsed' : 'not_endorsed',
+        });
+        if (error) throw new Error(error.message || `Could not ${action} this assignment.`);
+        await fetchDetails();
+      } finally {
+        setUpdating(false);
+      }
+      return;
+    }
+    if (action === 'approve' || action === 'reject') {
+      setUpdating(true);
+      setActionError('');
+      try {
+        const { error } = await supabase.rpc('decide_workflow_submission_as_responsible_office', {
+          target_submission_id: sub.id,
+          final_decision: action,
+          decision_comments: message.trim() || null,
+        });
+        if (error) throw new Error(error.message || `Could not ${action} this submission.`);
+        await fetchDetails();
+      } finally {
+        setUpdating(false);
+      }
+      return;
+    }
     setUpdating(true);
     setActionError('');
     try {
@@ -434,7 +512,7 @@ export default function ApproverManagePage() {
       let rpcArgs:
         | { target_submission_id: string; request_comments: string }
         | { target_submission_id: string; return_reason: string }
-        | { target_submission_id: string; completion_notes: string | null }
+        | { target_submission_id: string; completion_notes: string | null; assignment_outcome: AssignmentOutcome | null }
         | { target_submission_id: string; target_assignment_office_role: string; withdrawal_reason: string };
       if (action === 'request_changes') {
         rpcName = 'request_workflow_submission_changes';
@@ -444,7 +522,11 @@ export default function ApproverManagePage() {
         rpcArgs = { target_submission_id: sub.id, return_reason: message.trim() };
       } else if (action === 'complete_assignment') {
         rpcName = 'complete_workflow_assignment';
-        rpcArgs = { target_submission_id: sub.id, completion_notes: message.trim() || null };
+        rpcArgs = {
+          target_submission_id: sub.id,
+          completion_notes: message.trim() || null,
+          assignment_outcome: null,
+        };
       } else if (action === 'return_assignment') {
         rpcName = 'return_workflow_assignment';
         rpcArgs = { target_submission_id: sub.id, return_reason: message.trim() };
@@ -528,8 +610,24 @@ export default function ApproverManagePage() {
   if (!sub) {
     return (
       <div className="w-full">
-        <div className="rounded-2xl border border-rejected-bg bg-rejected-bg/50 px-5 py-8 text-xs font-semibold text-rejected-text">
-          Submission not found.
+        <div className={`rounded-2xl border px-5 py-8 text-xs font-semibold ${
+          loadError
+            ? 'border-rejected-bg bg-rejected-bg/50 text-rejected-text'
+            : 'border-warm-border bg-card text-muted-text'
+        }`}>
+          <p>{loadError || 'Submission not found.'}</p>
+          {loadError && (
+            <button
+              type="button"
+              onClick={() => {
+                setLoading(true);
+                void fetchDetails();
+              }}
+              className="mt-4 rounded-full border border-current px-4 py-2 font-bold hover:bg-white/50"
+            >
+              Try again
+            </button>
+          )}
         </div>
       </div>
     );
@@ -558,8 +656,9 @@ export default function ApproverManagePage() {
   );
   const pendingAssignmentCount = pendingAssignments.length;
   const isCompleted = sub.status === 'completed' || sub.status === 'approved';
+  const isRejected = DECLINED_STATUSES.includes(sub.status);
   const isWithdrawn = sub.status === 'withdrawn';
-  const currentPendingAssignment = pendingAssignments[0];
+  const waitingAssignmentNames = pendingAssignments.map((step) => OFFICE_CONFIG[step.office_role].label);
   const activeOfficeConversation = currentPlanSteps.find((step) =>
     ['office_forward', 'tourism_officer'].includes(step.assignment_source)
     && ['pending', 'in_progress'].includes(step.status)
@@ -573,46 +672,84 @@ export default function ApproverManagePage() {
         && (step.office_role === role || step.assigned_by_role === role)
       )?.id
       ?? null;
-  const pendingAssignmentReason = currentPendingAssignment
-    ? `Pending assignment with ${OFFICE_CONFIG[currentPendingAssignment.office_role].label}`
+  const pendingAssignmentReason = pendingAssignments.length > 0
+    ? `Waiting for ${waitingAssignmentNames.join(', ')} to finish`
     : '';
-  const statusLine = `${statusConfig.label}${pendingAssignments.length === 1
-    ? ` · 1 assignment pending with ${OFFICE_CONFIG[pendingAssignments[0].office_role].label}`
-    : pendingAssignments.length > 1
-      ? ` · ${pendingAssignments.length} assignments pending`
-      : ''}`;
+  const statusLine = `${statusConfig.label}${pendingAssignmentReason ? ` · ${pendingAssignmentReason}` : ''}`;
+  const requiresReviewStart = (
+    isResponsibleOffice && ['submitted', 'pending_office'].includes(sub.status)
+  ) || (
+    isRecipientOffice && activeRouteStep?.status === 'pending'
+  );
+  // Mirrors decide_workflow_submission_as_responsible_office: only the office recorded
+  // as the decision office (or the original destination) may approve or reject.
+  const decisionOfficeRole = sub.final_decision_office_role ?? initialDestinationRole;
+  const decisionAuthorityReason = decisionOfficeRole && decisionOfficeRole !== role
+    ? `Only ${getOfficeLabel(decisionOfficeRole)} can approve or reject this submission`
+    : undefined;
+  const decisionStatusReason = sub.status !== 'in_process'
+    ? 'Available only while status is In Process'
+    : undefined;
   const responsibleOfficeActions = [
     {
       value: 'request_changes',
-      label: 'Request changes',
+      label: 'Request changes or information',
       groupLabel: 'Send back',
       description: 'The submitter can respond on this same submission; it returns to your office for review.',
       tone: 'primary' as const,
       requiresMessage: true,
+      successMessage: 'Changes requested. The submitter has been notified.',
       unavailableReason: routeStateError
         ? 'Could not verify whether an assignment is pending'
         : pendingAssignmentReason
           || (sub.status !== 'in_process' ? 'Available only while status is In Process' : undefined),
     },
     {
+      value: 'approve',
+      label: 'Approve',
+      groupLabel: 'Decision',
+      description: 'Record the responsible office’s final approval for this submission.',
+      tone: 'primary' as const,
+      confirmation: 'Approve this submission? The submitter will be notified and the decision recorded.',
+      successMessage: 'Submission approved. The submitter has been notified.',
+      unavailableReason: routeStateError
+        ? 'Could not verify whether an office assignment is pending'
+        : pendingAssignmentReason || decisionStatusReason || decisionAuthorityReason,
+    },
+    {
+      value: 'reject',
+      label: 'Reject',
+      groupLabel: 'Decision',
+      description: 'Record the responsible office’s final rejection. A reason is required.',
+      tone: 'warning' as const,
+      requiresMessage: true,
+      confirmation: 'Reject this submission? The submitter will be notified and the decision recorded.',
+      successMessage: 'Submission rejected. The submitter has been notified.',
+      unavailableReason: routeStateError
+        ? 'Could not verify whether an office assignment is pending'
+        : pendingAssignmentReason || decisionStatusReason || decisionAuthorityReason,
+    },
+    {
       value: 'return_to_submitter',
       label: 'Return for redirection',
-      groupLabel: 'Send back',
+      groupLabel: 'Other actions',
       description: 'Return this submission so the submitter can choose a different destination office.',
       tone: 'warning' as const,
       requiresMessage: true,
       confirmation: 'The submission will return to the submitter so they can choose the correct office. This is not a rejection.',
+      successMessage: 'Submission returned to the submitter for redirection.',
       unavailableReason: !['submitted', 'in_process'].includes(sub.status)
         ? 'Available only while status is Submitted or In Process'
         : undefined,
     },
     {
       value: 'close_submission',
-      label: 'Complete submission',
-      buttonLabel: 'Complete submission',
+      label: 'Complete',
+      buttonLabel: 'Complete',
       groupLabel: 'Finish',
       description: 'Mark the entire submission complete. This is different from completing only an office assignment.',
       tone: 'strong' as const,
+      successMessage: 'Submission completed. The submitter has been notified.',
       unavailableReason: routeStateError
         ? 'Could not verify whether an assignment is pending'
         : pendingAssignmentReason
@@ -631,6 +768,7 @@ export default function ApproverManagePage() {
     requiresMessage?: boolean;
     unavailableReason?: string;
     confirmation?: string;
+    successMessage?: string;
   }[]> = {};
   const recipients: { value: string; label: string }[] = [];
   let initialRecipient = 'responsible_office';
@@ -658,8 +796,8 @@ export default function ApproverManagePage() {
       actionsByRecipient[recipientValue] = [
         {
           value: 'forward',
-          label: 'Request office review',
-          buttonLabel: 'Request review',
+          label: 'Forward',
+          buttonLabel: 'Forward',
           groupLabel: 'Route to another office',
           description: isResponsibleOffice
             ? `Send this submission to ${OFFICE_CONFIG[officeRole].label} for a recommendation; your office remains responsible for the final decision.`
@@ -670,11 +808,12 @@ export default function ApproverManagePage() {
         {
           value: 'withdraw_assignment',
           label: 'Withdraw assignment',
-          groupLabel: 'Manage assignment',
+          groupLabel: 'Other actions',
           description: `Withdraw only the assignment with ${OFFICE_CONFIG[officeRole].label}; the submission itself stays open.`,
           tone: 'warning',
           requiresMessage: true,
           confirmation: `The pending assignment with ${OFFICE_CONFIG[officeRole].label} will be withdrawn.`,
+          successMessage: `Assignment with ${OFFICE_CONFIG[officeRole].label} withdrawn.`,
           unavailableReason: targetAssignment
             ? undefined
             : `No pending assignment with ${OFFICE_CONFIG[officeRole].label}`,
@@ -687,21 +826,42 @@ export default function ApproverManagePage() {
     actionsByRecipient.responsible_office = [
       {
         value: 'complete_assignment',
-        label: 'Complete assignment',
-        buttonLabel: 'Complete assignment',
+        label: 'Complete',
+        buttonLabel: 'Complete',
         groupLabel: 'Finish',
-        description: 'Complete your office’s assignment. The overall submission may continue through its workflow.',
+        description: 'Mark your office’s assignment handled. Add a note for the responsible office if useful.',
         tone: 'primary',
+        successMessage: 'Assignment completed. The responsible office has been notified.',
+        unavailableReason: routeStateError ? 'Could not verify your office assignment' : undefined,
+      },
+      {
+        value: 'approve',
+        label: 'Approve',
+        groupLabel: 'Decision',
+        description: 'Record your office’s approval response. The responsible office retains authority to complete the submission.',
+        tone: 'primary',
+        successMessage: 'Approval sent. The responsible office has been notified.',
+        unavailableReason: routeStateError ? 'Could not verify your office assignment' : undefined,
+      },
+      {
+        value: 'reject',
+        label: 'Reject',
+        groupLabel: 'Decision',
+        description: 'Record your office’s rejection response. The responsible office retains authority to complete the submission. A reason is required.',
+        tone: 'warning',
+        requiresMessage: true,
+        successMessage: 'Rejection sent. The responsible office has been notified.',
         unavailableReason: routeStateError ? 'Could not verify your office assignment' : undefined,
       },
       {
         value: 'return_assignment',
         label: 'Return to responsible office',
-        groupLabel: 'Send back',
+        groupLabel: 'Other actions',
         description: 'Send this assignment back to the responsible office with your reason.',
         tone: 'warning',
         requiresMessage: true,
         confirmation: 'The assignment will be returned to the responsible office with your reason.',
+        successMessage: 'Assignment returned to the responsible office.',
         unavailableReason: routeStateError ? 'Could not verify your office assignment' : undefined,
       },
     ];
@@ -718,8 +878,8 @@ export default function ApproverManagePage() {
       actionsByRecipient[recipientValue] = [
         {
           value: 'forward',
-          label: 'Request office review',
-          buttonLabel: 'Request review',
+          label: 'Forward',
+          buttonLabel: 'Forward',
           groupLabel: 'Route to another office',
           description: `Send this assignment to ${OFFICE_CONFIG[officeRole].label} for a recommendation. Your assignment will be marked complete.`,
           tone: 'primary',
@@ -730,13 +890,187 @@ export default function ApproverManagePage() {
       ];
     }
   }
+  // Open the action list on the first action that can actually be taken.
+  initialAction = (actionsByRecipient[initialRecipient] ?? []).find((action) => !action.unavailableReason)?.value
+    ?? actionsByRecipient[initialRecipient]?.[0]?.value
+    ?? initialAction;
   const isAssignmentSender = activeAssignmentCreatedByCurrentOffice;
+  const isReturned = sub.status === 'returned';
+
+  // ─── Office assignments (who was asked, and what they answered) ────────────
   const historicalRecipientView = hasOfficeAssignment
     && !isResponsibleOffice
     && !isRecipientOffice
     && !isAssignmentSender;
-  const composerClosed = isCompleted || isWithdrawn || historicalRecipientView;
-  const processingNote = sub.office_comments || sub.mayor_comments || sub.approver_comments || '';
+  const composerClosed = isCompleted || isRejected || isWithdrawn || isReturned || historicalRecipientView;
+  const officeHistory = routeSteps
+    .filter((step) => step.status !== 'skipped')
+    .map((step) => ({
+      id: step.id,
+      officeRole: step.office_role,
+      state: step.outcome
+        ? describeAssignmentState(step).label
+        : step.status === 'completed'
+          ? 'Completed'
+          : step.status === 'in_progress'
+            ? 'Under review'
+            : step.status === 'pending'
+              ? 'Pending'
+              : step.status.replaceAll('_', ' '),
+      tone: step.outcome
+        ? describeAssignmentState(step).tone
+        : step.status === 'pending' || step.status === 'in_progress'
+          ? 'waiting'
+          : step.status === 'returned'
+            ? 'caution'
+            : step.status === 'withdrawn'
+              ? 'muted'
+              : 'muted',
+      timestamp: step.completed_at ?? step.decided_at ?? step.started_at ?? step.assigned_at,
+      comments: step.comments,
+      sortTimestamp: step.completed_at ?? step.decided_at ?? step.started_at ?? step.assigned_at ?? '',
+    }));
+  if (isCompleted || isRejected) {
+    // "Complete" (status completed) finishes processing without an approval decision.
+    const isApprovalDecision = sub.status === 'approved';
+    const finalDecisionAt = sub.final_decided_at
+      ?? (isRejected ? sub.rejected_at : isApprovalDecision ? sub.approved_at : sub.completed_at)
+      ?? sub.updated_at;
+    const storedFinalDecisionOfficeRole = sub.final_decision_office_role ?? null;
+    const finalDecisionOfficeRole = isOfficeRole(storedFinalDecisionOfficeRole)
+      ? storedFinalDecisionOfficeRole
+      : isOfficeRole(responsibleOfficeRole)
+        ? responsibleOfficeRole
+        : null;
+    if (finalDecisionOfficeRole) {
+      officeHistory.push({
+        id: `final-decision-${sub.id}`,
+        officeRole: finalDecisionOfficeRole,
+        state: isRejected
+          ? 'Final decision: Rejected'
+          : isApprovalDecision
+            ? 'Final decision: Approved'
+            : 'Submission completed',
+        tone: isRejected ? 'negative' : 'positive',
+        timestamp: finalDecisionAt,
+        comments: isRejected
+          ? sub.rejection_comment ?? sub.office_comments ?? null
+          : sub.closure_note ?? (isApprovalDecision ? sub.office_comments : null) ?? null,
+        sortTimestamp: finalDecisionAt,
+      });
+    }
+  }
+  officeHistory.sort((first, second) =>
+    first.sortTimestamp.localeCompare(second.sortTimestamp)
+  );
+  const activeOfficeLabel = (step: RouteStep) => getOfficeLabel(step.office_role);
+  const workflowStatus = (
+    <section
+      aria-labelledby={`workflow-status-${sub.id}`}
+      className="overflow-hidden rounded-2xl border border-warm-border bg-card"
+      role="status"
+    >
+      <header className="border-b border-warm-border px-5 py-4">
+        <h3 id={`workflow-status-${sub.id}`} className="text-sm font-bold text-warm-text">Workflow status</h3>
+        <p className="mt-0.5 text-[10px] text-muted-text">Current responsibility and office handling</p>
+      </header>
+      <div className="grid gap-4 p-5 sm:grid-cols-2">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">Responsible office</p>
+          <p className="mt-1 text-xs font-semibold text-warm-text">
+            {responsibleOfficeRole ? getOfficeLabel(responsibleOfficeRole) : 'Not assigned'}
+          </p>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-text">
+            Retains responsibility for the submission and its final decision.
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">Currently handling</p>
+          {pendingAssignments.length > 0 ? (
+            <>
+              <ul className="mt-1 space-y-1.5">
+                {pendingAssignments.map((step) => (
+                  <li key={step.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+                    <span className="font-semibold text-warm-text">{activeOfficeLabel(step)}</span>
+                    <span className="text-[10px] font-medium text-pending-text">
+                      {step.status === 'pending' ? 'Awaiting start' : 'Under review'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-[10px] leading-relaxed text-muted-text">
+                The responsible office is waiting for these assignments to be completed.
+              </p>
+            </>
+          ) : isCompleted || isRejected || isWithdrawn ? (
+            <p className="mt-1 text-xs font-medium text-muted-text">No active office assignment</p>
+          ) : (
+            <p className="mt-1 text-xs font-semibold text-warm-text">
+              {responsibleOfficeRole ? getOfficeLabel(responsibleOfficeRole) : 'Responsible office'} can continue processing
+            </p>
+          )}
+        </div>
+        {officeHistory.length > 0 && (
+          <div className="border-t border-warm-border pt-4 sm:col-span-2">
+            <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+              Office actions and decisions
+            </p>
+            <ol className="mt-2 divide-y divide-warm-border">
+              {officeHistory.map((entry) => (
+                <li key={entry.id} className="flex flex-col gap-1.5 py-3 first:pt-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="text-xs font-semibold text-warm-text">
+                        {getOfficeLabel(entry.officeRole)}
+                      </span>
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${ASSIGNMENT_TONE_CLASSES[entry.tone]}`}>
+                        {entry.state}
+                      </span>
+                    </div>
+                    {entry.comments && (
+                      <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted-text">
+                        {entry.comments}
+                      </p>
+                    )}
+                  </div>
+                  {entry.timestamp && (
+                    <time
+                      dateTime={entry.timestamp}
+                      className="shrink-0 text-[10px] text-muted-text"
+                    >
+                      {new Date(entry.timestamp).toLocaleString([], {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      })}
+                    </time>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+
+  const startOfficeReview = async () => {
+    if (!sub || !isOfficeRole(role) || !requiresReviewStart) return;
+    setUpdating(true);
+    setActionError('');
+    try {
+      const rpcName = isResponsibleOffice
+        ? 'receive_workflow_submission'
+        : 'receive_workflow_assignment';
+      const { error } = await supabase.rpc(rpcName, { target_submission_id: sub.id });
+      if (error) throw new Error(error.message || 'Could not start this review.');
+      await fetchDetails();
+    } catch (error) {
+      console.error('Could not start office review:', error);
+      setActionError(error instanceof Error ? error.message : 'Could not start this review.');
+    } finally {
+      setUpdating(false);
+    }
+  };
   const downloadOriginal = async () => {
     const url = await getFileUrl(supabase, sub);
     await downloadFile(url, sub.file_name);
@@ -747,7 +1081,10 @@ export default function ApproverManagePage() {
     <div className="mx-auto w-full max-w-[1500px] pb-8">
       <button
         type="button"
-        onClick={() => { if (officeReview) router.push(getRoleHomePath(role)); else router.back(); }}
+        onClick={() => {
+          if (isOfficeRole(role)) router.push(getOfficeFileManagementPath(role));
+          else router.back();
+        }}
         className="mb-5 inline-flex items-center gap-2 text-xs font-semibold text-muted-text transition-colors hover:text-clay"
       >
         <span className="grid h-8 w-8 place-items-center rounded-full border border-warm-border bg-card">
@@ -755,6 +1092,23 @@ export default function ApproverManagePage() {
         </span>
         Back to queue
       </button>
+      {(actionError || loadError) && (
+        <div role="alert" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">
+          <span>{loadError || actionError}</span>
+          {loadError && (
+            <button
+              type="button"
+              onClick={() => {
+                setLoading(true);
+                void fetchDetails();
+              }}
+              className="rounded-full border border-current px-4 py-2 font-bold hover:bg-white/50"
+            >
+              Try again
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── Header card ── */}
       <section className="mb-5 overflow-hidden rounded-2xl border border-warm-border bg-card shadow-[0_12px_35px_rgba(65,49,39,0.05)]">
@@ -781,6 +1135,9 @@ export default function ApproverManagePage() {
               <span className="inline-flex items-center gap-1.5">
                 <Icon name="user" size={14} /> {sender?.full_name || 'Unknown submitter'}
               </span>
+              {sender?.email && (
+                <span className="inline-flex items-center gap-1.5">{sender.email}</span>
+              )}
               <span className="inline-flex items-center gap-1.5">
                 <Icon name="calendar" size={14} /> Submitted{' '}
                 {new Date(sub.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
@@ -834,20 +1191,6 @@ export default function ApproverManagePage() {
               <blockquote className="whitespace-pre-wrap break-words border-l-2 border-clay pl-3 font-serif text-[14px] italic leading-relaxed text-warm-text/75">
                 {sub.description || 'No description provided.'}
               </blockquote>
-            </div>
-            <div className="border-t border-warm-border pt-4">
-              <Label>Submitted by</Label>
-              <p className="text-xs font-bold text-warm-text">{sender?.full_name || 'Unknown submitter'}</p>
-              {sender?.email && <p className="mt-0.5 text-[10px] text-muted-text">{sender.email}</p>}
-            </div>
-            <div className="border-t border-warm-border pt-4">
-              <Label>Submitted on</Label>
-              <p className="text-xs font-bold text-warm-text">
-                {new Date(sub.created_at).toLocaleDateString([], { dateStyle: 'medium' })}
-              </p>
-              <p className="mt-0.5 text-[10px] text-muted-text">
-                {new Date(sub.created_at).toLocaleTimeString([], { timeStyle: 'short' })}
-              </p>
             </div>
           </div>
         </section>
@@ -1000,11 +1343,6 @@ export default function ApproverManagePage() {
       <div>
           {officeReview ? (
             <>
-              {actionError && (
-                <p role="alert" className="mb-3 rounded-xl border border-rejected-bg bg-rejected-bg/50 px-4 py-3 text-xs font-medium text-rejected-text">
-                  {actionError}
-                </p>
-              )}
               <DocumentMessaging
                 key={sub.id}
                 submissionId={sub.id}
@@ -1013,23 +1351,35 @@ export default function ApproverManagePage() {
                 assignmentConversations={assignmentConversations}
                 defaultAssignmentStepId={defaultAssignmentStepId}
                 showSubmitterConversation={isResponsibleOffice}
-                canSendSubmitterConversation={!isCompleted && !isWithdrawn && isResponsibleOffice}
+                canSendSubmitterConversation={!requiresReviewStart && !isCompleted && !isRejected && !isWithdrawn && !isReturned && isResponsibleOffice}
                 workflowComposer={{
                   recipients,
                   actionsByRecipient,
                   initialRecipient,
                   initialAction,
-                  initialMessage: processingNote,
                   statusLine,
+                  workflowStatus,
                   showStatusLine: false,
                   isClosed: composerClosed && !isAssignmentSender,
+                  startReviewMessage: isResponsibleOffice
+                    ? 'Start processing to receive this submission and change its status to In Process.'
+                    : 'The submission is already In Process, but your office assignment is still pending. Start processing here to enable its action options.',
+                  startReviewDisabled: !isResponsibleOffice && Boolean(routeStateError),
+                  onStartReview: requiresReviewStart ? startOfficeReview : undefined,
                   isOfficeWorkspace: true,
                   activeAssignmentStepId: activeRouteStep?.id ?? null,
                   showWorkflowActions: isResponsibleOffice || isRecipientOffice,
-                  closedMessage: historicalRecipientView
+                  actionSectionId: `office-workflow-action-${sub.id}`,
+                  closedMessage: requiresReviewStart
+                    ? 'Start processing when your office is ready to begin.'
+                    : historicalRecipientView
                     ? 'This assignment is no longer active. You can still review its files and messages.'
-                    : isWithdrawn
+                    : isRejected
+                      ? 'This submission was rejected.'
+                      : isWithdrawn
                       ? 'This submission is withdrawn.'
+                      : isReturned
+                      ? 'This submission was returned to the submitter for redirection.'
                       : 'This submission is completed.',
                   busy: updating,
                   pendingAssignmentCount,
@@ -1039,7 +1389,9 @@ export default function ApproverManagePage() {
                     fileSize: sub.file_size,
                   },
                   onWorkflowAction: handleWorkflowAction,
-                  onForwarded: fetchDetails,
+                  onForwarded: async () => {
+                    await fetchDetails();
+                  },
                 }}
                 activity={(
                   <WorkflowActivityTimeline
@@ -1049,7 +1401,7 @@ export default function ApproverManagePage() {
                       label: getActionLabel(log.action_type),
                       createdAt: log.created_at,
                       actor: log.profiles?.full_name || 'System',
-                      actorRole: log.profiles?.role,
+                      actorRole: getActorRoleLabel(log.profiles?.role),
                       comments: log.comments,
                     }))}
                   />

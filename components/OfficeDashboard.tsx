@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { useWorkflowRole } from '@/lib/workflow/role-context';
 import {
   getWorkflowDocumentTypeLabel,
   getOfficeFileManagementPath,
@@ -14,6 +15,11 @@ import {
   type OfficeDashboardFilter,
 } from '@/lib/workflow/office-dashboard';
 import { getSubmissionStatusLabel } from '@/lib/workflow/status';
+import {
+  ASSIGNMENT_TONE_CLASSES,
+  describeAssignmentState,
+  summarizeAssignment,
+} from '@/lib/workflow/assignments';
 
 interface Submission {
   id: string;
@@ -32,6 +38,11 @@ interface Submission {
     decided_at: string | null;
     completed_at: string | null;
   } | null;
+  consultedRecord: {
+    office_role: string;
+    status: string;
+    outcome: string | null;
+  } | null;
 }
 
 type Filter = OfficeDashboardFilter;
@@ -39,6 +50,7 @@ type Filter = OfficeDashboardFilter;
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All assigned documents' },
   { key: 'needs_action', label: 'Needs action' },
+  { key: 'waiting_on_office', label: 'Waiting on another office' },
   { key: 'changes_requested', label: 'Changes Requested' },
   { key: 'completed', label: 'Completed submissions' },
   { key: 'returned', label: 'Returned' },
@@ -47,7 +59,8 @@ const FILTERS: { key: Filter; label: string }[] = [
 ];
 
 function statusLabel(status: string, assignment = false) {
-  if (assignment && ['pending', 'in_progress'].includes(status)) return 'Pending assignment';
+  if (assignment && status === 'pending') return 'Pending assignment';
+  if (assignment && status === 'in_progress') return 'In Progress';
   return getSubmissionStatusLabel(status);
 }
 
@@ -59,6 +72,12 @@ export default function OfficeDashboard({
   view: 'dashboard' | 'file-management';
 }) {
   const office = OFFICE_CONFIG[role];
+  const viewerRole = useWorkflowRole();
+  const officePath = getOfficeFileManagementPath(role);
+  const adminOfficeQuery = viewerRole === 'system_admin' ? `?office=${role}` : '';
+  const officeQueuePath = `${officePath}${adminOfficeQuery}`;
+  const officeSubmissionPath = (submissionId: string) =>
+    `${officePath}/${submissionId}${adminOfficeQuery}`;
   const supabase = useMemo(() => createClient(), []);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
@@ -89,6 +108,7 @@ export default function OfficeDashboard({
       office_role: string;
       assigned_by_role: string | null;
       status: string;
+      outcome: string | null;
       comments: string | null;
       decided_at: string | null;
       completed_at: string | null;
@@ -97,7 +117,7 @@ export default function OfficeDashboard({
     if (planIds.length > 0) {
       const { data: steps, error: stepsError } = await supabase
         .from('workflow_routing_steps')
-        .select('routing_plan_id, office_role, assigned_by_role, status, comments, decided_at, completed_at')
+        .select('routing_plan_id, office_role, assigned_by_role, status, outcome, comments, decided_at, completed_at')
         .or(`office_role.eq.${role},assigned_by_role.eq.${role}`)
         .neq('status', 'skipped')
         .in('routing_plan_id', planIds);
@@ -116,9 +136,27 @@ export default function OfficeDashboard({
       string,
       { status: string; comments: string | null; decided_at: string | null; completed_at: string | null; version: number }
     >();
+    // Assignments this office gave to another office (latest per submission).
+    const consultedRecords = new Map<
+      string,
+      { office_role: string; status: string; outcome: string | null; version: number }
+    >();
     for (const step of routeSteps) {
       const plan = planById.get(step.routing_plan_id);
       if (!plan) continue;
+
+      if (step.office_role !== role) {
+        const consulted = consultedRecords.get(plan.submission_id);
+        if (!consulted || plan.version > consulted.version) {
+          consultedRecords.set(plan.submission_id, {
+            office_role: step.office_role,
+            status: step.status,
+            outcome: step.outcome,
+            version: plan.version,
+          });
+        }
+        continue;
+      }
 
       const existing = officeRecords.get(plan.submission_id);
       if (!existing || plan.version > existing.version) {
@@ -154,6 +192,7 @@ export default function OfficeDashboard({
 
     const submissionIds = Array.from(new Set([
       ...officeRecords.keys(),
+      ...consultedRecords.keys(),
       ...activeRouteSubmissionIds,
       ...(currentAssignments ?? []).map((submission) => submission.id),
     ]));
@@ -180,8 +219,16 @@ export default function OfficeDashboard({
 
     setSubmissions((data ?? []).map((submission) => {
       const officeRecord = officeRecords.get(submission.id);
+      const consultedRecord = consultedRecords.get(submission.id);
       return {
         ...submission,
+        consultedRecord: consultedRecord && ['in_process', 'changes_requested'].includes(submission.status)
+          ? {
+              office_role: consultedRecord.office_role,
+              status: consultedRecord.status,
+              outcome: consultedRecord.outcome,
+            }
+          : null,
         officeRecord: officeRecord
           ? {
               status: officeRecord.status,
@@ -285,7 +332,7 @@ export default function OfficeDashboard({
                   {loading ? 'Refreshing...' : 'Refresh'}
                 </button>
                 <Link
-                  href={getOfficeFileManagementPath(role)}
+                  href={officeQueuePath}
                   className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
                 >
                   File management <span className="ml-2" aria-hidden="true">→</span>
@@ -310,8 +357,6 @@ export default function OfficeDashboard({
             ) : (
               <div className="space-y-3">
                 {recentActionItems.map((submission) => {
-                  const isAssignment = submission.selected_office_role !== role
-                    && ['pending', 'in_progress'].includes(submission.officeRecord?.status ?? '');
                   return (
                     <article
                       key={submission.id}
@@ -331,12 +376,17 @@ export default function OfficeDashboard({
                             This office: {statusLabel(submission.officeRecord.status, true)}
                           </p>
                         )}
+                        {submission.consultedRecord && (
+                          <p className="mt-1 text-[11px] font-semibold text-clay">
+                            {summarizeAssignment(submission.consultedRecord)}
+                          </p>
+                        )}
                       </div>
                       <Link
-                        href={`${getOfficeFileManagementPath(role)}/${submission.id}`}
+                        href={officeSubmissionPath(submission.id)}
                         className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
                       >
-                        {isAssignment ? 'Process assignment' : 'Process submission'}
+                        View
                       </Link>
                     </article>
                   );
@@ -410,9 +460,6 @@ export default function OfficeDashboard({
           ) : (
             <div className="space-y-3">
               {filteredSubmissions.map((submission) => {
-                const canReview = matchesOfficeDashboardFilter(submission, 'needs_action', role);
-                const isAssignment = submission.selected_office_role !== role
-                  && ['pending', 'in_progress'].includes(submission.officeRecord?.status ?? '');
                 const processedAt = submission.officeRecord?.completed_at
                   ?? submission.officeRecord?.decided_at;
                 return (
@@ -448,11 +495,16 @@ export default function OfficeDashboard({
                           This office: {statusLabel(submission.officeRecord.status, true)}
                         </span>
                       )}
+                      {submission.consultedRecord && (
+                        <span className={`rounded-full px-3 py-1.5 text-[11px] font-medium ${ASSIGNMENT_TONE_CLASSES[describeAssignmentState(submission.consultedRecord).tone]}`}>
+                          {summarizeAssignment(submission.consultedRecord)}
+                        </span>
+                      )}
                       <Link
-                        href={`${getOfficeFileManagementPath(role)}/${submission.id}`}
+                        href={officeSubmissionPath(submission.id)}
                         className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
                       >
-                        {canReview ? isAssignment ? 'Process assignment' : 'Process submission' : 'View document'}
+                        View
                       </Link>
                     </div>
                   </article>
