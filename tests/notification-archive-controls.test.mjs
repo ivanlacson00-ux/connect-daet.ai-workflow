@@ -51,5 +51,5 @@ test('system-admin notifications link to a personal notification archive and arc
   assert.match(adminArchivePage, /WorkflowNotificationArchive role="system_admin"/);
   assert.match(archive, /'submitter' \| 'system_admin' \| OfficeRole/);
   assert.match(archive, /role === 'system_admin'[\s\S]*?\$\{basePath\}\/submissions/);
-  assert.match(archive, /router\.push\(`\$\{detailPath\}\/\$\{notification\.id\}`\)/);
+  assert.match(archive, /router\.push\(`\$\{detailPath\}\/\$\{notification\.id\}\$\{adminOfficeQuery\}`\)/);
 });

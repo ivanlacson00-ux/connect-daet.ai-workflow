@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { useWorkflowRole } from '@/lib/workflow/role-context';
 import {
   getWorkflowDocumentTypeLabel,
   getOfficeFileManagementPath,
@@ -71,6 +72,12 @@ export default function OfficeDashboard({
   view: 'dashboard' | 'file-management';
 }) {
   const office = OFFICE_CONFIG[role];
+  const viewerRole = useWorkflowRole();
+  const officePath = getOfficeFileManagementPath(role);
+  const adminOfficeQuery = viewerRole === 'system_admin' ? `?office=${role}` : '';
+  const officeQueuePath = `${officePath}${adminOfficeQuery}`;
+  const officeSubmissionPath = (submissionId: string) =>
+    `${officePath}/${submissionId}${adminOfficeQuery}`;
   const supabase = useMemo(() => createClient(), []);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
@@ -325,7 +332,7 @@ export default function OfficeDashboard({
                   {loading ? 'Refreshing...' : 'Refresh'}
                 </button>
                 <Link
-                  href={getOfficeFileManagementPath(role)}
+                  href={officeQueuePath}
                   className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-4 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
                 >
                   File management <span className="ml-2" aria-hidden="true">→</span>
@@ -376,7 +383,7 @@ export default function OfficeDashboard({
                         )}
                       </div>
                       <Link
-                        href={`${getOfficeFileManagementPath(role)}/${submission.id}`}
+                        href={officeSubmissionPath(submission.id)}
                         className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
                       >
                         View
@@ -494,7 +501,7 @@ export default function OfficeDashboard({
                         </span>
                       )}
                       <Link
-                        href={`${getOfficeFileManagementPath(role)}/${submission.id}`}
+                        href={officeSubmissionPath(submission.id)}
                         className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text"
                       >
                         View

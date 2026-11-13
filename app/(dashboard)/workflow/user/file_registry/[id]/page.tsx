@@ -872,6 +872,7 @@ export default function UserFileDetail() {
         activity={(
           <WorkflowActivityTimeline
             emptyMessage="No workflow events recorded yet."
+            showComments={false}
             events={auditLogs.map((log) => {
               const profile = Array.isArray(log.profiles) ? log.profiles[0] : log.profiles;
               return {

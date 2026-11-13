@@ -50,10 +50,20 @@ const KEY_ACTIVITY_ACTIONS = new Set([
   'DOCUMENT_RELEASED',
 ]);
 
+const RECENT_EVENT_LIMIT = 5;
+
 const formatTimestamp = (value: string) =>
   new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 
-function ActivityEvent({ event, featured = false }: { event: WorkflowActivityEvent; featured?: boolean }) {
+function ActivityEvent({
+  event,
+  featured = false,
+  showComments,
+}: {
+  event: WorkflowActivityEvent;
+  featured?: boolean;
+  showComments: boolean;
+}) {
   return (
     <li className={`relative border-l pl-4 ${featured ? 'border-clay' : 'border-warm-border'}`}>
       <span className={`absolute -left-[4.5px] top-1.5 h-2 w-2 rounded-full ring-4 ring-card ${featured ? 'bg-clay' : 'bg-warm-border'}`} />
@@ -64,7 +74,7 @@ function ActivityEvent({ event, featured = false }: { event: WorkflowActivityEve
       <time dateTime={event.createdAt} className="mt-0.5 block text-[10px] text-muted-text">
         {formatTimestamp(event.createdAt)}
       </time>
-      {event.comments && (
+      {showComments && event.comments && (
         <p className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-sidebar px-3 py-2 text-[11px] leading-relaxed text-warm-text">
           {event.comments}
         </p>
@@ -76,9 +86,11 @@ function ActivityEvent({ event, featured = false }: { event: WorkflowActivityEve
 export default function WorkflowActivityTimeline({
   events,
   emptyMessage = 'No activity recorded yet.',
+  showComments = true,
 }: {
   events: WorkflowActivityEvent[];
   emptyMessage?: string;
+  showComments?: boolean;
 }) {
   if (events.length === 0) {
     return <p className="text-[11px] text-muted-text">{emptyMessage}</p>;
@@ -92,7 +104,7 @@ export default function WorkflowActivityTimeline({
     KEY_ACTIVITY_ACTIONS.has(event.actionType)
     && !(hasSubmittedEvent && event.actionType === 'DESTINATION_SELECTED')
   );
-  const featuredEvents = keyEvents.map((event) =>
+  const recentEvents = keyEvents.slice(-RECENT_EVENT_LIMIT).map((event) =>
     event.actionType === 'DESTINATION_SELECTED'
       ? { ...event, label: 'Submission submitted', comments: null }
       : event
@@ -101,19 +113,24 @@ export default function WorkflowActivityTimeline({
   return (
     <div className="space-y-4">
       <div>
-        <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">Key workflow updates</p>
+        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">Latest workflow updates</p>
+        <p className="mb-3 text-[10px] text-muted-text">
+          {recentEvents.length === 0
+            ? 'No key workflow updates recorded yet.'
+            : `Showing ${recentEvents.length} latest of ${keyEvents.length} key updates.`}
+        </p>
         <ol className="space-y-4">
-          {featuredEvents.length > 0
-            ? featuredEvents.map((event) => <ActivityEvent key={event.id} event={event} featured />)
+          {recentEvents.length > 0
+            ? recentEvents.map((event) => <ActivityEvent key={event.id} event={event} featured showComments={showComments} />)
             : <li className="text-[11px] text-muted-text">No key workflow updates recorded yet.</li>}
         </ol>
       </div>
       <details className="border-t border-warm-border pt-3">
         <summary className="cursor-pointer text-[10px] font-semibold text-clay outline-none hover:text-warm-text focus-visible:ring-2 focus-visible:ring-clay/30">
-          Show full audit history ({sortedEvents.length})
+          Show full audit history ({sortedEvents.length}, including updates above)
         </summary>
         <ol className="mt-4 space-y-4">
-          {sortedEvents.map((event) => <ActivityEvent key={event.id} event={event} />)}
+          {sortedEvents.map((event) => <ActivityEvent key={event.id} event={event} showComments={showComments} />)}
         </ol>
       </details>
     </div>

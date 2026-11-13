@@ -10,6 +10,7 @@ import {
   getRoleHomePath,
   isOfficeRole,
 } from '@/lib/workflow/offices';
+import { WorkflowRoleProvider } from '@/lib/workflow/role-context';
 
 export default function WorkflowLayout({
   children,
@@ -118,6 +119,7 @@ export default function WorkflowLayout({
   const isActive = (path: string) => pathname === path;
 
   return (
+    <WorkflowRoleProvider role={role}>
     <div className="workflow-system min-h-screen bg-cream text-warm-text">
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -227,5 +229,6 @@ export default function WorkflowLayout({
         </div>
       </main>
     </div>
+    </WorkflowRoleProvider>
   );
 }

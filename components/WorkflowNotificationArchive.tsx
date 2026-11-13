@@ -6,10 +6,12 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import SwipeDismissNotification from '@/components/SwipeDismissNotification';
 import WorkflowNotificationFeed from '@/components/WorkflowNotificationFeed';
+import { useWorkflowRole } from '@/lib/workflow/role-context';
 import {
   getOfficeFileManagementPath,
   getOfficeNotificationsPath,
   getRoleHomePath,
+  isOfficeRole,
   type OfficeRole,
 } from '@/lib/workflow/offices';
 
@@ -95,6 +97,7 @@ const timeAgo = (iso: string) => {
 export default function WorkflowNotificationArchive({ role }: { role: ArchiveRole }) {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
+  const viewerRole = useWorkflowRole();
   const fetchInFlight = useRef(false);
   const [notifications, setNotifications] = useState<ArchivedNotification[]>([]);
   const [cursor, setCursor] = useState<ArchiveCursor | null>(null);
@@ -111,6 +114,9 @@ export default function WorkflowNotificationArchive({ role }: { role: ArchiveRol
     : role === 'system_admin'
       ? `${basePath}/submissions`
       : getOfficeFileManagementPath(role);
+  const adminOfficeQuery = viewerRole === 'system_admin' && isOfficeRole(role)
+    ? `?office=${role}`
+    : '';
 
   const fetchNotifications = useCallback(async (startAfter: ArchiveCursor | null, append = false) => {
     if (fetchInFlight.current) return;
@@ -247,7 +253,7 @@ export default function WorkflowNotificationArchive({ role }: { role: ArchiveRol
         ));
         window.dispatchEvent(new Event('workflow-notifications-changed'));
       }
-      router.push(`${detailPath}/${notification.id}`);
+      router.push(`${detailPath}/${notification.id}${adminOfficeQuery}`);
     } catch (error) {
       setErrorMessage(getErrorMessage(error, 'Could not open this notification.'));
     }
@@ -270,7 +276,7 @@ export default function WorkflowNotificationArchive({ role }: { role: ArchiveRol
       </header>
 
       <WorkflowNotificationFeed
-        archiveHref={notificationPath}
+        archiveHref={`${notificationPath}${adminOfficeQuery}`}
         archiveLabel="Back to notifications"
         busy={busy || loading}
         canClear={notifications.length > 0}
@@ -300,7 +306,7 @@ export default function WorkflowNotificationArchive({ role }: { role: ArchiveRol
           <div role="list" className="space-y-3">
             {notifications.map((notification) => {
               const status = getStatusConfig(notification.status || '');
-              const detailHref = `${detailPath}/${notification.id}`;
+              const detailHref = `${detailPath}/${notification.id}${adminOfficeQuery}`;
               return (
                 <SwipeDismissNotification
                   key={notification.notificationId}

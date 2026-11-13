@@ -4,7 +4,8 @@ export const TOURISM_OFFICE_LABEL = 'Daet Tourism Office';
 export const OFFICE_CONFIG = {
   tourism_officer: {
     label: TOURISM_OFFICE_LABEL,
-    path: '/workflow/tourism-office',
+    path: '/workflow/reviewer',
+    legacyPath: '/workflow/tourism-office',
     categories: [
       'Tourism Event or Activity Coordination',
       'Tourism Promotion and Marketing',
@@ -16,7 +17,8 @@ export const OFFICE_CONFIG = {
   },
   municipal_treasurer: {
     label: "Municipal Treasurer's Office",
-    path: '/workflow/municipal-treasurer',
+    path: '/workflow/reviewer',
+    legacyPath: '/workflow/municipal-treasurer',
     categories: [
       'Tax and Payment Documents',
       'Business Permit Fees',
@@ -27,7 +29,8 @@ export const OFFICE_CONFIG = {
   },
   mayor_office: {
     label: "Mayor's Office",
-    path: '/workflow/mayor',
+    path: '/workflow/reviewer',
+    legacyPath: '/workflow/mayor',
     categories: [
       'Executive Requests',
       'Complaints',
@@ -38,7 +41,8 @@ export const OFFICE_CONFIG = {
   },
   sangguniang_bayan: {
     label: 'Sangguniang Bayan Office',
-    path: '/workflow/sangguniang-bayan',
+    path: '/workflow/reviewer',
+    legacyPath: '/workflow/sangguniang-bayan',
     categories: [
       'Proposed Ordinances',
       'Proposed Resolutions',

@@ -77,9 +77,26 @@ export async function proxy(req: NextRequest) {
       return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
     }
 
-    const redirectBase = isOfficeRole(role) ? getRoleHomePath(role) : '/workflow/tourism-office'
-    const destination = new URL(`${redirectBase}${legacySuffix}`, req.url)
+    const officeRole = isOfficeRole(role) ? role : 'tourism_officer'
+    const destination = new URL(`/workflow/reviewer${legacySuffix}`, req.url)
     destination.search = req.nextUrl.search
+    if (role === 'system_admin') destination.searchParams.set('office', officeRole)
+    return NextResponse.redirect(destination)
+  }
+
+  const legacyOffice = Object.entries(OFFICE_CONFIG).find(([, office]) =>
+    pathname === office.legacyPath || pathname.startsWith(`${office.legacyPath}/`)
+  )
+  if (legacyOffice) {
+    const [officeRole, office] = legacyOffice
+    if (role !== officeRole && role !== 'system_admin') {
+      return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
+    }
+
+    const legacySuffix = pathname.slice(office.legacyPath.length)
+    const destination = new URL(`/workflow/reviewer${legacySuffix}`, req.url)
+    destination.search = req.nextUrl.search
+    if (role === 'system_admin') destination.searchParams.set('office', officeRole)
     return NextResponse.redirect(destination)
   }
 
@@ -91,12 +108,20 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
   }
 
-  const requestedOffice = Object.entries(OFFICE_CONFIG).find(([, office]) =>
-    pathname === office.path || pathname.startsWith(`${office.path}/`)
-  )
-
-  if (requestedOffice && role !== requestedOffice[0] && role !== 'system_admin') {
+  if (
+    (pathname === '/workflow/reviewer' || pathname.startsWith('/workflow/reviewer/'))
+    && !isOfficeRole(role)
+    && role !== 'system_admin'
+  ) {
     return NextResponse.redirect(new URL(getRoleHomePath(role), req.url))
+  }
+
+  if (
+    (pathname === '/workflow/reviewer' || pathname.startsWith('/workflow/reviewer/'))
+    && role === 'system_admin'
+    && !isOfficeRole(req.nextUrl.searchParams.get('office'))
+  ) {
+    return NextResponse.redirect(new URL('/workflow/admin', req.url))
   }
 
   return res
