@@ -35,10 +35,10 @@ test('the action list opens on the first available action', () => {
   assert.match(detail, /initialAction = \(actionsByRecipient\[initialRecipient\] \?\? \[\]\)\.find\(\(action\) => !action\.unavailableReason\)/);
 });
 
-test('returned submissions close the office composer and submitter conversation', () => {
+test('returned and changes-requested submissions close the office composer', () => {
   assert.match(detail, /const isReturned = sub\.status === 'returned';/);
-  assert.match(detail, /const composerClosed = isCompleted \|\| isRejected \|\| isWithdrawn \|\| isReturned \|\| historicalRecipientView;/);
-  assert.match(detail, /!isWithdrawn && !isReturned && isResponsibleOffice/);
+  assert.match(detail, /const composerClosed = isChangesRequested \|\| isCompleted \|\| isRejected \|\| isWithdrawn \|\| isReturned \|\| historicalRecipientView;/);
+  assert.match(detail, /!isChangesRequested && !isCompleted && !isRejected && !isWithdrawn && !isReturned && isResponsibleOffice/);
   assert.match(detail, /This submission was returned to the submitter for redirection\./);
 });
 

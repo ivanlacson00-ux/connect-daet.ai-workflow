@@ -90,7 +90,9 @@ const getStatusStyles = (status: string) => {
   if (s === 'pending_admin') return { label: 'Pending administrative processing', classes: 'bg-review-bg text-review-text' };
   if (s === 'pending_office') return { label: 'Pending municipal office', classes: 'bg-review-bg text-review-text' };
   if (s === 'pending_mayor') return { label: "Pending Mayor's office processing", classes: 'bg-review-bg text-review-text' };
-  if (s === 'returned_for_requirements') return { label: 'Returned for requirements', classes: 'bg-pending-bg text-pending-text' };
+  if (s === 'changes_requested' || s === 'returned_for_requirements') {
+    return { label: 'Closed — Changes Requested', classes: 'bg-pending-bg text-pending-text' };
+  }
   if (s === 'approved') return { label: 'Approved', classes: 'bg-approved-bg text-approved-text' };
   if (s === 'completed') return { label: 'Completed', classes: 'bg-approved-bg text-approved-text' };
   if (s.includes('declined') || s === 'rejected') return { label: 'Declined', classes: 'bg-rejected-bg text-rejected-text' };

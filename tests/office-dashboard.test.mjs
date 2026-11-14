@@ -66,3 +66,16 @@ test('unrelated offices do not see a direct submission in needs-action', () => {
     officeRecord: null,
   }, 'needs_action', 'municipal_treasurer'), false);
 });
+
+test('Changes Requested is out of office action queues and appears as processed history', () => {
+  for (const status of ['changes_requested', 'returned_for_requirements']) {
+    const closed = {
+      status,
+      selected_office_role: 'tourism_officer',
+      officeRecord: null,
+    };
+    assert.equal(matchesOfficeDashboardFilter(closed, 'needs_action', 'tourism_officer'), false);
+    assert.equal(matchesOfficeDashboardFilter(closed, 'changes_requested', 'tourism_officer'), true);
+    assert.equal(matchesOfficeDashboardFilter(closed, 'processed', 'tourism_officer'), true);
+  }
+});

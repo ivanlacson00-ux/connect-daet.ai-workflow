@@ -1,13 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import QRCode from 'qrcode';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
 import WorkflowActivityTimeline from '@/components/WorkflowActivityTimeline';
+import WorkflowRevisionTimeline from '@/components/WorkflowRevisionTimeline';
 import WorkflowStatusPanel, { type WorkflowStatusStep } from '@/components/WorkflowStatusPanel';
 import FilePreview, { downloadFile, getFileUrl } from '@/components/FilePreview';
+import {
+  getWorkflowFileMimeType,
+  getWorkflowFilesTypeError,
+  WORKFLOW_ATTACHMENT_ACCEPT,
+  WORKFLOW_DOCUMENT_ACCEPT,
+} from '@/lib/workflow/file-types';
 import {
   getWorkflowDocumentTypeLabel,
   isOfficeRole,
@@ -16,10 +23,12 @@ import {
 } from '@/lib/workflow/offices';
 import { getSubmissionStatusLabel, getSubmissionStatusTone } from '@/lib/workflow/status';
 import {
-  getWorkflowFileMimeType,
-  getWorkflowFilesTypeError,
-  WORKFLOW_DOCUMENT_ACCEPT,
-} from '@/lib/workflow/file-types';
+  getCurrentWorkflowRevisionFiles,
+  parseWorkflowRevisionHistory,
+  type WorkflowRevisionFile,
+  type WorkflowRevisionHistory,
+} from '@/lib/workflow/revisions';
+import { getAvailableActions } from '@/lib/workflow/action-availability';
 
 const fonts = {
   serif: 'font-serif',
@@ -27,6 +36,7 @@ const fonts = {
 
 interface Submission {
   id: string;
+  user_id: string;
   tracking_number: string;
   file_name: string;
   file_url: string;
@@ -34,6 +44,8 @@ interface Submission {
   file_type: string;
   file_size: number;
   status: string;
+  current_revision_id?: string | null;
+  reopen_count?: number | null;
   category: string;
   other_document_type?: string | null;
   description: string;
@@ -85,20 +97,75 @@ interface RetrievalQr {
   retrieval_status: string;
 }
 
+type RevisionFileAction = 'keep' | 'replace' | 'remove';
+
+interface RevisionDraftFile {
+  file: WorkflowRevisionFile;
+  action: RevisionFileAction;
+  replacement: File | null;
+}
+
+interface UploadedRevisionFile {
+  fileName: string;
+  filePath: string;
+  fileType: string;
+  fileSize: number;
+}
+
+interface WorkflowRevisionManifestItem {
+  logical_file_id: string;
+  prior_revision_file_id: string | null;
+  file_role: 'primary' | 'supporting';
+  file_name: string;
+  storage_path: string;
+  file_type: string | null;
+  file_size: number;
+  change_kind: 'added' | 'replaced' | 'carried' | 'removed';
+}
+
+const MAX_REVISION_FILE_BYTES = 10 * 1024 * 1024;
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+  return fallback;
+}
+
+function isRevisionFileAction(value: string): value is RevisionFileAction {
+  return value === 'keep' || value === 'replace' || value === 'remove';
+}
+
+function getRevisionFileError(files: File[], allowZip: boolean) {
+  const typeError = getWorkflowFilesTypeError(files, allowZip);
+  if (typeError) return typeError;
+  const oversizedFile = files.find((file) => file.size > MAX_REVISION_FILE_BYTES);
+  return oversizedFile
+    ? `"${oversizedFile.name}" exceeds the 10 MB per-file limit.`
+    : null;
+}
+
 export default function UserFileDetail() {
   const { id } = useParams();
   const router = useRouter();
   const [sub, setSub] = useState<Submission | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [revisionHistory, setRevisionHistory] = useState<WorkflowRevisionHistory | null>(null);
+  const [revisionHistoryLoading, setRevisionHistoryLoading] = useState(true);
+  const [revisionHistoryError, setRevisionHistoryError] = useState<string | null>(null);
   const [routeSteps, setRouteSteps] = useState<WorkflowStatusStep[]>([]);
   const [currentRoutePlanId, setCurrentRoutePlanId] = useState<string | null>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
-  const [savingResponse, setSavingResponse] = useState(false);
-  const [changeResponse, setChangeResponse] = useState('');
-  const [revisedDocument, setRevisedDocument] = useState<File | null>(null);
   const [withdrawalReason, setWithdrawalReason] = useState('');
   const [actionError, setActionError] = useState('');
+  const [revisionEditorOpen, setRevisionEditorOpen] = useState(false);
+  const [revisionDraftFiles, setRevisionDraftFiles] = useState<RevisionDraftFile[]>([]);
+  const [revisionAddedFiles, setRevisionAddedFiles] = useState<File[]>([]);
+  const [revisionMessage, setRevisionMessage] = useState('');
+  const [submittingRevision, setSubmittingRevision] = useState(false);
+  const [closingPermanently, setClosingPermanently] = useState(false);
   const [closureActor, setClosureActor] = useState<string | null>(null);
   const [redirectOffice, setRedirectOffice] = useState<OfficeRole | ''>('');
   const [redirectDocumentType, setRedirectDocumentType] = useState('');
@@ -114,7 +181,6 @@ export default function UserFileDetail() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [supportingAttachmentsOpen, setSupportingAttachmentsOpen] = useState(false);
   const [previewingAttachmentId, setPreviewingAttachmentId] = useState<string | null>(null);
-  const revisedDocumentInput = useRef<HTMLInputElement>(null);
   const supabase = useMemo(() => createClient(), []);
 
   const fetchSubmission = useCallback(async (preserveCurrent = false) => {
@@ -124,7 +190,10 @@ export default function UserFileDetail() {
       setRouteSteps([]);
       setCurrentRoutePlanId(null);
       setRouteError(null);
+      setRevisionHistory(null);
     }
+    setRevisionHistoryLoading(true);
+    setRevisionHistoryError(null);
     setRetrievalQr(null);
     setQrImage('');
     setQrError('');
@@ -173,6 +242,7 @@ export default function UserFileDetail() {
           { data: attachmentRows, error: attachmentError },
           { data: logs, error: logsError },
           { data: routes, error: routeError },
+          { data: detailHistory, error: detailHistoryError },
         ] = await Promise.all([
           supabase
             .from('workflow_submission_attachments')
@@ -189,10 +259,36 @@ export default function UserFileDetail() {
             .select('id, is_current')
             .eq('submission_id', id)
             .order('version', { ascending: true }),
+          supabase.rpc('get_workflow_submission_detail', { target_submission_id: id }),
         ]);
         if (attachmentError) console.error('Attachment load failed:', attachmentError.message);
         if (logsError) console.error('Workflow history load failed:', logsError.message);
-        setAttachments(attachmentRows ?? []);
+        let parsedHistory: WorkflowRevisionHistory | null = null;
+        if (detailHistoryError) {
+          console.error('Revision history load failed:', detailHistoryError.message);
+          setRevisionHistoryError('Could not load the file version history. Refresh this page to try again.');
+        } else {
+          try {
+            parsedHistory = parseWorkflowRevisionHistory(detailHistory);
+            setRevisionHistory(parsedHistory);
+          } catch (historyError) {
+            console.error('Revision history response was invalid:', historyError);
+            setRevisionHistoryError('The file version history could not be read. Refresh this page to try again.');
+          }
+        }
+        setRevisionHistoryLoading(false);
+        const currentSupportingFiles = parsedHistory
+          ? getCurrentWorkflowRevisionFiles(parsedHistory)
+            .filter((file) => file.fileRole === 'supporting')
+            .map((file) => ({
+              id: file.id,
+              file_name: file.fileName,
+              file_path: file.storagePath,
+              file_type: file.fileType,
+              file_size: file.fileSize,
+            }))
+          : attachmentRows ?? [];
+        setAttachments(currentSupportingFiles);
         setAuditLogs(logs ?? []);
         if (routeError) {
           console.error('Workflow route load failed:', routeError.message);
@@ -232,12 +328,47 @@ export default function UserFileDetail() {
       }
     } finally {
       setLoading(false);
+      setRevisionHistoryLoading(false);
     }
   }, [id, supabase]);
 
   useEffect(() => {
     void fetchSubmission();
   }, [fetchSubmission]);
+
+  useEffect(() => {
+    if (typeof id !== 'string') return;
+
+    let refreshTimer: number | undefined;
+    const scheduleRefresh = () => {
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined;
+        void fetchSubmission(true);
+      }, 100);
+    };
+
+    const channel = supabase
+      .channel(`user-submission-revisions-${id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'workflow_submission_revisions',
+        filter: `submission_id=eq.${id}`,
+      }, scheduleRefresh)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'workflow_change_requests',
+        filter: `submission_id=eq.${id}`,
+      }, scheduleRefresh)
+      .subscribe();
+
+    return () => {
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+      void supabase.removeChannel(channel);
+    };
+  }, [fetchSubmission, id, supabase]);
 
   useEffect(() => {
     let active = true;
@@ -320,68 +451,6 @@ export default function UserFileDetail() {
     link.click();
   };
 
-  const submitRequirementsResponse = async (response: string, revisedDocument: File | null) => {
-    if (!sub) throw new Error('Submission is unavailable.');
-    if (!response.trim()) throw new Error('Enter a response before resubmitting.');
-    const fileError = revisedDocument ? getWorkflowFilesTypeError([revisedDocument], false) : null;
-    if (fileError) throw new Error(fileError);
-    if (revisedDocument && revisedDocument.size > 10 * 1024 * 1024) {
-      throw new Error('The revised document must be 10 MB or smaller.');
-    }
-    setSavingResponse(true);
-    setActionError('');
-    const uploadedPaths: string[] = [];
-    try {
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user) throw userError ?? new Error('You must sign in to respond.');
-
-      let revisedFilePath: string | null = null;
-      let revisedFileUrl: string | null = null;
-      let revisedFileType: string | null = null;
-      if (revisedDocument) {
-        revisedFileType = getWorkflowFileMimeType(revisedDocument.name);
-        if (!revisedFileType) throw new Error('The revised document type is not supported.');
-        const safeRevisedName = revisedDocument.name.replace(/[^\w.-]/g, '_');
-        revisedFilePath = `${user.id}/${crypto.randomUUID()}-revised-${safeRevisedName}`;
-        const { error: revisedUploadError } = await supabase.storage
-          .from('workflow_uploads')
-          .upload(revisedFilePath, revisedDocument, {
-            contentType: revisedFileType,
-            upsert: false,
-          });
-        if (revisedUploadError) throw revisedUploadError;
-        uploadedPaths.push(revisedFilePath);
-        revisedFileUrl = supabase.storage
-          .from('workflow_uploads')
-          .getPublicUrl(revisedFilePath).data.publicUrl;
-      }
-
-      const { error: responseError } = await supabase.rpc(
-        'respond_to_workflow_submission_changes',
-        {
-          target_submission_id: sub.id,
-          sender_comments: response.trim(),
-          revised_file_path: revisedFilePath,
-          revised_file_url: revisedFileUrl,
-          revised_file_name: revisedDocument?.name ?? null,
-          revised_file_type: revisedFileType,
-          revised_file_size: revisedDocument?.size ?? null,
-        }
-      );
-      if (responseError) throw responseError;
-      await fetchSubmission(true);
-    } catch (error) {
-      console.error('Requirements response failed:', error);
-      if (uploadedPaths.length) {
-        const { error } = await supabase.storage.from('workflow_uploads').remove(uploadedPaths);
-        if (error) console.error('Attachment file cleanup failed:', error.message);
-      }
-      throw error instanceof Error ? error : new Error('Could not submit your response.');
-    } finally {
-      setSavingResponse(false);
-    }
-  };
-
   const redirectReturnedSubmission = async () => {
     if (!sub || !isOfficeRole(redirectOffice) || !redirectDocumentType) throw new Error('Choose a destination office and document type.');
     if (redirectDocumentType === 'Other' && !redirectOtherDocumentType.trim()) {
@@ -431,19 +500,6 @@ export default function UserFileDetail() {
     }
   };
 
-  const handleRequirementsSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setActionError('');
-    try {
-      await submitRequirementsResponse(changeResponse, revisedDocument);
-      setChangeResponse('');
-      setRevisedDocument(null);
-      if (revisedDocumentInput.current) revisedDocumentInput.current.value = '';
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Could not submit your response.');
-    }
-  };
-
   const handleRedirectSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setActionError('');
@@ -463,6 +519,273 @@ export default function UserFileDetail() {
       setWithdrawalReason('');
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Could not withdraw this submission.');
+    }
+  };
+
+  const startRevision = () => {
+    if (!revisionHistory || !sub?.current_revision_id) {
+      setActionError('The current file history is unavailable. Refresh before revising this submission.');
+      return;
+    }
+    const currentRevision = revisionHistory.revisions.find(
+      (revision) => revision.id === sub.current_revision_id,
+    );
+    if (!currentRevision) {
+      setActionError('The current revision could not be found. Refresh before revising this submission.');
+      return;
+    }
+    setRevisionDraftFiles(
+      currentRevision.files
+        .filter((file) => file.changeKind !== 'removed')
+        .map((file) => ({ file, action: 'keep', replacement: null })),
+    );
+    setRevisionAddedFiles([]);
+    setRevisionMessage('');
+    setActionError('');
+    setRevisionEditorOpen(true);
+  };
+
+  const handleRevisionReplacement = (index: number, event: ChangeEvent<HTMLInputElement>) => {
+    const replacement = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!replacement) return;
+    const draft = revisionDraftFiles[index];
+    const fileError = getRevisionFileError([replacement], draft.file.fileRole === 'supporting');
+    if (fileError) {
+      setActionError(fileError);
+      return;
+    }
+    setActionError('');
+    setRevisionDraftFiles((current) => current.map((entry, entryIndex) =>
+      entryIndex === index
+        ? { ...entry, action: 'replace', replacement }
+        : entry
+    ));
+  };
+
+  const handleRevisionAddedFiles = (event: ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = '';
+    if (selectedFiles.length === 0) return;
+    const fileError = getRevisionFileError(selectedFiles, true);
+    if (fileError) {
+      setActionError(fileError);
+      return;
+    }
+    const currentFiles = revisionDraftFiles.filter((entry) => entry.action !== 'remove').length;
+    if (currentFiles + revisionAddedFiles.length + selectedFiles.length > 30) {
+      setActionError('A submission can contain no more than 30 files per revision.');
+      return;
+    }
+    setActionError('');
+    setRevisionAddedFiles((current) => [...current, ...selectedFiles]);
+  };
+
+  const submitRevision = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!sub || !revisionHistory || !sub.current_revision_id || submittingRevision) return;
+    setActionError('');
+
+    const openRequest = revisionHistory.changeRequests.find(
+      (request) => request.status === 'open'
+        && request.againstRevisionId === sub.current_revision_id,
+    );
+    if (!openRequest) {
+      setActionError('The open change request could not be verified. Refresh and try again.');
+      return;
+    }
+
+    if (revisionDraftFiles.some((entry) => entry.action === 'replace' && !entry.replacement)) {
+      setActionError('Choose a replacement file for each file marked Replace.');
+      return;
+    }
+    const replacedFiles = revisionDraftFiles.filter(
+      (entry): entry is RevisionDraftFile & { replacement: File } =>
+        entry.action === 'replace' && entry.replacement !== null,
+    );
+    if (replacedFiles.length + revisionAddedFiles.length === 0) {
+      setActionError('Add or replace at least one file. Removing files alone does not reopen the submission.');
+      return;
+    }
+    const activePrimaryCount = revisionDraftFiles.filter(
+      (entry) => entry.file.fileRole === 'primary' && entry.action !== 'remove',
+    ).length;
+    if (activePrimaryCount !== 1) {
+      setActionError('Keep or replace exactly one primary document.');
+      return;
+    }
+
+    const uploadedPaths: string[] = [];
+    setSubmittingRevision(true);
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      if (!authData.user || authData.user.id !== sub.user_id) {
+        throw new Error('Your active submitter account could not be verified.');
+      }
+
+      const uploadPlan = [
+        ...replacedFiles.map((entry, index) => ({
+          key: `replace-${index}`,
+          file: entry.replacement,
+        })),
+        ...revisionAddedFiles.map((file, index) => ({ key: `added-${index}`, file })),
+      ];
+      const uploadedFiles = new Map<string, UploadedRevisionFile>();
+      const uploadResults = await Promise.allSettled(uploadPlan.map(async ({ key, file }, index) => {
+        const fileType = getWorkflowFileMimeType(file.name);
+        if (!fileType) throw new Error(`Unsupported file type: ${file.name}`);
+        const safeName = file.name.replace(/[^\w.-]/g, '_');
+        const filePath = `${authData.user.id}/${crypto.randomUUID()}-${index}-${safeName}`;
+        const { error } = await supabase.storage
+          .from('workflow_uploads')
+          .upload(filePath, file, {
+            contentType: fileType,
+            cacheControl: '3600',
+            upsert: false,
+          });
+        if (error) throw error;
+        uploadedPaths.push(filePath);
+        uploadedFiles.set(key, {
+          fileName: file.name,
+          filePath,
+          fileType,
+          fileSize: file.size,
+        });
+      }));
+      const failedUpload = uploadResults.find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      );
+      if (failedUpload) throw failedUpload.reason;
+
+      const fileManifest: WorkflowRevisionManifestItem[] = revisionDraftFiles.map((entry, index) => {
+        const base = {
+          logical_file_id: entry.file.logicalFileId,
+          prior_revision_file_id: entry.file.id,
+          file_role: entry.file.fileRole,
+        };
+        if (entry.action === 'remove') {
+          return {
+            ...base,
+            file_name: entry.file.fileName,
+            storage_path: entry.file.storagePath,
+            file_type: entry.file.fileType,
+            file_size: entry.file.fileSize,
+            change_kind: 'removed',
+          };
+        }
+        if (entry.action === 'replace') {
+          const replacementIndex = replacedFiles.findIndex(
+            (replacement) => replacement.file.id === entry.file.id,
+          );
+          const uploaded = uploadedFiles.get(`replace-${replacementIndex}`);
+          if (!uploaded) throw new Error(`The replacement upload for ${entry.file.fileName} is missing.`);
+          return {
+            ...base,
+            file_name: uploaded.fileName,
+            storage_path: uploaded.filePath,
+            file_type: uploaded.fileType,
+            file_size: uploaded.fileSize,
+            change_kind: 'replaced',
+          };
+        }
+        return {
+          ...base,
+          file_name: entry.file.fileName,
+          storage_path: entry.file.storagePath,
+          file_type: entry.file.fileType,
+          file_size: entry.file.fileSize,
+          change_kind: 'carried',
+        };
+      });
+
+      revisionAddedFiles.forEach((file, index) => {
+        const uploaded = uploadedFiles.get(`added-${index}`);
+        if (!uploaded) throw new Error(`The added upload for ${file.name} is missing.`);
+        fileManifest.push({
+          logical_file_id: crypto.randomUUID(),
+          prior_revision_file_id: null,
+          file_role: 'supporting',
+          file_name: uploaded.fileName,
+          storage_path: uploaded.filePath,
+          file_type: uploaded.fileType,
+          file_size: uploaded.fileSize,
+          change_kind: 'added',
+        });
+      });
+
+      const primaryFile = fileManifest.find(
+        (file) => file.file_role === 'primary' && file.change_kind !== 'removed',
+      );
+      if (!primaryFile) throw new Error('The primary document could not be determined.');
+      const { data: publicUrl } = supabase.storage
+        .from('workflow_uploads')
+        .getPublicUrl(primaryFile.storage_path);
+
+      const { error: submitError } = await supabase.rpc('submit_workflow_submission_revision', {
+        target_submission_id: sub.id,
+        expected_change_request_id: openRequest.id,
+        expected_revision_id: sub.current_revision_id,
+        submitter_message: revisionMessage.trim() || null,
+        file_manifest: fileManifest,
+        primary_file_url: publicUrl.publicUrl,
+      });
+      if (submitError) throw submitError;
+
+      setRevisionEditorOpen(false);
+      setRevisionDraftFiles([]);
+      setRevisionAddedFiles([]);
+      await fetchSubmission(true);
+    } catch (error) {
+      console.error('Submission revision failed:', error);
+      let cleanupFailed = false;
+      if (uploadedPaths.length > 0) {
+        const { error: cleanupError } = await supabase.storage
+          .from('workflow_uploads')
+          .remove(uploadedPaths);
+        if (cleanupError) {
+          cleanupFailed = true;
+          console.error('Could not clean up uncommitted revision uploads:', cleanupError.message);
+        }
+      }
+      const message = getErrorMessage(error, 'Could not submit this revision.');
+      setActionError(cleanupFailed
+        ? `${message} Some uncommitted uploads could not be removed; contact support if they remain visible.`
+        : message);
+    } finally {
+      setSubmittingRevision(false);
+    }
+  };
+
+  const closePermanently = async () => {
+    if (!sub || !revisionHistory || closingPermanently) return;
+    const openRequest = revisionHistory.changeRequests.find(
+      (request) => request.status === 'open'
+        && request.againstRevisionId === sub.current_revision_id,
+    );
+    if (!openRequest) {
+      setActionError('The open change request could not be verified. Refresh and try again.');
+      return;
+    }
+    if (!window.confirm('Permanently close this submission? It cannot be reopened afterward. Your files and history will be retained.')) {
+      return;
+    }
+
+    setClosingPermanently(true);
+    setActionError('');
+    try {
+      const { error } = await supabase.rpc('close_workflow_submission_permanently', {
+        target_submission_id: sub.id,
+        expected_change_request_id: openRequest.id,
+      });
+      if (error) throw error;
+      setRevisionEditorOpen(false);
+      await fetchSubmission(true);
+    } catch (error) {
+      console.error('Permanent submission closure failed:', error);
+      setActionError(getErrorMessage(error, 'Could not permanently close this submission.'));
+    } finally {
+      setClosingPermanently(false);
     }
   };
 
@@ -496,6 +819,7 @@ export default function UserFileDetail() {
       case 'SUBMISSION_WITHDRAWN': return 'Submission withdrawn';
       case 'SUBMISSION_CLOSED': return 'Submission completed';
       case 'SUBMISSION_REOPENED': return 'Submission reopened';
+      case 'SUBMISSION_PERMANENTLY_CLOSED': return 'Submitter permanently closed submission';
       case 'FILE_VERSION_ADDED': return 'Document version added';
       case 'ROUTE_PROPOSED': return 'Tourism Officer proposed office route';
       case 'OFFICE_ROUTE_STEP_ASSIGNED': return 'Assigned to municipal office';
@@ -542,11 +866,22 @@ export default function UserFileDetail() {
 
   const isCompleted = sub.status === 'completed' || sub.status === 'approved';
   const isWithdrawn = sub.status === 'withdrawn';
+  const isPermanentlyClosed = sub.status === 'closed_by_submitter';
   const isRedirectable = sub.status === 'returned';
   const canWithdraw = sub.status === 'submitted' && !sub.received_at;
-  const lastClosure = [...auditLogs].reverse().find((log) => log.action_type === 'SUBMISSION_CLOSED');
-  const canReopen = sub.status === 'completed' && lastClosure?.old_status === 'changes_requested';
-  const canRespondToChanges = sub.status === 'changes_requested' || canReopen;
+  const openChangeRequest = revisionHistory?.changeRequests.find(
+    (request) => request.status === 'open'
+      && request.againstRevisionId === sub.current_revision_id,
+  ) ?? null;
+  const submitterActions = getAvailableActions({
+    status: sub.status,
+    reopen_count: sub.reopen_count,
+    has_open_change_request: Boolean(openChangeRequest),
+    change_request_repair_needed: revisionHistory?.changeRequestRepairNeeded ?? false,
+  }, [], 'submitter');
+  const canClarify = submitterActions.includes('clarify');
+  const canRevise = submitterActions.includes('revise_submission');
+  const canClosePermanently = submitterActions.includes('close_permanently');
   const currentDestinationRole = sub.selected_office_role ?? sub.initial_destination_role ?? null;
   const currentDestinationLabel = isOfficeRole(currentDestinationRole)
     ? OFFICE_CONFIG[currentDestinationRole].label
@@ -561,6 +896,15 @@ export default function UserFileDetail() {
   const requirementsRequest = [...auditLogs]
     .reverse()
     .find((log) => ['CHANGES_REQUESTED', 'ROUTE_REQUIREMENTS_REQUESTED'].includes(log.action_type));
+  const requestProfile = Array.isArray(requirementsRequest?.profiles)
+    ? requirementsRequest.profiles[0]
+    : requirementsRequest?.profiles;
+  const requestRole = requestProfile?.role ?? null;
+  const requestAuthor = requestProfile?.full_name
+    || (isOfficeRole(requestRole)
+      ? OFFICE_CONFIG[requestRole].label
+      : null)
+    || currentDestinationLabel;
 
   const downloadAttachment = async (attachment: Attachment) => {
     const { data, error } = await supabase.storage
@@ -632,6 +976,13 @@ export default function UserFileDetail() {
             </p>
           </div>
         </div>
+
+        {isPermanentlyClosed && (
+          <div className="border-t border-warm-border bg-sidebar/50 px-5 py-4 text-xs text-muted-text md:px-7" role="status">
+            You permanently closed this submission. It cannot be reopened; its files and full history remain available here.
+            {closureActor ? ` Closed by ${closureActor}.` : ''}
+          </div>
+        )}
 
         <section className="border-t border-warm-border px-5 py-6 md:px-7">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -870,26 +1221,33 @@ export default function UserFileDetail() {
           </section>
         )}
         activity={(
-          <WorkflowActivityTimeline
-            emptyMessage="No workflow events recorded yet."
-            showComments={false}
-            events={auditLogs.map((log) => {
-              const profile = Array.isArray(log.profiles) ? log.profiles[0] : log.profiles;
-              return {
-                id: log.id,
-                actionType: log.action_type,
-                label: getWorkflowActionLabel(log.action_type),
-                createdAt: log.created_at,
-                actor: profile?.full_name || 'System',
-                actorRole: profile?.role,
-                comments: log.comments,
-              };
-            })}
-          />
+          <div className="space-y-5">
+            <WorkflowActivityTimeline
+              emptyMessage="No workflow events recorded yet."
+              showComments={false}
+              events={auditLogs.map((log) => {
+                const profile = Array.isArray(log.profiles) ? log.profiles[0] : log.profiles;
+                return {
+                  id: log.id,
+                  actionType: log.action_type,
+                  label: getWorkflowActionLabel(log.action_type),
+                  createdAt: log.created_at,
+                  actor: profile?.full_name || 'System',
+                  actorRole: profile?.role,
+                  comments: log.comments,
+                };
+              })}
+            />
+            <WorkflowRevisionTimeline
+              history={revisionHistory}
+              loading={revisionHistoryLoading}
+              error={revisionHistoryError}
+            />
+          </div>
         )}
       />
 
-      {(canRespondToChanges || isRedirectable || canWithdraw) && (
+      {(canClarify || canRevise || canClosePermanently || isRedirectable || canWithdraw) && (
         <section className="mt-5 overflow-hidden rounded-2xl border border-warm-border bg-card">
           <header className="border-b border-warm-border px-5 py-4 md:px-6">
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-clay">Submission actions</p>
@@ -899,49 +1257,189 @@ export default function UserFileDetail() {
             </p>
           </header>
           <div className="grid gap-4 bg-[#f8f5f1] p-5 md:grid-cols-2 md:p-6">
-            {canRespondToChanges && (
-              <form onSubmit={(event) => void handleRequirementsSubmit(event)} className="space-y-3 rounded-xl border border-warm-border bg-card p-4 md:col-span-2">
+            {canClarify && (
+              <div className="space-y-3 rounded-xl border border-pending-text/20 bg-pending-bg/50 p-4 md:col-span-2" role="status">
                 <div>
-                  <h3 className="text-xs font-semibold text-warm-text">{canReopen ? 'Reopen and resubmit' : 'Respond to requested changes'}</h3>
+                  <h3 className="text-xs font-semibold text-warm-text">Closed — Changes Requested</h3>
+                  <p className="mt-1 text-[10px] font-medium text-muted-text">
+                    Requested by {requestAuthor}
+                    {requirementsRequest?.created_at
+                      ? ` · ${new Date(requirementsRequest.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+                      : ''}
+                  </p>
                   <p className="mt-1 text-[11px] leading-relaxed text-muted-text">
                     {requirementsRequest?.comments || sub.office_comments || sub.mayor_comments || 'The responsible office has requested changes to your submission.'}
                   </p>
                 </div>
-                <label htmlFor={`changes-response-${sub.id}`} className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
-                  Your response <span className="text-rejected-text">*</span>
-                  <textarea
-                    id={`changes-response-${sub.id}`}
-                    value={changeResponse}
-                    onChange={(event) => setChangeResponse(event.target.value)}
-                    required
-                    maxLength={5000}
-                    rows={4}
-                    disabled={savingResponse}
-                    className="mt-1.5 block min-h-24 w-full resize-y rounded-xl border border-warm-border bg-white p-3 text-xs font-normal normal-case leading-relaxed tracking-normal text-warm-text outline-none focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:opacity-60"
-                    placeholder="Explain how you addressed the requested changes."
-                  />
-                </label>
-                <label htmlFor={`revised-document-${sub.id}`} className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
-                  Revised document <span className="font-normal normal-case tracking-normal">(optional)</span>
-                  <input
-                    ref={revisedDocumentInput}
-                    id={`revised-document-${sub.id}`}
-                    type="file"
-                    accept={WORKFLOW_DOCUMENT_ACCEPT}
-                    disabled={savingResponse}
-                    onChange={(event) => setRevisedDocument(event.target.files?.[0] ?? null)}
-                    className="mt-1.5 block w-full rounded-xl border border-warm-border bg-white p-2 text-xs font-normal normal-case tracking-normal text-warm-text file:mr-3 file:rounded-full file:border-0 file:bg-clay-soft file:px-3 file:py-1.5 file:text-[10px] file:font-semibold file:text-clay"
-                  />
-                  <span className="mt-1 block font-normal normal-case tracking-normal">Supported document formats, up to 10 MB.</span>
-                </label>
+                <p className="text-[11px] leading-relaxed text-muted-text">
+                  You may clarify through the conversation above without changing this status.
+                </p>
+              </div>
+            )}
+
+            {canRevise && (
+              <div className="space-y-4 rounded-xl border border-clay/25 bg-card p-4 md:col-span-2">
+                {!revisionEditorOpen ? (
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-xs font-semibold text-warm-text">Reopen and resubmit</h3>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-text">
+                        Keep, replace, or remove current files and add supporting files. Add or replace at least one file to return this submission to {currentDestinationLabel}.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={startRevision}
+                      disabled={revisionHistoryLoading || submittingRevision || closingPermanently}
+                      className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Reopen and resubmit
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={(event) => void submitRevision(event)} className="space-y-4">
+                    <div>
+                      <h3 className="text-xs font-semibold text-warm-text">Prepare your revised files</h3>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-text">
+                        Your destination and request details stay unchanged. Keep at least one primary document and add or replace at least one file.
+                      </p>
+                    </div>
+
+                    <ul className="space-y-2">
+                      {revisionDraftFiles.map((entry, index) => (
+                        <li key={entry.file.id} className="grid gap-3 rounded-xl border border-warm-border bg-sidebar/40 p-3 sm:grid-cols-[minmax(0,1fr)_150px] sm:items-center">
+                          <div className="min-w-0">
+                            <p className="break-words text-xs font-semibold text-warm-text">{entry.file.fileName}</p>
+                            <p className="mt-0.5 text-[10px] text-muted-text">
+                              {entry.file.fileRole === 'primary' ? 'Primary document' : 'Supporting document'}
+                              {' · '}
+                              {Math.max(1, Math.round(entry.file.fileSize / 1024))} KB
+                            </p>
+                            {entry.action === 'replace' && entry.replacement && (
+                              <p className="mt-1 break-words text-[10px] font-medium text-clay">
+                                Replacement: {entry.replacement.name}
+                              </p>
+                            )}
+                          </div>
+                          <label className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+                            File action
+                            <select
+                              value={entry.action}
+                              onChange={(event) => {
+                                const action = event.target.value;
+                                if (!isRevisionFileAction(action)) return;
+                                setRevisionDraftFiles((current) => current.map((draft, draftIndex) =>
+                                  draftIndex === index
+                                    ? { ...draft, action, replacement: action === 'replace' ? draft.replacement : null }
+                                    : draft
+                                ));
+                                setActionError('');
+                              }}
+                              disabled={submittingRevision}
+                              className="mt-1 block h-9 w-full rounded-lg border border-warm-border bg-white px-2 text-xs font-medium normal-case tracking-normal text-warm-text outline-none focus:border-clay"
+                            >
+                              <option value="keep">Keep</option>
+                              <option value="replace">Replace</option>
+                              <option value="remove" disabled={entry.file.fileRole === 'primary'}>Remove</option>
+                            </select>
+                          </label>
+                          {entry.action === 'replace' && (
+                            <label className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text sm:col-span-2">
+                              Replacement file
+                              <input
+                                type="file"
+                                accept={entry.file.fileRole === 'primary' ? WORKFLOW_DOCUMENT_ACCEPT : WORKFLOW_ATTACHMENT_ACCEPT}
+                                onChange={(event) => handleRevisionReplacement(index, event)}
+                                disabled={submittingRevision}
+                                className="mt-1 block w-full text-[11px] font-medium normal-case tracking-normal text-warm-text file:mr-3 file:rounded-full file:border-0 file:bg-clay-soft file:px-3 file:py-2 file:text-[10px] file:font-semibold file:text-clay"
+                              />
+                            </label>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+
+                    <label className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+                      Add supporting files
+                      <input
+                        type="file"
+                        accept={WORKFLOW_ATTACHMENT_ACCEPT}
+                        multiple
+                        onChange={handleRevisionAddedFiles}
+                        disabled={submittingRevision}
+                        className="mt-1 block w-full text-[11px] font-medium normal-case tracking-normal text-warm-text file:mr-3 file:rounded-full file:border-0 file:bg-clay-soft file:px-3 file:py-2 file:text-[10px] file:font-semibold file:text-clay"
+                      />
+                    </label>
+                    {revisionAddedFiles.length > 0 && (
+                      <ul className="space-y-1">
+                        {revisionAddedFiles.map((file, index) => (
+                          <li key={`${file.name}-${index}`} className="flex items-center justify-between gap-3 rounded-lg bg-sidebar px-3 py-2 text-[11px] text-warm-text">
+                            <span className="min-w-0 break-words">{file.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => setRevisionAddedFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
+                              disabled={submittingRevision}
+                              className="shrink-0 rounded-full px-2 py-1 font-semibold text-muted-text hover:bg-card hover:text-warm-text disabled:opacity-50"
+                            >
+                              Remove
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    <label className="block text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">
+                      Optional message to the office
+                      <textarea
+                        value={revisionMessage}
+                        onChange={(event) => setRevisionMessage(event.target.value)}
+                        maxLength={4000}
+                        rows={3}
+                        disabled={submittingRevision}
+                        className="mt-1.5 block min-h-20 w-full resize-y rounded-xl border border-warm-border bg-white p-3 text-xs font-normal normal-case leading-relaxed tracking-normal text-warm-text outline-none focus:border-clay focus:ring-2 focus:ring-clay/15 disabled:opacity-60"
+                        placeholder="Optional context about the revised files."
+                      />
+                    </label>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="submit"
+                        disabled={submittingRevision || closingPermanently}
+                        className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {submittingRevision ? 'Uploading and resubmitting…' : 'Submit revision'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRevisionEditorOpen(false)}
+                        disabled={submittingRevision}
+                        className="inline-flex h-10 items-center justify-center rounded-full border border-warm-border px-5 text-xs font-semibold text-warm-text hover:bg-sidebar disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
+
+            {canClosePermanently && (
+              <div className="flex flex-col gap-3 rounded-xl border border-rejected-bg bg-card p-4 sm:flex-row sm:items-center sm:justify-between md:col-span-2">
+                <div>
+                  <h3 className="text-xs font-semibold text-warm-text">Close permanently</h3>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-text">
+                    This ends processing without approving or rejecting the request. The submission cannot be reopened; its files and history are retained.
+                  </p>
+                </div>
                 <button
-                  type="submit"
-                  disabled={savingResponse || !changeResponse.trim()}
-                  className="inline-flex h-10 items-center justify-center rounded-full bg-clay px-5 text-xs font-semibold text-white transition-colors hover:bg-warm-text disabled:cursor-not-allowed disabled:opacity-50"
+                  type="button"
+                  onClick={() => void closePermanently()}
+                  disabled={closingPermanently || submittingRevision}
+                  className="inline-flex h-10 shrink-0 items-center justify-center rounded-full border border-rejected-text bg-rejected-bg px-5 text-xs font-semibold text-rejected-text transition-colors hover:bg-rejected-bg/70 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {savingResponse ? 'Submitting response...' : 'Submit changes'}
+                  {closingPermanently ? 'Closing…' : 'Close permanently'}
                 </button>
-              </form>
+              </div>
             )}
 
             {isRedirectable && (

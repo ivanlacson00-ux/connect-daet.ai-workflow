@@ -83,8 +83,9 @@ function StatusStamp({ status }: { status: string }) {
         return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
       case 'pending_mayor':
         return { label: "Mayor's office processing", styles: 'bg-review-bg text-review-text' };
+      case 'changes_requested':
       case 'returned_for_requirements':
-        return { label: 'Additional requirements requested', styles: 'bg-pending-bg text-pending-text' };
+        return { label: 'Closed — Changes Requested', styles: 'bg-pending-bg text-pending-text' };
       case 'approved':
         return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
       case 'completed':

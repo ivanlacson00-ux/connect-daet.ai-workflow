@@ -29,6 +29,7 @@ export function matchesOfficeDashboardFilter(
   role: OfficeRole,
 ) {
   const isResponsibleOffice = submission.selected_office_role === role;
+  const isChangesRequested = ['changes_requested', 'returned_for_requirements'].includes(submission.status);
   const hasPendingAssignment = submission.officeRecord?.status === 'pending'
     || submission.officeRecord?.status === 'in_progress';
   // While another office holds an assignment from this office, the next move is theirs.
@@ -44,7 +45,7 @@ export function matchesOfficeDashboardFilter(
     case 'waiting_on_office':
       return waitingOnOffice;
     case 'changes_requested':
-      return isResponsibleOffice && submission.status === 'changes_requested';
+      return isResponsibleOffice && isChangesRequested;
     case 'completed':
       return submission.status === 'completed' || submission.status === 'approved';
     case 'returned':
@@ -53,7 +54,7 @@ export function matchesOfficeDashboardFilter(
       return submission.status === 'withdrawn';
     case 'processed':
       // Waiting on the submitter is out of the office's queue, like completed work.
-      return (isResponsibleOffice && submission.status === 'changes_requested')
+      return (isResponsibleOffice && isChangesRequested)
         || ['approved', 'completed', 'declined_by_office', 'returned', 'withdrawn'].includes(submission.status)
         || ['approved', 'completed', 'returned', 'withdrawn'].includes(submission.officeRecord?.status ?? '');
     default:

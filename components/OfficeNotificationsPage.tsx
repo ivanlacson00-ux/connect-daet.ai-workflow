@@ -56,8 +56,9 @@ const getStatusConfig = (status?: string): EventConfig => {
       return { label: 'At municipal office', styles: 'bg-review-bg text-review-text' };
     case 'pending_mayor':
       return { label: "Mayor's final review", styles: 'bg-review-bg text-review-text' };
+    case 'changes_requested':
     case 'returned_for_requirements':
-      return { label: 'Requirements requested', styles: 'bg-pending-bg text-pending-text' };
+      return { label: 'Closed — Changes Requested', styles: 'bg-pending-bg text-pending-text' };
     case 'declined_by_approver':
     case 'declined_by_admin':
     case 'declined_by_office':

@@ -5,12 +5,14 @@ import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DocumentMessaging from '@/components/DocumentMessaging';
 import WorkflowActivityTimeline from '@/components/WorkflowActivityTimeline';
+import WorkflowRevisionTimeline from '@/components/WorkflowRevisionTimeline';
 import FilePreview, { downloadFile, getFileUrl, type PreviewableFile } from '@/components/FilePreview';
 import {
   getWorkflowFileMimeType,
   getWorkflowFilesTypeError,
 } from '@/lib/workflow/file-types';
 import { getSubmissionStatusLabel, getSubmissionStatusTone } from '@/lib/workflow/status';
+import { getAvailableActions } from '@/lib/workflow/action-availability';
 import {
   ASSIGNMENT_TONE_CLASSES,
   describeAssignmentState,
@@ -27,6 +29,11 @@ import {
   type OfficeResponsibility,
   type OfficeRole,
 } from '@/lib/workflow/offices';
+import {
+  getCurrentWorkflowRevisionFiles,
+  parseWorkflowRevisionHistory,
+  type WorkflowRevisionHistory,
+} from '@/lib/workflow/revisions';
 
 // ─── Styles & Fonts (synced with the user file page) ─────────────────────────
 const fonts = {
@@ -70,6 +77,7 @@ interface Submission extends PreviewableFile {
   file_type: string;
   file_size: number;
   status: string;
+  current_revision_id?: string | null;
   category?: string | null;
   other_document_type?: string | null;
   description?: string | null;
@@ -95,6 +103,7 @@ interface Submission extends PreviewableFile {
   received_at?: string | null;
   closed_by?: string | null;
   completed_at?: string | null;
+  reopen_count?: number | null;
   closure_note?: string | null;
   closure_file_path?: string | null;
   closure_file_name?: string | null;
@@ -176,7 +185,7 @@ const getStatusStyles = (status: string) => {
   if (s === 'pending_admin') return { label: 'Administrative review', classes: 'bg-review-bg text-review-text' };
   if (s === 'pending_office') return { label: 'Office processing', classes: 'bg-review-bg text-review-text' };
   if (s === 'pending_mayor') return { label: "Mayor's office processing", classes: 'bg-review-bg text-review-text' };
-  if (s === 'returned_for_requirements') return { label: 'Additional requirements requested', classes: 'bg-pending-bg text-pending-text' };
+  if (s === 'returned_for_requirements') return { label: 'Closed — Changes Requested', classes: 'bg-pending-bg text-pending-text' };
   if (s === 'completed') return { label: 'Completed', classes: 'bg-approved-bg text-approved-text' };
   if (s === 'approved') return { label: 'Approved', classes: 'bg-approved-bg text-approved-text' };
   if (DECLINED_STATUSES.includes(s)) return { label: 'Rejected', classes: 'bg-rejected-bg text-rejected-text' };
@@ -218,6 +227,7 @@ const getActionLabel = (type: string) => {
     case 'OFFICE_FINAL_DECISION': return 'Final decision by authorized office';
     case 'ROUTE_PROPOSED': return 'Tourism Officer proposed office route';
     case 'REVISED_DOCUMENT_SUBMITTED': return 'Submitter uploaded a revised document';
+    case 'SUBMISSION_PERMANENTLY_CLOSED': return 'Submitter permanently closed submission';
     case 'REQUIREMENTS_RESUBMITTED': return 'Submitter responded to requested changes';
     case 'ROUTE_REQUIREMENTS_REQUESTED': return 'Municipal office requested additional requirements';
     case 'ROUTE_RETURNED_TO_ADMIN': return 'All routed offices approved; returned to Admin';
@@ -239,6 +249,9 @@ export default function ApproverManagePage() {
   const [sub, setSub] = useState<Submission | null>(null);
   const [sender, setSender] = useState<SenderProfile | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [revisionHistory, setRevisionHistory] = useState<WorkflowRevisionHistory | null>(null);
+  const [revisionHistoryLoading, setRevisionHistoryLoading] = useState(true);
+  const [revisionHistoryError, setRevisionHistoryError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<SupportingAttachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -256,6 +269,8 @@ export default function ApproverManagePage() {
 
   const fetchDetails = useCallback(async () => {
     setLoadError('');
+    setRevisionHistoryLoading(true);
+    setRevisionHistoryError(null);
     // Clear errors from an earlier load; anything still wrong is reported again below.
     setActionError('');
     try {
@@ -375,11 +390,42 @@ export default function ApproverManagePage() {
       } else {
         setAttachments(supportingFiles ?? []);
       }
+
+      if (typeof id !== 'string') {
+        setRevisionHistoryError('Could not determine which submission history to load.');
+      } else {
+        const { data: detailHistory, error: detailHistoryError } = await supabase.rpc(
+          'get_workflow_submission_detail',
+          { target_submission_id: id }
+        );
+        if (detailHistoryError) {
+          console.error('Could not load revision history:', detailHistoryError.message);
+          setRevisionHistoryError('Could not load the file version history. Refresh this page to try again.');
+        } else {
+          try {
+            const parsedHistory = parseWorkflowRevisionHistory(detailHistory);
+            setRevisionHistory(parsedHistory);
+            setAttachments(getCurrentWorkflowRevisionFiles(parsedHistory)
+              .filter((file) => file.fileRole === 'supporting')
+              .map((file) => ({
+                id: file.id,
+                file_name: file.fileName,
+                file_path: file.storagePath,
+                file_type: file.fileType,
+                file_size: file.fileSize,
+              })));
+          } catch (historyError) {
+            console.error('Revision history response was invalid:', historyError);
+            setRevisionHistoryError('The file version history could not be read. Refresh this page to try again.');
+          }
+        }
+      }
     } catch (err) {
       console.error('Failed to load submission:', err);
       setLoadError(err instanceof Error ? err.message : 'Could not load this submission.');
     } finally {
       setLoading(false);
+      setRevisionHistoryLoading(false);
     }
   }, [id, supabase]);
 
@@ -388,23 +434,40 @@ export default function ApproverManagePage() {
   // Refresh when another office acts on an assignment or the submission changes.
   useEffect(() => {
     if (typeof id !== 'string') return;
+    let refreshTimer: number | undefined;
+    const scheduleRefresh = () => {
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined;
+        void fetchDetails();
+      }, 100);
+    };
     const channel = supabase
       .channel(`office-submission-${id}`)
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'workflow_submissions', filter: `id=eq.${id}`,
-      }, () => { void fetchDetails(); })
+      }, scheduleRefresh)
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'workflow_routing_plans', filter: `submission_id=eq.${id}`,
-      }, () => { void fetchDetails(); })
+      }, scheduleRefresh)
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'workflow_routing_steps',
       }, (payload) => {
         const row = (payload.new && 'routing_plan_id' in payload.new ? payload.new : payload.old) as
           { routing_plan_id?: string } | null;
-        if (row?.routing_plan_id && knownPlanIdsRef.current.has(row.routing_plan_id)) void fetchDetails();
+        if (row?.routing_plan_id && knownPlanIdsRef.current.has(row.routing_plan_id)) scheduleRefresh();
       })
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'workflow_submission_revisions', filter: `submission_id=eq.${id}`,
+      }, scheduleRefresh)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'workflow_change_requests', filter: `submission_id=eq.${id}`,
+      }, scheduleRefresh)
+    .subscribe();
+    return () => {
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+      void supabase.removeChannel(channel);
+    };
   }, [fetchDetails, id, supabase]);
 
   const assignmentConversations = useMemo(() => routeSteps.flatMap((step) => {
@@ -510,13 +573,20 @@ export default function ApproverManagePage() {
         | 'return_workflow_assignment'
         | 'withdraw_workflow_assignment';
       let rpcArgs:
-        | { target_submission_id: string; request_comments: string }
+        | { target_submission_id: string; request_comments: string; expected_revision_id: string }
         | { target_submission_id: string; return_reason: string }
         | { target_submission_id: string; completion_notes: string | null; assignment_outcome: AssignmentOutcome | null }
         | { target_submission_id: string; target_assignment_office_role: string; withdrawal_reason: string };
       if (action === 'request_changes') {
+        if (!sub.current_revision_id) {
+          throw new Error('The current submission revision is unavailable. Refresh and try again.');
+        }
         rpcName = 'request_workflow_submission_changes';
-        rpcArgs = { target_submission_id: sub.id, request_comments: message.trim() };
+        rpcArgs = {
+          target_submission_id: sub.id,
+          request_comments: message.trim(),
+          expected_revision_id: sub.current_revision_id,
+        };
       } else if (action === 'return_to_submitter') {
         rpcName = 'return_workflow_submission_to_submitter';
         rpcArgs = { target_submission_id: sub.id, return_reason: message.trim() };
@@ -655,6 +725,11 @@ export default function ApproverManagePage() {
     step.status === 'pending' || step.status === 'in_progress'
   );
   const pendingAssignmentCount = pendingAssignments.length;
+  const responsibleOfficeActionsAvailable = getAvailableActions(
+    sub,
+    pendingAssignments,
+    'responsible_office',
+  );
   const isCompleted = sub.status === 'completed' || sub.status === 'approved';
   const isRejected = DECLINED_STATUSES.includes(sub.status);
   const isWithdrawn = sub.status === 'withdrawn';
@@ -695,14 +770,20 @@ export default function ApproverManagePage() {
       value: 'request_changes',
       label: 'Request changes or information',
       groupLabel: 'Send back',
-      description: 'The submitter can respond on this same submission; it returns to your office for review.',
+      description: 'Close this submission while the submitter reviews the requested changes. A resubmitted revision will return to your office.',
       tone: 'primary' as const,
       requiresMessage: true,
       successMessage: 'Changes requested. The submitter has been notified.',
       unavailableReason: routeStateError
         ? 'Could not verify whether an assignment is pending'
         : pendingAssignmentReason
-          || (sub.status !== 'in_process' ? 'Available only while status is In Process' : undefined),
+          || (sub.status !== 'in_process'
+            ? 'Available only while status is In Process'
+            : (sub.reopen_count ?? 0) > 0
+              ? 'Request changes is unavailable after this submission has been reopened'
+              : !responsibleOfficeActionsAvailable.includes('request_changes')
+                ? 'This action is unavailable in the current workflow state'
+                : undefined),
     },
     {
       value: 'approve',
@@ -753,8 +834,8 @@ export default function ApproverManagePage() {
       unavailableReason: routeStateError
         ? 'Could not verify whether an assignment is pending'
         : pendingAssignmentReason
-          || (!['in_process', 'changes_requested'].includes(sub.status)
-            ? 'Available only while status is In Process or Changes Requested'
+          || (!responsibleOfficeActionsAvailable.includes('complete_submission')
+            ? 'Available only while status is In Process and no office assignment is pending'
             : undefined),
     },
   ];
@@ -902,7 +983,16 @@ export default function ApproverManagePage() {
     && !isResponsibleOffice
     && !isRecipientOffice
     && !isAssignmentSender;
-  const composerClosed = isCompleted || isRejected || isWithdrawn || isReturned || historicalRecipientView;
+  const isChangesRequested = sub.status === 'changes_requested' || sub.status === 'returned_for_requirements';
+  const isPermanentlyClosed = sub.status === 'closed_by_submitter';
+  const composerClosed = isChangesRequested || isPermanentlyClosed || isCompleted || isRejected || isWithdrawn || isReturned || historicalRecipientView;
+  const currentRevision = revisionHistory?.revisions.find(
+    (revision) => revision.id === sub.current_revision_id,
+  );
+  const showResubmittedMarker = isResponsibleOffice
+    && sub.status === 'in_process'
+    && (sub.reopen_count ?? 0) > 0
+    && (currentRevision?.revisionNo ?? 0) > 1;
   const officeHistory = routeSteps
     .filter((step) => step.status !== 'skipped')
     .map((step) => ({
@@ -963,6 +1053,15 @@ export default function ApproverManagePage() {
   officeHistory.sort((first, second) =>
     first.sortTimestamp.localeCompare(second.sortTimestamp)
   );
+  const latestChangeRequest = auditLogs.find((log) =>
+    ['CHANGES_REQUESTED', 'ROUTE_REQUIREMENTS_REQUESTED'].includes(log.action_type)
+  );
+  const changeRequestAuthor = latestChangeRequest?.profiles?.full_name
+    || (latestChangeRequest?.profiles?.role
+      ? getOfficeLabel(latestChangeRequest.profiles.role)
+      : responsibleOfficeRole
+        ? getOfficeLabel(responsibleOfficeRole)
+        : 'Responsible office');
   const activeOfficeLabel = (step: RouteStep) => getOfficeLabel(step.office_role);
   const workflowStatus = (
     <section
@@ -974,6 +1073,36 @@ export default function ApproverManagePage() {
         <h3 id={`workflow-status-${sub.id}`} className="text-sm font-bold text-warm-text">Workflow status</h3>
         <p className="mt-0.5 text-[10px] text-muted-text">Current responsibility and office handling</p>
       </header>
+      {isChangesRequested && (
+        <div className="border-b border-pending-text/20 bg-pending-bg/50 px-5 py-4">
+          <p className="text-xs font-bold text-pending-text">Closed — Changes Requested</p>
+          <p className="mt-1 text-[10px] text-muted-text">
+            Requested by {changeRequestAuthor}
+            {latestChangeRequest?.created_at
+              ? ` · ${new Date(latestChangeRequest.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+              : ''}
+          </p>
+          <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-relaxed text-warm-text">
+            {latestChangeRequest?.comments || sub.office_comments || 'The responsible office has requested changes.'}
+          </p>
+        </div>
+      )}
+      {showResubmittedMarker && currentRevision && (
+        <div className="border-b border-clay/20 bg-clay-soft/60 px-5 py-4">
+          <p className="text-xs font-bold text-clay">Resubmitted revision {currentRevision.revisionNo}</p>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-text">
+            The submitter sent a revised file package. This submission returned to your office with its destination and routing history unchanged.
+          </p>
+        </div>
+      )}
+      {isPermanentlyClosed && (
+        <div className="border-b border-warm-border bg-sidebar/50 px-5 py-4">
+          <p className="text-xs font-bold text-warm-text">Permanently Closed by Submitter</p>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-text">
+            The submitter ended processing. This is not an approval or rejection; files and history are retained.
+          </p>
+        </div>
+      )}
       <div className="grid gap-4 p-5 sm:grid-cols-2">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-text">Responsible office</p>
@@ -1351,7 +1480,7 @@ export default function ApproverManagePage() {
                 assignmentConversations={assignmentConversations}
                 defaultAssignmentStepId={defaultAssignmentStepId}
                 showSubmitterConversation={isResponsibleOffice}
-                canSendSubmitterConversation={!requiresReviewStart && !isCompleted && !isRejected && !isWithdrawn && !isReturned && isResponsibleOffice}
+                canSendSubmitterConversation={!requiresReviewStart && !isChangesRequested && !isCompleted && !isRejected && !isWithdrawn && !isReturned && isResponsibleOffice}
                 workflowComposer={{
                   recipients,
                   actionsByRecipient,
@@ -1360,7 +1489,7 @@ export default function ApproverManagePage() {
                   statusLine,
                   workflowStatus,
                   showStatusLine: false,
-                  isClosed: composerClosed && !isAssignmentSender,
+                  isClosed: composerClosed,
                   startReviewMessage: isResponsibleOffice
                     ? 'Start processing to receive this submission and change its status to In Process.'
                     : 'The submission is already In Process, but your office assignment is still pending. Start processing here to enable its action options.',
@@ -1370,7 +1499,9 @@ export default function ApproverManagePage() {
                   activeAssignmentStepId: activeRouteStep?.id ?? null,
                   showWorkflowActions: isResponsibleOffice || isRecipientOffice,
                   actionSectionId: `office-workflow-action-${sub.id}`,
-                  closedMessage: requiresReviewStart
+                  closedMessage: isChangesRequested
+                    ? 'This submission is closed while changes are requested. Offices may review the history but cannot act or send messages.'
+                    : requiresReviewStart
                     ? 'Start processing when your office is ready to begin.'
                     : historicalRecipientView
                     ? 'This assignment is no longer active. You can still review its files and messages.'
@@ -1394,17 +1525,24 @@ export default function ApproverManagePage() {
                   },
                 }}
                 activity={(
-                  <WorkflowActivityTimeline
-                    events={auditLogs.map((log) => ({
-                      id: log.id,
-                      actionType: log.action_type,
-                      label: getActionLabel(log.action_type),
-                      createdAt: log.created_at,
-                      actor: log.profiles?.full_name || 'System',
-                      actorRole: getActorRoleLabel(log.profiles?.role),
-                      comments: log.comments,
-                    }))}
-                  />
+                  <div className="space-y-5">
+                    <WorkflowActivityTimeline
+                      events={auditLogs.map((log) => ({
+                        id: log.id,
+                        actionType: log.action_type,
+                        label: getActionLabel(log.action_type),
+                        createdAt: log.created_at,
+                        actor: log.profiles?.full_name || 'System',
+                        actorRole: getActorRoleLabel(log.profiles?.role),
+                        comments: log.comments,
+                      }))}
+                    />
+                    <WorkflowRevisionTimeline
+                      history={revisionHistory}
+                      loading={revisionHistoryLoading}
+                      error={revisionHistoryError}
+                    />
+                  </div>
                 )}
               />
             </>

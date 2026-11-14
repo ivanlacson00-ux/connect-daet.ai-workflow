@@ -51,7 +51,7 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All assigned documents' },
   { key: 'needs_action', label: 'Needs action' },
   { key: 'waiting_on_office', label: 'Waiting on another office' },
-  { key: 'changes_requested', label: 'Changes Requested' },
+  { key: 'changes_requested', label: 'Closed — Changes Requested' },
   { key: 'completed', label: 'Completed submissions' },
   { key: 'returned', label: 'Returned' },
   { key: 'withdrawn', label: 'Withdrawn' },
@@ -222,7 +222,7 @@ export default function OfficeDashboard({
       const consultedRecord = consultedRecords.get(submission.id);
       return {
         ...submission,
-        consultedRecord: consultedRecord && ['in_process', 'changes_requested'].includes(submission.status)
+        consultedRecord: consultedRecord && ['in_process', 'changes_requested', 'returned_for_requirements'].includes(submission.status)
           ? {
               office_role: consultedRecord.office_role,
               status: consultedRecord.status,

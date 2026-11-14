@@ -130,7 +130,9 @@ export default function WorkflowStatusPanel({
             </ul>
           ) : completed || rejected || withdrawn ? (
             <p className="mt-1 text-xs font-medium text-muted-text">No active office assignment</p>
-          ) : submissionStatus === 'changes_requested' || submissionStatus === 'returned' ? (
+          ) : submissionStatus === 'changes_requested'
+            || submissionStatus === 'returned_for_requirements'
+            || submissionStatus === 'returned' ? (
             <p className="mt-1 text-xs font-semibold text-warm-text">Waiting for your response</p>
           ) : submissionStatus === 'submitted' && !receivedAt ? (
             <p className="mt-1 text-xs font-semibold text-warm-text">

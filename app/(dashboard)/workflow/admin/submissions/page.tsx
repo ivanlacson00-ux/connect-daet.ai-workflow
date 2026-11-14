@@ -26,7 +26,7 @@ const matchesStatus = (status: string, filter: FilterStatus) => {
   const s = status.toLowerCase();
   switch (filter) {
     case 'pending':
-      return ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'returned_for_requirements'].includes(s);
+      return ['pending', 'pending_approver', 'pending_admin', 'pending_office', 'pending_mayor', 'changes_requested', 'returned_for_requirements'].includes(s);
     case 'processed':
       return s === 'approved' || s === 'completed';
     case 'declined':
@@ -48,7 +48,9 @@ function StatusStamp({ status }: { status: string }) {
     if (s === 'pending_admin') return { label: 'Administrative review', styles: 'bg-review-bg text-review-text' };
     if (s === 'pending_office') return { label: 'Municipal office review', styles: 'bg-review-bg text-review-text' };
     if (s === 'pending_mayor') return { label: "Mayor's office processing", styles: 'bg-review-bg text-review-text' };
-    if (s === 'returned_for_requirements') return { label: 'Returned for requirements', styles: 'bg-pending-bg text-pending-text' };
+    if (s === 'changes_requested' || s === 'returned_for_requirements') {
+      return { label: 'Closed — Changes Requested', styles: 'bg-pending-bg text-pending-text' };
+    }
     if (s === 'completed') return { label: 'Completed', styles: 'bg-approved-bg text-approved-text' };
     if (s.includes('approved')) return { label: 'Approved', styles: 'bg-approved-bg text-approved-text' };
     if (s.includes('declined')) return { label: 'Declined', styles: 'bg-rejected-bg text-rejected-text' };
