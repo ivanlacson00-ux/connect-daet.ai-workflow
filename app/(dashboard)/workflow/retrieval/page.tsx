@@ -147,6 +147,8 @@ export default function DocumentRetrievalPage() {
   }, []);
 
   useEffect(() => {
+    if (!ready) return;
+
     let active = true;
     const checkOfficerAccess = async () => {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -181,6 +183,14 @@ export default function DocumentRetrievalPage() {
       }
       if (active) setCheckingAccess(false);
     };
+
+    void checkOfficerAccess().catch((error: unknown) => {
+      logClientError('Retrieval officer access check failed:', error);
+      if (active) {
+        setErrorMessage('Could not verify your municipal office role. Please try again.');
+        setCheckingAccess(false);
+      }
+    });
 
     return () => {
       const scanner = scannerRef.current;
